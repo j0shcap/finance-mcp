@@ -25,22 +25,28 @@ classifiers = [
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Topic :: Office/Business :: Financial",
   "Topic :: Office/Business :: Financial :: Investment",
   "Topic :: Scientific/Engineering :: Information Analysis",
   "Typing :: Typed",
 ]
 dependencies = [
-  "fastmcp>=3.0",
-  "pydantic>=2.7",
+  # fastmcp is the API surface we build on (FastMCP, Client, ToolError,
+  # client.transports), so cap below the next major: a 4.x release may break it.
+  "fastmcp>=3.0,<4",
+  "pydantic>=2.11.7", # floor required by fastmcp 3.x
   "pydantic-settings>=2.0",
-  "yfinance>=0.2.40",
+  # yf.Search and Ticker.get_news(count=, tab=) landed in the 0.2.5x line along
+  # with the current news `content` payload; 1.0 is the first stable release
+  # carrying all three, so that is the floor the client code needs.
+  "yfinance>=1.0",
 ]
 
 [project.urls]
-Homepage = "https://github.com/JoshCap20/finance-mcp"
-Repository = "https://github.com/JoshCap20/finance-mcp"
-Issues = "https://github.com/JoshCap20/finance-mcp/issues"
+Homepage = "https://github.com/j0shcap/finance-mcp"
+Repository = "https://github.com/j0shcap/finance-mcp"
+Issues = "https://github.com/j0shcap/finance-mcp/issues"
 
 [project.scripts]
 mcp-finance = "finance_mcp.server:main"
