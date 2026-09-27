@@ -303,6 +303,13 @@ def loan_schedule(
     additional amount applied to principal each month; it shortens the term.
     The summary (payment, totals, payoff count) is always computed; the full
     per-period rows are returned only when ``include_schedule`` is True.
+
+    Rounding: ``monthly_payment`` and the per-row ``payment``/``principal``/``interest``/
+    ``balance`` amounts are rounded to cents for presentation, while ``total_paid`` and
+    ``total_interest`` accumulate the unrounded values and are rounded only at the end.
+    Summing the rounded rows can therefore differ from the reported totals by a few
+    cents. The last period's payment is adjusted to clear the remaining balance exactly,
+    so the schedule always ends at a zero balance and the principal is fully amortized.
     """
     if principal <= 0.0:
         raise InvalidInput("principal must be positive.")
@@ -317,8 +324,20 @@ def loan_schedule(
     if monthly_rate == 0.0:
         payment = principal / term_months
     else:
-        growth: float = (1.0 + monthly_rate) ** term_months
-        payment = principal * monthly_rate * growth / (growth - 1.0)
+        try:
+            growth: float = (1.0 + monthly_rate) ** term_months
+        except OverflowError as exc:
+            raise InvalidInput(
+                "annual_rate is too large for this term: the compounding factor "
+                "(1 + annual_rate/12)**term_months overflowed."
+            ) from exc
+        if growth == 1.0:
+            # A rate so small that compounding it over the whole term is a no-op in
+            # floating point. The annuity formula divides by growth - 1, so use the
+            # straight-line payment instead of dividing by zero.
+            payment = principal / term_months
+        else:
+            payment = principal * monthly_rate * growth / (growth - 1.0)
 
     rows: list[AmortizationRow] = []
     balance = principal
@@ -331,7 +350,12 @@ def loan_schedule(
         interest = balance * monthly_rate
         scheduled = payment + extra_payment
         principal_paid = scheduled - interest
-        if principal_paid >= balance:  # final (partial) payment
+        if principal_paid >= balance or period == term_months:
+            # Final payment. The period check matters even when the scheduled payment
+            # would not otherwise finish the loan: accumulated float error can leave a
+            # tiny residual balance after the last scheduled period, which would
+            # otherwise go unpaid. By construction the payment was solved from this
+            # principal, rate, and term, so the residual absorbed here is only noise.
             principal_paid = balance
             scheduled = principal_paid + interest
         balance -= principal_paid

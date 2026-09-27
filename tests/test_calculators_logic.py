@@ -702,3 +702,40 @@ def test_pv_growth_factor_underflow_raises() -> None:
     # (1 + -0.9999)**1e5 underflows to exactly 0.0; _pv divides by it.
     with pytest.raises(InvalidInput, match="underflow"):
         time_value_of_money(solve_for="pv", fv=100.0, pmt=0.0, rate=-0.9999, nper=1e5)
+
+
+def test_loan_final_payment_clears_balance_large_principal() -> None:
+    # Float drift accumulated over 360 periods left principal unpaid at the end of the
+    # term, so the last schedule row reported a balance still outstanding (0.14 at this
+    # size). The final payment must absorb the residual and end at a zero balance. The
+    # principal has to be this large for the drift to survive rounding to cents.
+    result = loan_schedule(
+        principal=1e13, annual_rate=0.07, term_months=360, include_schedule=True
+    )
+    assert result.n_payments == 360
+    assert result.schedule[-1].balance == 0.0
+
+
+def test_loan_final_payment_clears_balance_zero_rate() -> None:
+    # At 0% the payment is principal/term exactly and the drift is far larger: the loan
+    # ended 6.88 short of paying off, so total_paid understated the principal.
+    principal = 1e15
+    result = loan_schedule(principal=principal, annual_rate=0.0, term_months=360)
+    assert result.n_payments == 360
+    assert result.total_interest == pytest.approx(0.0, abs=1e-6)
+    assert result.total_paid == pytest.approx(principal, abs=0.01)
+
+
+def test_loan_rate_too_large_raises() -> None:
+    # (1 + 1e4/12)**360 overflows; that must surface as InvalidInput, not OverflowError.
+    with pytest.raises(InvalidInput, match="annual_rate"):
+        loan_schedule(principal=1000.0, annual_rate=1e4, term_months=360)
+
+
+def test_loan_negligible_rate_behaves_as_zero_rate() -> None:
+    # (1 + 1e-18/12)**12 == 1.0 in floating point, so the annuity formula would divide
+    # by growth - 1 == 0. Fall back to the straight-line payment.
+    result = loan_schedule(principal=1200.0, annual_rate=1e-18, term_months=12)
+    assert result.monthly_payment == pytest.approx(100.0, rel=1e-9)
+    assert result.n_payments == 12
+    assert result.total_interest == pytest.approx(0.0, abs=1e-6)
