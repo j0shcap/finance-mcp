@@ -113,7 +113,8 @@ class YFinanceClient:
         def fetch(sym: str) -> Callable[[], Quote]:
             return lambda: self._fetch_quote(sym)
 
-        return [self._cached(("quote", s), self._quote_ttl, fetch(s)) for s in symbols]
+        norm = [_norm(s) for s in symbols]
+        return [self._cached(("quote", s), self._quote_ttl, fetch(s)) for s in norm]
 
     def _fetch_quote(self, symbol: str) -> Quote:
         try:
@@ -153,6 +154,7 @@ class YFinanceClient:
         )
 
     def get_price_history(self, symbol: str, period: str, interval: str) -> PriceHistory:
+        symbol = _norm(symbol)
         return self._cached(
             ("history", symbol, period, interval),
             self._history_ttl,
@@ -234,6 +236,7 @@ class YFinanceClient:
         )
 
     def analyze_performance(self, symbol: str, period: str) -> PerformanceStats:
+        symbol = _norm(symbol)
         # No cache entry of its own: the underlying bars are cached by _all_bars, and the
         # stats are cheap to recompute from them.
         return self._compute_performance(symbol, period)
@@ -279,6 +282,7 @@ class YFinanceClient:
         period: StatementPeriod,
         line_items: list[str] | None = None,
     ) -> FinancialStatement:
+        symbol = _norm(symbol)
         full = self._cached(
             ("financials", symbol, statement, period),
             self._fundamentals_ttl,
@@ -325,6 +329,7 @@ class YFinanceClient:
             ) from exc
 
     def get_company_profile(self, symbol: str) -> CompanyProfile:
+        symbol = _norm(symbol)
         return self._cached(
             ("profile", symbol), self._fundamentals_ttl, lambda: self._fetch_profile(symbol)
         )
@@ -354,6 +359,7 @@ class YFinanceClient:
             raise DataUnavailable(f"Failed to parse profile for '{symbol}': {exc}") from exc
 
     def get_key_metrics(self, symbol: str) -> KeyMetrics:
+        symbol = _norm(symbol)
         return self._cached(
             ("metrics", symbol), self._fundamentals_ttl, lambda: self._fetch_metrics(symbol)
         )
@@ -393,6 +399,7 @@ class YFinanceClient:
             raise DataUnavailable(f"Failed to parse metrics for '{symbol}': {exc}") from exc
 
     def get_analyst_data(self, symbol: str) -> AnalystData:
+        symbol = _norm(symbol)
         return self._cached(
             ("analyst", symbol),
             self._fundamentals_ttl,
@@ -434,6 +441,7 @@ class YFinanceClient:
             raise DataUnavailable(f"Failed to parse analyst data for '{symbol}': {exc}") from exc
 
     def get_news(self, symbol: str, count: int = 10) -> NewsResult:
+        symbol = _norm(symbol)
         return self._cached(
             ("news", symbol, str(count)),
             self._history_ttl,
@@ -484,6 +492,18 @@ def _elapsed_days(start: str, end: str) -> int:
     both a bare date ("2024-01-01") and a full intraday timestamp with offset.
     """
     return (datetime.fromisoformat(end).date() - datetime.fromisoformat(start).date()).days
+
+
+def _norm(symbol: str) -> str:
+    """Normalize a ticker so equivalent spellings share one cache entry and one fetch.
+
+    Yahoo symbols are upper-case; callers routinely pass 'aapl' or 'AAPL '. Normalizing
+    here (before the cache key is built) is also what makes the echoed symbol canonical.
+    """
+    normalized = symbol.strip().upper()
+    if not normalized:
+        raise SymbolNotFound("Empty ticker symbol.")
+    return normalized
 
 
 def _no_data_msg(kind: str, symbol: str) -> str:
