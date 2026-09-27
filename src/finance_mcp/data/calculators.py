@@ -74,31 +74,96 @@ def _bisect(f: Callable[[float], float], low: float = -0.999999, high: float = 1
     return _bisect_bracket(f, low, high)
 
 
+_GOLDEN_INV = (math.sqrt(5.0) - 1.0) / 2.0
+
+
+def _minimize(f: Callable[[float], float], low: float, high: float) -> float:
+    """Return the minimizer of a unimodal ``f`` on [low, high] by golden-section search.
+
+    Deterministic: a fixed 100 iterations with no early exit, which shrinks the bracket
+    by 0.618**100 (~1e-21) — far below the precision any caller needs — and keeps the
+    number of ``f`` evaluations, and therefore the result, identical on every run.
+    """
+    a, b = low, high
+    c = b - _GOLDEN_INV * (b - a)
+    d = a + _GOLDEN_INV * (b - a)
+    fc, fd = f(c), f(d)
+    for _ in range(100):
+        if fc < fd:
+            b, d, fd = d, c, fc
+            c = b - _GOLDEN_INV * (b - a)
+            fc = f(c)
+        else:
+            a, c, fc = c, d, fd
+            d = a + _GOLDEN_INV * (b - a)
+            fd = f(d)
+    return (a + b) / 2.0
+
+
 def _find_all_roots(
     f: Callable[[float], float],
     low: float = -0.999999,
     high: float = 10.0,
     grid_points: int = 1100,
+    log_high: float = 1e4,
+    log_points: int = 300,
     dedup_tol: float = 1e-7,
+    tangent_tol: float = 1e-9,
 ) -> list[float]:
-    """Find every real root of ``f`` on (low, high] by scanning a fixed uniform grid.
+    """Find every real root of ``f`` on (low, log_high] by scanning a fixed grid.
 
-    Deterministic: fixed bounds, resolution, and tolerances. Records exact grid-point
-    zeros and bisects every sign-change bracket, then returns sorted, de-duplicated
-    roots. Used for IRR/XIRR, where non-conventional cashflows can have several roots.
+    Deterministic: fixed abscissae, iteration counts, and tolerances. The abscissae are
+    ``grid_points`` uniform samples on (low, high] followed by ``log_points`` geometric
+    samples on (high, log_high] — log spacing keeps the very large rates affordable, so
+    an IRR of several hundred times the principal is still found.
+
+    Three kinds of root are recorded:
+
+    * an exact zero landing on an abscissa;
+    * a sign change between adjacent abscissae, refined by bisection;
+    * a turning point of the sampled sequence, refined by golden-section search. This is
+      what catches a tangent (double) root, where ``f`` touches zero without changing
+      sign, and a pair of roots closer together than one grid step, where both lie
+      inside a single interval and the endpoints share a sign. A refined turning point
+      counts as a root when ``|f|`` there has collapsed to the floating-point
+      cancellation floor, measured relative to the bracket endpoints (``tangent_tol``);
+      if instead it has crossed zero, the two halves each hold a root and are bisected
+      separately.
+
+    Used for IRR/XIRR, where non-conventional cashflows can have several roots.
     """
     step = (high - low) / (grid_points - 1)
-    prev_x = low
-    prev_f = f(low)
-    roots: list[float] = [low] if prev_f == 0.0 else []
-    for i in range(1, grid_points):
-        x = low + i * step
-        fx = f(x)
-        if fx == 0.0:
-            roots.append(x)
-        elif prev_f * fx < 0.0:
-            roots.append(_bisect_bracket(f, prev_x, x))
-        prev_x, prev_f = x, fx
+    abscissae = [low + i * step for i in range(grid_points)]
+    if log_high > high:
+        ratio = (log_high / high) ** (1.0 / log_points)
+        x = high
+        for _ in range(log_points):
+            x *= ratio
+            abscissae.append(x)
+    values = [f(x) for x in abscissae]
+
+    roots = [x for x, fx in zip(abscissae, values, strict=True) if fx == 0.0]
+    for i in range(1, len(abscissae)):
+        if values[i - 1] * values[i] < 0.0:
+            roots.append(_bisect_bracket(f, abscissae[i - 1], abscissae[i]))
+    for i in range(1, len(abscissae) - 1):
+        rise, fall = values[i] - values[i - 1], values[i + 1] - values[i]
+        if rise == 0.0 or fall == 0.0 or (rise > 0.0) == (fall > 0.0):
+            continue  # flat or monotone here: no turning point to refine
+        bracket_low, bracket_high = abscissae[i - 1], abscissae[i + 1]
+        if rise < 0.0:  # local minimum of f
+            turning = _minimize(f, bracket_low, bracket_high)
+        else:  # local maximum of f: minimize -f
+            turning = _minimize(lambda t: -f(t), bracket_low, bracket_high)
+        f_turning = f(turning)
+        tolerance = max(abs(values[i - 1]), abs(values[i + 1])) * tangent_tol
+        if abs(f_turning) <= tolerance:
+            roots.append(turning)  # tangent (double) root
+        elif f_turning * values[i - 1] < 0.0:
+            # The extremum overshot zero: a root on each side, both inside one step.
+            roots.append(_bisect_bracket(f, bracket_low, turning))
+            roots.append(_bisect_bracket(f, turning, bracket_high))
+
     roots.sort()
     deduped: list[float] = []
     for root in roots:
@@ -120,6 +185,20 @@ def _require(name: str, value: float | None) -> float:
     return value
 
 
+def _require_rate(rate: float) -> float:
+    """Reject per-period rates at or below -100%, which the TVM equation cannot express.
+
+    At rate == -1 the growth factor (1+rate)**nper is exactly 0 — ``_pv`` divides by it
+    and ``_nper`` takes log(1+rate) = log(0). Below -1 the base is negative, so a
+    fractional ``nper`` produces a complex number that the result model cannot hold.
+    Every rate-taking calculator here (npv, xnpv, mirr, convert_rate) already requires
+    rate > -1; this keeps TVM consistent with them.
+    """
+    if rate <= -1.0:
+        raise InvalidInput("rate must be greater than -1 (-100%) per period.")
+    return rate
+
+
 def _fv(pv: float, pmt: float, rate: float, nper: float, due: bool = False) -> float:
     if rate == 0.0:
         return -(pv + pmt * nper)
@@ -132,11 +211,20 @@ def _pv(fv: float, pmt: float, rate: float, nper: float, due: bool = False) -> f
     if rate == 0.0:
         return -(fv + pmt * nper)
     growth: float = (1.0 + rate) ** nper
+    if growth == 0.0:
+        # (1+rate)**nper underflowed to exactly 0.0 (rate near -1 with a large nper);
+        # the present value it implies is not representable as a float.
+        raise InvalidInput(
+            "The growth factor (1+rate)**nper underflowed to zero; pv is not "
+            "representable for this rate and nper."
+        )
     mult = (1.0 + rate) if due else 1.0
     return -(fv + pmt * mult * (growth - 1.0) / rate) / growth
 
 
 def _pmt(pv: float, fv: float, rate: float, nper: float, due: bool = False) -> float:
+    if nper == 0.0:
+        raise InvalidInput("Cannot solve for pmt over zero periods (nper must be non-zero).")
     if rate == 0.0:
         return -(pv + fv) / nper
     growth: float = (1.0 + rate) ** nper
@@ -150,6 +238,8 @@ def _nper(pv: float, fv: float, pmt: float, rate: float, due: bool = False) -> f
             raise InvalidInput("Cannot solve for nper when both rate and pmt are zero.")
         return -(pv + fv) / pmt
     if pmt == 0.0:
+        if pv == 0.0:
+            raise InvalidInput("Cannot solve for nper when pv and pmt are both zero.")
         # pv*(1+r)^n + fv = 0  ->  (1+r)^n = -fv/pv
         ratio = -fv / pv
         if ratio <= 0.0:
@@ -206,7 +296,7 @@ def time_value_of_money(
         value = _fv(
             _require("pv", pv),
             _require("pmt", pmt_known),
-            _require("rate", rate),
+            _require_rate(_require("rate", rate)),
             _require("nper", nper),
             due,
         )
@@ -214,7 +304,7 @@ def time_value_of_money(
         value = _pv(
             _require("fv", fv),
             _require("pmt", pmt_known),
-            _require("rate", rate),
+            _require_rate(_require("rate", rate)),
             _require("nper", nper),
             due,
         )
@@ -222,7 +312,7 @@ def time_value_of_money(
         value = _pmt(
             _require("pv", pv),
             _require("fv", fv),
-            _require("rate", rate),
+            _require_rate(_require("rate", rate)),
             _require("nper", nper),
             due,
         )
@@ -231,7 +321,7 @@ def time_value_of_money(
             _require("pv", pv),
             _require("fv", fv),
             _require("pmt", pmt_known),
-            _require("rate", rate),
+            _require_rate(_require("rate", rate)),
             due,
         )
     else:  # rate
@@ -278,6 +368,13 @@ def loan_schedule(
     additional amount applied to principal each month; it shortens the term.
     The summary (payment, totals, payoff count) is always computed; the full
     per-period rows are returned only when ``include_schedule`` is True.
+
+    Rounding: ``monthly_payment`` and the per-row ``payment``/``principal``/``interest``/
+    ``balance`` amounts are rounded to cents for presentation, while ``total_paid`` and
+    ``total_interest`` accumulate the unrounded values and are rounded only at the end.
+    Summing the rounded rows can therefore differ from the reported totals by a few
+    cents. The last period's payment is adjusted to clear the remaining balance exactly,
+    so the schedule always ends at a zero balance and the principal is fully amortized.
     """
     if principal <= 0.0:
         raise InvalidInput("principal must be positive.")
@@ -292,8 +389,20 @@ def loan_schedule(
     if monthly_rate == 0.0:
         payment = principal / term_months
     else:
-        growth: float = (1.0 + monthly_rate) ** term_months
-        payment = principal * monthly_rate * growth / (growth - 1.0)
+        try:
+            growth: float = (1.0 + monthly_rate) ** term_months
+        except OverflowError as exc:
+            raise InvalidInput(
+                "annual_rate is too large for this term: the compounding factor "
+                "(1 + annual_rate/12)**term_months overflowed."
+            ) from exc
+        if growth == 1.0:
+            # A rate so small that compounding it over the whole term is a no-op in
+            # floating point. The annuity formula divides by growth - 1, so use the
+            # straight-line payment instead of dividing by zero.
+            payment = principal / term_months
+        else:
+            payment = principal * monthly_rate * growth / (growth - 1.0)
 
     rows: list[AmortizationRow] = []
     balance = principal
@@ -306,7 +415,12 @@ def loan_schedule(
         interest = balance * monthly_rate
         scheduled = payment + extra_payment
         principal_paid = scheduled - interest
-        if principal_paid >= balance:  # final (partial) payment
+        if principal_paid >= balance or period == term_months:
+            # Final payment. The period check matters even when the scheduled payment
+            # would not otherwise finish the loan: accumulated float error can leave a
+            # tiny residual balance after the last scheduled period, which would
+            # otherwise go unpaid. By construction the payment was solved from this
+            # principal, rate, and term, so the residual absorbed here is only noise.
             principal_paid = balance
             scheduled = principal_paid + interest
         balance -= principal_paid
@@ -386,7 +500,7 @@ def irr(cashflows: list[float]) -> IRRResult:
     """Internal rate of return of equally-spaced cashflows; needs >=1 sign change.
 
     Non-conventional cashflows can have multiple IRRs; all real roots found in
-    (-100%, 1000%] are returned (see IRRResult.all_irrs / is_unique). For a single
+    (-100%, 1,000,000%] are returned (see IRRResult.all_irrs / is_unique). For a single
     unambiguous figure use ``mirr``.
     """
     if len(cashflows) < 2:
@@ -395,7 +509,9 @@ def irr(cashflows: list[float]) -> IRRResult:
         raise InvalidInput("irr needs at least one sign change in the cashflows.")
     roots = _find_all_roots(lambda r: npv(r, cashflows).npv)
     if not roots:
-        raise InvalidInput("No internal rate of return exists in (-100%, 1000%]; consider mirr().")
+        raise InvalidInput(
+            "No internal rate of return exists in (-100%, 1,000,000%]; consider mirr()."
+        )
     return _irr_result(roots)
 
 
@@ -459,7 +575,9 @@ def xirr(cashflows: list[DatedCashflow]) -> IRRResult:
         raise InvalidInput("xirr needs at least one sign change in the cashflows.")
     roots = _find_all_roots(lambda r: xnpv(r, cashflows).npv)
     if not roots:
-        raise InvalidInput("No internal rate of return exists in (-100%, 1000%]; consider mirr().")
+        raise InvalidInput(
+            "No internal rate of return exists in (-100%, 1,000,000%]; consider mirr()."
+        )
     return _irr_result(roots)
 
 
@@ -482,7 +600,10 @@ def convert_rate(
         raise InvalidInput("periods_per_year must be at least 1.")
     if compounding == "continuous":
         if direction == "nominal_to_effective":
-            converted: float = math.exp(rate) - 1.0
+            try:
+                converted: float = math.exp(rate) - 1.0
+            except OverflowError as exc:
+                raise InvalidInput("rate is too large to convert: exp(rate) overflowed.") from exc
         else:
             if 1.0 + rate <= 0.0:
                 raise InvalidInput("Effective rate must be greater than -1 (-100%).")
@@ -490,7 +611,13 @@ def convert_rate(
     elif direction == "nominal_to_effective":
         if 1.0 + rate / periods_per_year <= 0.0:
             raise InvalidInput("Invalid nominal rate for the given compounding frequency.")
-        converted = (1.0 + rate / periods_per_year) ** periods_per_year - 1.0
+        try:
+            converted = (1.0 + rate / periods_per_year) ** periods_per_year - 1.0
+        except OverflowError as exc:
+            raise InvalidInput(
+                "rate is too large for the given compounding frequency: "
+                "(1 + rate/periods_per_year)**periods_per_year overflowed."
+            ) from exc
     else:
         if 1.0 + rate <= 0.0:
             raise InvalidInput("Effective rate must be greater than -1 (-100%).")
@@ -527,8 +654,13 @@ def bond_price(
         raise InvalidInput("frequency must be at least 1.")
     if years_to_maturity <= 0.0:
         raise InvalidInput("years_to_maturity must be positive.")
-    if ytm <= -1.0:
-        raise InvalidInput("ytm must be greater than -1 (-100%).")
+    if 1.0 + ytm / frequency <= 0.0:
+        # The pricing loop only needs a positive discount base (1 + ytm/frequency);
+        # the binding constraint is ytm > -frequency, not ytm > -1.
+        raise InvalidInput(
+            "ytm must be greater than -frequency so that 1 + ytm/frequency is positive "
+            f"(got ytm={ytm} with frequency={frequency})."
+        )
 
     periods = years_to_maturity * frequency
     n = round(periods)
@@ -572,7 +704,12 @@ def bond_ytm(
     price: float,
     frequency: int = 2,
 ) -> BondYTM:
-    """Solve the annual yield to maturity that prices the bond at ``price``."""
+    """Solve the annual yield to maturity that prices the bond at ``price``.
+
+    The search starts just above -100%, so this finds yields > -1 only — narrower than
+    the range ``bond_price`` can price (ytm > -frequency). Yields that deeply negative
+    have no market interpretation, and restricting the bracket keeps the solve robust.
+    """
     if price <= 0.0:
         raise InvalidInput("price must be positive.")
     rate = _bisect(

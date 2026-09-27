@@ -67,7 +67,7 @@ class IRRResult(BaseModel):
     )
     all_irrs: list[float] = Field(
         default_factory=list,
-        description="Every real IRR found in (-100%, 1000%], ascending.",
+        description="Every real IRR found in (-100%, 1,000,000%], ascending.",
     )
     is_unique: bool = Field(
         default=True,

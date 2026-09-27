@@ -6,6 +6,7 @@ import pytest
 from finance_mcp.data.calculators import (
     _bisect_bracket,
     _find_all_roots,
+    _minimize,
     bond_price,
     bond_ytm,
     convert_rate,
@@ -563,15 +564,22 @@ def test_nper_general_no_solution_raises() -> None:
         time_value_of_money(solve_for="nper", pv=3000.0, fv=1000.0, pmt=-100.0, rate=0.05)
 
 
+def test_irr_within_extended_range() -> None:
+    # IRR = 999/period (99,900%) is past the old 1000% cap but inside the log-spaced
+    # tail, so it is now found instead of reported as non-existent.
+    assert irr([-1.0, 1000.0]).irr == pytest.approx(999.0, rel=1e-9)
+
+
 def test_irr_no_root_in_range_raises() -> None:
-    # IRR ~ 999/period (> 1000% cap) -> sign change but no root in searched range.
+    # IRR = 99,999/period (~1e7%) is past the 1,000,000% upper bound -> sign change but
+    # no root in the searched range.
     with pytest.raises(InvalidInput):
-        irr([-1.0, 1000.0])
+        irr([-1.0, 100000.0])
 
 
 def test_xirr_no_root_in_range_raises() -> None:
     with pytest.raises(InvalidInput):
-        xirr([_cf(2021, -1.0), _cf(2022, 1000.0)])
+        xirr([_cf(2021, -1.0), _cf(2022, 100000.0)])
 
 
 def test_mirr_too_few_cashflows_raises() -> None:
@@ -655,3 +663,189 @@ def test_xirr_long_calendar_span_matches_closed_form() -> None:
 def test_rate_zero_nper_raises() -> None:
     with pytest.raises(InvalidInput):
         time_value_of_money(solve_for="rate", pv=-100.0, fv=200.0, pmt=0.0, nper=0.0)
+
+
+def test_pmt_zero_nper_raises() -> None:
+    # nper == 0 divides by zero in both the r == 0 and the annuity branch.
+    with pytest.raises(InvalidInput, match="nper"):
+        time_value_of_money(solve_for="pmt", pv=1000.0, fv=0.0, rate=0.05, nper=0.0)
+
+
+def test_pmt_zero_nper_zero_rate_raises() -> None:
+    with pytest.raises(InvalidInput, match="nper"):
+        time_value_of_money(solve_for="pmt", pv=1000.0, fv=0.0, rate=0.0, nper=0.0)
+
+
+def test_pv_rate_at_minus_one_raises() -> None:
+    # rate == -1 makes the growth factor 0, which _pv divides by.
+    with pytest.raises(InvalidInput, match="rate"):
+        time_value_of_money(solve_for="pv", fv=100.0, pmt=0.0, rate=-1.0, nper=5.0)
+
+
+def test_fv_rate_below_minus_one_raises() -> None:
+    # A negative base with fractional nper is a complex number, which the result
+    # model cannot hold; reject the rate instead of leaking a ValidationError.
+    with pytest.raises(InvalidInput, match="rate"):
+        time_value_of_money(solve_for="fv", pv=-1000.0, pmt=0.0, rate=-1.5, nper=2.5)
+
+
+def test_pmt_rate_below_minus_one_raises() -> None:
+    with pytest.raises(InvalidInput, match="rate"):
+        time_value_of_money(solve_for="pmt", pv=1000.0, fv=0.0, rate=-1.5, nper=10.0)
+
+
+def test_nper_rate_at_minus_one_raises() -> None:
+    # log(1 + rate) is log(0) -> math domain error without the guard.
+    with pytest.raises(InvalidInput, match="rate"):
+        time_value_of_money(solve_for="nper", pv=-1000.0, fv=2000.0, pmt=0.0, rate=-1.0)
+
+
+def test_nper_zero_pv_and_zero_pmt_raises() -> None:
+    # With no payments the equation reduces to (1+r)^n = -fv/pv; pv == 0 divides by zero.
+    with pytest.raises(InvalidInput, match="pv"):
+        time_value_of_money(solve_for="nper", pv=0.0, fv=100.0, pmt=0.0, rate=0.05)
+
+
+def test_pv_growth_factor_underflow_raises() -> None:
+    # (1 + -0.9999)**1e5 underflows to exactly 0.0; _pv divides by it.
+    with pytest.raises(InvalidInput, match="underflow"):
+        time_value_of_money(solve_for="pv", fv=100.0, pmt=0.0, rate=-0.9999, nper=1e5)
+
+
+def test_loan_final_payment_clears_balance_large_principal() -> None:
+    # Float drift accumulated over 360 periods left principal unpaid at the end of the
+    # term, so the last schedule row reported a balance still outstanding (0.14 at this
+    # size). The final payment must absorb the residual and end at a zero balance. The
+    # principal has to be this large for the drift to survive rounding to cents.
+    result = loan_schedule(principal=1e13, annual_rate=0.07, term_months=360, include_schedule=True)
+    assert result.n_payments == 360
+    assert result.schedule[-1].balance == 0.0
+
+
+def test_loan_final_payment_clears_balance_zero_rate() -> None:
+    # At 0% the payment is principal/term exactly and the drift is far larger: the loan
+    # ended 6.88 short of paying off, so total_paid understated the principal.
+    principal = 1e15
+    result = loan_schedule(principal=principal, annual_rate=0.0, term_months=360)
+    assert result.n_payments == 360
+    assert result.total_interest == pytest.approx(0.0, abs=1e-6)
+    assert result.total_paid == pytest.approx(principal, abs=0.01)
+
+
+def test_loan_rate_too_large_raises() -> None:
+    # (1 + 1e4/12)**360 overflows; that must surface as InvalidInput, not OverflowError.
+    with pytest.raises(InvalidInput, match="annual_rate"):
+        loan_schedule(principal=1000.0, annual_rate=1e4, term_months=360)
+
+
+def test_loan_negligible_rate_behaves_as_zero_rate() -> None:
+    # (1 + 1e-18/12)**12 == 1.0 in floating point, so the annuity formula would divide
+    # by growth - 1 == 0. Fall back to the straight-line payment.
+    result = loan_schedule(principal=1200.0, annual_rate=1e-18, term_months=12)
+    assert result.monthly_payment == pytest.approx(100.0, rel=1e-9)
+    assert result.n_payments == 12
+    assert result.total_interest == pytest.approx(0.0, abs=1e-6)
+
+
+def test_convert_rate_continuous_overflow_raises() -> None:
+    # exp(1000) overflows; the tool must see InvalidInput, not OverflowError.
+    with pytest.raises(InvalidInput, match="too large"):
+        convert_rate(1000.0, 1, "nominal_to_effective", "continuous")
+
+
+def test_convert_rate_discrete_overflow_raises() -> None:
+    # (1 + 1e300/12)**12 overflows too, so the discrete path needs the same guard.
+    with pytest.raises(InvalidInput, match="too large"):
+        convert_rate(1e300, 12, "nominal_to_effective")
+
+
+def test_bond_price_accepts_yield_below_minus_one_when_base_positive() -> None:
+    # frequency=2 makes the periodic yield -0.75, so the discount base is 0.25 > 0:
+    # price = 25/0.25 + 1025/0.25**2 = 100 + 16400 = 16500.
+    result = bond_price(face=1000.0, coupon_rate=0.05, years_to_maturity=1.0, ytm=-1.5, frequency=2)
+    assert result.price == pytest.approx(16500.0, rel=1e-12)
+
+
+def test_bond_price_yield_at_negative_frequency_raises() -> None:
+    # ytm == -frequency makes 1 + ytm/frequency exactly 0 -> still invalid.
+    with pytest.raises(InvalidInput, match="ytm"):
+        bond_price(face=1000.0, coupon_rate=0.05, years_to_maturity=1.0, ytm=-2.0, frequency=2)
+
+
+def test_bond_price_annual_frequency_still_rejects_minus_one() -> None:
+    # With frequency=1 the old and new constraints coincide.
+    with pytest.raises(InvalidInput, match="ytm"):
+        bond_price(face=1000.0, coupon_rate=0.05, years_to_maturity=1.0, ytm=-1.0, frequency=1)
+
+
+def test_irr_tangent_root_local_maximum() -> None:
+    # npv(r) = -(1 - 1/(1+r))**2 touches zero at r = 0 from below: a double root with
+    # no sign change, so the grid scan alone reports "no IRR".
+    result = irr([-1.0, 2.0, -1.0])
+    assert result.irr == pytest.approx(0.0, abs=1e-6)
+    assert result.is_unique is True
+    assert len(result.all_irrs) == 1
+
+
+def test_irr_tangent_root_local_minimum() -> None:
+    # The same flow negated: npv touches zero at r = 0 from above.
+    result = irr([1.0, -2.0, 1.0])
+    assert result.irr == pytest.approx(0.0, abs=1e-6)
+    assert result.is_unique is True
+
+
+def test_irr_tangent_root_away_from_zero() -> None:
+    # A double root at 15%: (1 - 1.15/(1+r))**2 scaled.
+    result = irr([-1.0, 2.3, -1.3225])
+    assert result.irr == pytest.approx(0.15, rel=1e-6)
+    assert result.is_unique is True
+
+
+def test_irr_tangent_root_scales_with_cashflow_magnitude() -> None:
+    # The tangent tolerance is relative to the local |f|, so a 1e9-sized flow with the
+    # same shape must also be recognised.
+    result = irr([-1e9, 2e9, -1e9])
+    assert result.irr == pytest.approx(0.0, abs=1e-6)
+
+
+def test_irr_above_one_thousand_percent() -> None:
+    # 1 -> 12 in one period is an IRR of 1100%, past the old uniform grid's upper bound.
+    result = irr([-1.0, 12.0])
+    assert result.irr == pytest.approx(11.0, rel=1e-9)
+    assert result.is_unique is True
+
+
+def test_irr_two_roots_closer_than_a_grid_step() -> None:
+    # Roots at 10% and 10.01% are ~1e-4 apart, far inside the ~1e-2 uniform grid step.
+    # Built as (x - 1/1.10)(x - 1/1.1001) in x = 1/(1+r).
+    cashflows = [1.0 / (1.10 * 1.1001), -(1.0 / 1.10 + 1.0 / 1.1001), 1.0]
+    result = irr(cashflows)
+    assert len(result.all_irrs) == 2
+    assert result.all_irrs[0] == pytest.approx(0.10, rel=1e-6)
+    assert result.all_irrs[1] == pytest.approx(0.1001, rel=1e-6)
+    assert result.is_unique is False
+    for root in result.all_irrs:
+        assert npv(root, cashflows).npv == pytest.approx(0.0, abs=1e-9)
+
+
+def test_irr_near_tangent_but_not_a_root_is_not_reported() -> None:
+    # min|npv| is 1e-9 with cashflows of order 1 — well above the floating-point
+    # cancellation floor, so this is genuinely rootless and must stay rootless.
+    with pytest.raises(InvalidInput):
+        irr([0.01 + 1e-9, -0.2, 1.0])
+
+
+def test_find_all_roots_without_log_tail() -> None:
+    # log_high == high disables the geometric tail, so a root past `high` is missed.
+    roots = _find_all_roots(lambda x: x - 11.0, log_high=10.0)
+    assert roots == []
+
+
+def test_find_all_roots_skips_flat_sampled_regions() -> None:
+    # A step function has zero first differences almost everywhere; the turning-point
+    # scan must skip those instead of minimizing over a flat bracket.
+    assert _find_all_roots(lambda x: 1.0 if x < 5.0 else 2.0) == []
+
+
+def test_minimize_finds_interior_minimum() -> None:
+    assert _minimize(lambda x: (x - 0.25) ** 2, -1.0, 1.0) == pytest.approx(0.25, abs=1e-9)

@@ -5,6 +5,9 @@ from fastmcp import Client
 from fastmcp.client.transports import FastMCPTransport
 from fastmcp.exceptions import ToolError
 
+from finance_mcp.data.errors import InvalidInput
+from finance_mcp.tools._dispatch import run_calc
+
 
 async def test_tools_are_registered(client: Client[FastMCPTransport]) -> None:
     names = {tool.name for tool in await client.list_tools()}
@@ -184,7 +187,8 @@ async def test_tvm_when_begin_tool(client: Client[FastMCPTransport]) -> None:
 
 
 async def test_bond_price_tool_invalid_errors(client: Client[FastMCPTransport]) -> None:
-    # ytm <= -1 is not schema-blocked, so it reaches the data layer and surfaces as ToolError.
+    # ytm = -frequency makes 1 + ytm/frequency zero. Not schema-blocked, so it reaches
+    # the data layer and surfaces as ToolError.
     with pytest.raises(ToolError):
         await client.call_tool(
             "bond_price",
@@ -248,4 +252,62 @@ async def test_mirr_tool_invalid_errors(client: Client[FastMCPTransport]) -> Non
         await client.call_tool(
             "mirr",
             {"cashflows": [-100.0, -50.0], "finance_rate": 0.1, "reinvest_rate": 0.1},
+        )
+
+
+def test_run_calc_translates_zero_division() -> None:
+    def boom() -> float:
+        return 1.0 / 0.0
+
+    with pytest.raises(ToolError, match="out of range"):
+        run_calc(boom)
+
+
+def test_run_calc_translates_overflow() -> None:
+    def boom() -> float:
+        raise OverflowError("(34, 'Result too large')")
+
+    with pytest.raises(ToolError, match="out of range"):
+        run_calc(boom)
+
+
+def test_run_calc_translates_value_error() -> None:
+    # Covers pydantic ValidationError too, which subclasses ValueError.
+    def boom() -> float:
+        raise ValueError("math domain error")
+
+    with pytest.raises(ToolError, match="out of range"):
+        run_calc(boom)
+
+
+def test_run_calc_passes_through_invalid_input_message() -> None:
+    def boom() -> float:
+        raise InvalidInput("principal must be positive.")
+
+    with pytest.raises(ToolError, match=r"principal must be positive\."):
+        run_calc(boom)
+
+
+async def test_loan_schedule_rate_overflow_surfaces_as_tool_error(
+    client: Client[FastMCPTransport],
+) -> None:
+    # annual_rate=1e4 satisfies the Field(ge=0) bound, so it reaches the data layer.
+    # The actionable, model-facing message must survive the run_calc -> ToolError hop.
+    with pytest.raises(ToolError, match="annual_rate is too large for this term"):
+        await client.call_tool(
+            "loan_schedule",
+            {"principal": 1000.0, "annual_rate": 1e4, "term_months": 360},
+        )
+
+
+async def test_time_value_of_money_overflow_surfaces_as_tool_error(
+    client: Client[FastMCPTransport],
+) -> None:
+    # No Field bound can screen this: (1 + 1e5)**1e5 overflows inside the calculator.
+    # Unhandled, the client saw only the bare "(34, 'Result too large')"; the
+    # defence-in-depth clause in run_calc must frame it as an input problem.
+    with pytest.raises(ToolError, match="out of range for this calculation"):
+        await client.call_tool(
+            "time_value_of_money",
+            {"solve_for": "fv", "pv": -1000.0, "pmt": 0.0, "rate": 1e5, "nper": 1e5},
         )
