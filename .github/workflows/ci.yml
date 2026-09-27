@@ -15,20 +15,34 @@ permissions:
 
 jobs:
   check:
+    name: check (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      # Every version allowed by `requires-python` is gated here.
+      matrix:
+        python-version: ["3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        # Exact version, not a major tag: setup-uv stopped publishing floating
+        # major tags after v7 (and that v7 tag no longer tracks the 7.x line).
+        # Dependabot's github-actions ecosystem keeps this pin current.
+        uses: astral-sh/setup-uv@v10.2.0
         with:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
+          # Sets UV_PYTHON, which takes precedence over .python-version.
+          python-version: ${{ matrix.python-version }}
       - name: Install dependencies
         run: uv sync
       - name: Run quality gate
         run: make check
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+        # One upload per commit: coverage is identical across the matrix, and a
+        # single report keeps the codecov.yml project/patch gates unambiguous.
+        if: matrix.python-version == '3.13'
+        uses: codecov/codecov-action@v7
         with:
           files: ./coverage.xml
           token: ${{ secrets.CODECOV_TOKEN }}
