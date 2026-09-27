@@ -585,8 +585,13 @@ def bond_price(
         raise InvalidInput("frequency must be at least 1.")
     if years_to_maturity <= 0.0:
         raise InvalidInput("years_to_maturity must be positive.")
-    if ytm <= -1.0:
-        raise InvalidInput("ytm must be greater than -1 (-100%).")
+    if 1.0 + ytm / frequency <= 0.0:
+        # The pricing loop only needs a positive discount base (1 + ytm/frequency);
+        # the binding constraint is ytm > -frequency, not ytm > -1.
+        raise InvalidInput(
+            "ytm must be greater than -frequency so that 1 + ytm/frequency is positive "
+            f"(got ytm={ytm} with frequency={frequency})."
+        )
 
     periods = years_to_maturity * frequency
     n = round(periods)
@@ -630,7 +635,12 @@ def bond_ytm(
     price: float,
     frequency: int = 2,
 ) -> BondYTM:
-    """Solve the annual yield to maturity that prices the bond at ``price``."""
+    """Solve the annual yield to maturity that prices the bond at ``price``.
+
+    The search starts just above -100%, so this finds yields > -1 only — narrower than
+    the range ``bond_price`` can price (ytm > -frequency). Yields that deeply negative
+    have no market interpretation, and restricting the bracket keeps the solve robust.
+    """
     if price <= 0.0:
         raise InvalidInput("price must be positive.")
     rate = _bisect(

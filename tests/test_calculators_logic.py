@@ -751,3 +751,24 @@ def test_convert_rate_discrete_overflow_raises() -> None:
     # (1 + 1e300/12)**12 overflows too, so the discrete path needs the same guard.
     with pytest.raises(InvalidInput, match="too large"):
         convert_rate(1e300, 12, "nominal_to_effective")
+
+
+def test_bond_price_accepts_yield_below_minus_one_when_base_positive() -> None:
+    # frequency=2 makes the periodic yield -0.75, so the discount base is 0.25 > 0:
+    # price = 25/0.25 + 1025/0.25**2 = 100 + 16400 = 16500.
+    result = bond_price(
+        face=1000.0, coupon_rate=0.05, years_to_maturity=1.0, ytm=-1.5, frequency=2
+    )
+    assert result.price == pytest.approx(16500.0, rel=1e-12)
+
+
+def test_bond_price_yield_at_negative_frequency_raises() -> None:
+    # ytm == -frequency makes 1 + ytm/frequency exactly 0 -> still invalid.
+    with pytest.raises(InvalidInput, match="ytm"):
+        bond_price(face=1000.0, coupon_rate=0.05, years_to_maturity=1.0, ytm=-2.0, frequency=2)
+
+
+def test_bond_price_annual_frequency_still_rejects_minus_one() -> None:
+    # With frequency=1 the old and new constraints coincide.
+    with pytest.raises(InvalidInput, match="ytm"):
+        bond_price(face=1000.0, coupon_rate=0.05, years_to_maturity=1.0, ytm=-1.0, frequency=1)
