@@ -120,6 +120,20 @@ def _require(name: str, value: float | None) -> float:
     return value
 
 
+def _require_rate(rate: float) -> float:
+    """Reject per-period rates at or below -100%, which the TVM equation cannot express.
+
+    At rate == -1 the growth factor (1+rate)**nper is exactly 0 — ``_pv`` divides by it
+    and ``_nper`` takes log(1+rate) = log(0). Below -1 the base is negative, so a
+    fractional ``nper`` produces a complex number that the result model cannot hold.
+    Every rate-taking calculator here (npv, xnpv, mirr, convert_rate) already requires
+    rate > -1; this keeps TVM consistent with them.
+    """
+    if rate <= -1.0:
+        raise InvalidInput("rate must be greater than -1 (-100%) per period.")
+    return rate
+
+
 def _fv(pv: float, pmt: float, rate: float, nper: float, due: bool = False) -> float:
     if rate == 0.0:
         return -(pv + pmt * nper)
@@ -132,11 +146,20 @@ def _pv(fv: float, pmt: float, rate: float, nper: float, due: bool = False) -> f
     if rate == 0.0:
         return -(fv + pmt * nper)
     growth: float = (1.0 + rate) ** nper
+    if growth == 0.0:
+        # (1+rate)**nper underflowed to exactly 0.0 (rate near -1 with a large nper);
+        # the present value it implies is not representable as a float.
+        raise InvalidInput(
+            "The growth factor (1+rate)**nper underflowed to zero; pv is not "
+            "representable for this rate and nper."
+        )
     mult = (1.0 + rate) if due else 1.0
     return -(fv + pmt * mult * (growth - 1.0) / rate) / growth
 
 
 def _pmt(pv: float, fv: float, rate: float, nper: float, due: bool = False) -> float:
+    if nper == 0.0:
+        raise InvalidInput("Cannot solve for pmt over zero periods (nper must be non-zero).")
     if rate == 0.0:
         return -(pv + fv) / nper
     growth: float = (1.0 + rate) ** nper
@@ -150,6 +173,8 @@ def _nper(pv: float, fv: float, pmt: float, rate: float, due: bool = False) -> f
             raise InvalidInput("Cannot solve for nper when both rate and pmt are zero.")
         return -(pv + fv) / pmt
     if pmt == 0.0:
+        if pv == 0.0:
+            raise InvalidInput("Cannot solve for nper when pv and pmt are both zero.")
         # pv*(1+r)^n + fv = 0  ->  (1+r)^n = -fv/pv
         ratio = -fv / pv
         if ratio <= 0.0:
@@ -206,7 +231,7 @@ def time_value_of_money(
         value = _fv(
             _require("pv", pv),
             _require("pmt", pmt_known),
-            _require("rate", rate),
+            _require_rate(_require("rate", rate)),
             _require("nper", nper),
             due,
         )
@@ -214,7 +239,7 @@ def time_value_of_money(
         value = _pv(
             _require("fv", fv),
             _require("pmt", pmt_known),
-            _require("rate", rate),
+            _require_rate(_require("rate", rate)),
             _require("nper", nper),
             due,
         )
@@ -222,7 +247,7 @@ def time_value_of_money(
         value = _pmt(
             _require("pv", pv),
             _require("fv", fv),
-            _require("rate", rate),
+            _require_rate(_require("rate", rate)),
             _require("nper", nper),
             due,
         )
@@ -231,7 +256,7 @@ def time_value_of_money(
             _require("pv", pv),
             _require("fv", fv),
             _require("pmt", pmt_known),
-            _require("rate", rate),
+            _require_rate(_require("rate", rate)),
             due,
         )
     else:  # rate

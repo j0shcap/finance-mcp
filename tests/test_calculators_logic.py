@@ -655,3 +655,50 @@ def test_xirr_long_calendar_span_matches_closed_form() -> None:
 def test_rate_zero_nper_raises() -> None:
     with pytest.raises(InvalidInput):
         time_value_of_money(solve_for="rate", pv=-100.0, fv=200.0, pmt=0.0, nper=0.0)
+
+
+def test_pmt_zero_nper_raises() -> None:
+    # nper == 0 divides by zero in both the r == 0 and the annuity branch.
+    with pytest.raises(InvalidInput, match="nper"):
+        time_value_of_money(solve_for="pmt", pv=1000.0, fv=0.0, rate=0.05, nper=0.0)
+
+
+def test_pmt_zero_nper_zero_rate_raises() -> None:
+    with pytest.raises(InvalidInput, match="nper"):
+        time_value_of_money(solve_for="pmt", pv=1000.0, fv=0.0, rate=0.0, nper=0.0)
+
+
+def test_pv_rate_at_minus_one_raises() -> None:
+    # rate == -1 makes the growth factor 0, which _pv divides by.
+    with pytest.raises(InvalidInput, match="rate"):
+        time_value_of_money(solve_for="pv", fv=100.0, pmt=0.0, rate=-1.0, nper=5.0)
+
+
+def test_fv_rate_below_minus_one_raises() -> None:
+    # A negative base with fractional nper is a complex number, which the result
+    # model cannot hold; reject the rate instead of leaking a ValidationError.
+    with pytest.raises(InvalidInput, match="rate"):
+        time_value_of_money(solve_for="fv", pv=-1000.0, pmt=0.0, rate=-1.5, nper=2.5)
+
+
+def test_pmt_rate_below_minus_one_raises() -> None:
+    with pytest.raises(InvalidInput, match="rate"):
+        time_value_of_money(solve_for="pmt", pv=1000.0, fv=0.0, rate=-1.5, nper=10.0)
+
+
+def test_nper_rate_at_minus_one_raises() -> None:
+    # log(1 + rate) is log(0) -> math domain error without the guard.
+    with pytest.raises(InvalidInput, match="rate"):
+        time_value_of_money(solve_for="nper", pv=-1000.0, fv=2000.0, pmt=0.0, rate=-1.0)
+
+
+def test_nper_zero_pv_and_zero_pmt_raises() -> None:
+    # With no payments the equation reduces to (1+r)^n = -fv/pv; pv == 0 divides by zero.
+    with pytest.raises(InvalidInput, match="pv"):
+        time_value_of_money(solve_for="nper", pv=0.0, fv=100.0, pmt=0.0, rate=0.05)
+
+
+def test_pv_growth_factor_underflow_raises() -> None:
+    # (1 + -0.9999)**1e5 underflows to exactly 0.0; _pv divides by it.
+    with pytest.raises(InvalidInput, match="underflow"):
+        time_value_of_money(solve_for="pv", fv=100.0, pmt=0.0, rate=-0.9999, nper=1e5)
