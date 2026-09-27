@@ -7,6 +7,7 @@ because we cannot enumerate every Yahoo failure mode.
 
 import math
 import time
+from collections import OrderedDict
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any, cast
@@ -38,6 +39,7 @@ from finance_mcp.data.models import (
 )
 
 DEFAULT_MAX_BARS = 260
+DEFAULT_CACHE_MAX_ENTRIES = 256
 SMA_SHORT_WINDOW = 50
 SMA_LONG_WINDOW = 200
 # Below roughly a quarter of calendar time, annualizing compounds short-run noise into a
@@ -55,7 +57,7 @@ _FINANCIALS_ATTR = {
 
 
 class YFinanceClient:
-    """Thin yfinance facade with a per-key TTL cache."""
+    """Thin yfinance facade with a per-key TTL cache (bounded, least-recently-used)."""
 
     def __init__(
         self,
@@ -66,6 +68,7 @@ class YFinanceClient:
         history_ttl: float = 300.0,
         fundamentals_ttl: float = 3600.0,
         max_bars: int = DEFAULT_MAX_BARS,
+        cache_max_entries: int = DEFAULT_CACHE_MAX_ENTRIES,
     ) -> None:
         self._ticker = ticker_factory
         # yf.Search is called with keyword args (max_results/news_count/lists_count);
@@ -76,18 +79,33 @@ class YFinanceClient:
         self._history_ttl = history_ttl
         self._fundamentals_ttl = fundamentals_ttl
         self._max_bars = max_bars
-        self._cache: dict[tuple[str, ...], tuple[float, Any]] = {}
+        self._cache_max_entries = cache_max_entries
+        # key -> (stored_at, ttl, value). Insertion order is LRU order (oldest use first);
+        # the per-entry ttl is stored so the purge pass can judge expiry without knowing
+        # which caller wrote the entry.
+        self._cache: OrderedDict[tuple[str, ...], tuple[float, float, Any]] = OrderedDict()
 
     def _cached[T](self, key: tuple[str, ...], ttl: float, fetch: Callable[[], T]) -> T:
-        hit = self._cache.get(key)
         now = self._now()
-        if hit is not None and now - hit[0] < ttl:
-            # The cache is heterogeneous (Any value); the key space guarantees each key
-            # always maps to the same T, so this single cast is the only one needed.
-            return cast(T, hit[1])
+        hit = self._cache.get(key)
+        if hit is not None:
+            if now - hit[0] < ttl:
+                self._cache.move_to_end(key)  # most recently used
+                # The cache is heterogeneous (Any value); the key space guarantees each key
+                # always maps to the same T, so this single cast is the only one needed.
+                return cast(T, hit[2])
+            del self._cache[key]  # stale: drop before refetching
         value = fetch()
-        self._cache[key] = (now, value)
+        self._purge_expired(now)
+        self._cache[key] = (now, ttl, value)
+        while len(self._cache) > self._cache_max_entries:
+            self._cache.popitem(last=False)  # evict the least recently used entry
         return value
+
+    def _purge_expired(self, now: float) -> None:
+        """Drop every entry past its own TTL, so stale keys cannot squat on the bound."""
+        for key in [k for k, (stored, ttl, _) in self._cache.items() if now - stored >= ttl]:
+            del self._cache[key]
 
     def _ticker_with_info(
         self, symbol: str, fetch_label: str, kind: str

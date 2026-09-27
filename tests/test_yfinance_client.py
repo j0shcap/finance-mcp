@@ -1,4 +1,5 @@
 import math
+from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any, Literal
 
@@ -23,7 +24,11 @@ from finance_mcp.data.models import (
     SplitEvent,
     SymbolSearchResult,
 )
-from finance_mcp.data.yfinance_client import YFinanceClient, _recommendation_trend
+from finance_mcp.data.yfinance_client import (
+    DEFAULT_CACHE_MAX_ENTRIES,
+    YFinanceClient,
+    _recommendation_trend,
+)
 from tests.conftest import (
     FakeClock,
     fake_search_factory,
@@ -1690,3 +1695,68 @@ def test_blank_symbol_raises_symbol_not_found_without_fetching(blank: str) -> No
     with pytest.raises(SymbolNotFound, match="Empty ticker symbol"):
         client.get_company_profile(blank)
     assert calls == []
+
+
+# --- bounded LRU cache (item 7) ---
+
+
+def _counting_quote_factory(calls: list[str]) -> Callable[[str], Any]:
+    def factory(symbol: str) -> Any:
+        calls.append(symbol)
+        return fake_ticker_factory(fast_info=QUOTE_FI)(symbol)
+
+    return factory
+
+
+def test_cache_evicts_least_recently_used_entry_over_max() -> None:
+    calls: list[str] = []
+    clock = FakeClock()
+    client = YFinanceClient(
+        ticker_factory=_counting_quote_factory(calls),
+        time_fn=clock,
+        quote_ttl=30.0,
+        cache_max_entries=2,
+    )
+    client.get_quote(["AAA"])
+    client.get_quote(["BBB"])
+    client.get_quote(["AAA"])  # cache hit -> AAA becomes the most recently USED entry
+    client.get_quote(["CCC"])  # inserting a third entry evicts BBB, not AAA
+    assert len(client._cache) == 2
+    calls.clear()
+    client.get_quote(["AAA"])
+    assert calls == []  # still cached
+    client.get_quote(["BBB"])
+    assert calls == ["BBB"]  # was evicted, so refetched
+
+
+def test_cache_purges_expired_entries_on_insert() -> None:
+    calls: list[str] = []
+    clock = FakeClock()
+    client = YFinanceClient(
+        ticker_factory=_counting_quote_factory(calls), time_fn=clock, quote_ttl=30.0
+    )
+    client.get_quote(["AAA"])
+    clock.advance(31.0)
+    client.get_quote(["BBB"])
+    # AAA is past its own TTL, so it is dropped rather than squatting on the bound.
+    assert len(client._cache) == 1
+    assert ("quote", "BBB") in client._cache
+
+
+def test_cache_never_exceeds_max_entries() -> None:
+    calls: list[str] = []
+    client = YFinanceClient(
+        ticker_factory=_counting_quote_factory(calls),
+        time_fn=FakeClock(),
+        quote_ttl=30.0,
+        cache_max_entries=3,
+    )
+    for i in range(20):
+        client.get_quote([f"SYM{i}"])
+        assert len(client._cache) <= 3
+
+
+def test_cache_default_max_entries_is_bounded() -> None:
+    client = YFinanceClient(ticker_factory=fake_ticker_factory(fast_info=QUOTE_FI))
+    assert client._cache_max_entries == DEFAULT_CACHE_MAX_ENTRIES
+    assert DEFAULT_CACHE_MAX_ENTRIES > 0
