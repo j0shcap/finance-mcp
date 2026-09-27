@@ -284,7 +284,7 @@ def test_run_calc_passes_through_invalid_input_message() -> None:
     def boom() -> float:
         raise InvalidInput("principal must be positive.")
 
-    with pytest.raises(ToolError, match="principal must be positive."):
+    with pytest.raises(ToolError, match=r"principal must be positive\."):
         run_calc(boom)
 
 

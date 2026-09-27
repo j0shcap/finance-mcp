@@ -717,9 +717,7 @@ def test_loan_final_payment_clears_balance_large_principal() -> None:
     # term, so the last schedule row reported a balance still outstanding (0.14 at this
     # size). The final payment must absorb the residual and end at a zero balance. The
     # principal has to be this large for the drift to survive rounding to cents.
-    result = loan_schedule(
-        principal=1e13, annual_rate=0.07, term_months=360, include_schedule=True
-    )
+    result = loan_schedule(principal=1e13, annual_rate=0.07, term_months=360, include_schedule=True)
     assert result.n_payments == 360
     assert result.schedule[-1].balance == 0.0
 
@@ -764,9 +762,7 @@ def test_convert_rate_discrete_overflow_raises() -> None:
 def test_bond_price_accepts_yield_below_minus_one_when_base_positive() -> None:
     # frequency=2 makes the periodic yield -0.75, so the discount base is 0.25 > 0:
     # price = 25/0.25 + 1025/0.25**2 = 100 + 16400 = 16500.
-    result = bond_price(
-        face=1000.0, coupon_rate=0.05, years_to_maturity=1.0, ytm=-1.5, frequency=2
-    )
+    result = bond_price(face=1000.0, coupon_rate=0.05, years_to_maturity=1.0, ytm=-1.5, frequency=2)
     assert result.price == pytest.approx(16500.0, rel=1e-12)
 
 
