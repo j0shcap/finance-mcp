@@ -6,6 +6,7 @@ import pytest
 from finance_mcp.data.calculators import (
     _bisect_bracket,
     _find_all_roots,
+    _minimize,
     bond_price,
     bond_ytm,
     convert_rate,
@@ -563,15 +564,22 @@ def test_nper_general_no_solution_raises() -> None:
         time_value_of_money(solve_for="nper", pv=3000.0, fv=1000.0, pmt=-100.0, rate=0.05)
 
 
+def test_irr_within_extended_range() -> None:
+    # IRR = 999/period (99,900%) is past the old 1000% cap but inside the log-spaced
+    # tail, so it is now found instead of reported as non-existent.
+    assert irr([-1.0, 1000.0]).irr == pytest.approx(999.0, rel=1e-9)
+
+
 def test_irr_no_root_in_range_raises() -> None:
-    # IRR ~ 999/period (> 1000% cap) -> sign change but no root in searched range.
+    # IRR = 99,999/period (~1e7%) is past the 1,000,000% upper bound -> sign change but
+    # no root in the searched range.
     with pytest.raises(InvalidInput):
-        irr([-1.0, 1000.0])
+        irr([-1.0, 100000.0])
 
 
 def test_xirr_no_root_in_range_raises() -> None:
     with pytest.raises(InvalidInput):
-        xirr([_cf(2021, -1.0), _cf(2022, 1000.0)])
+        xirr([_cf(2021, -1.0), _cf(2022, 100000.0)])
 
 
 def test_mirr_too_few_cashflows_raises() -> None:
@@ -772,3 +780,76 @@ def test_bond_price_annual_frequency_still_rejects_minus_one() -> None:
     # With frequency=1 the old and new constraints coincide.
     with pytest.raises(InvalidInput, match="ytm"):
         bond_price(face=1000.0, coupon_rate=0.05, years_to_maturity=1.0, ytm=-1.0, frequency=1)
+
+
+def test_irr_tangent_root_local_maximum() -> None:
+    # npv(r) = -(1 - 1/(1+r))**2 touches zero at r = 0 from below: a double root with
+    # no sign change, so the grid scan alone reports "no IRR".
+    result = irr([-1.0, 2.0, -1.0])
+    assert result.irr == pytest.approx(0.0, abs=1e-6)
+    assert result.is_unique is True
+    assert len(result.all_irrs) == 1
+
+
+def test_irr_tangent_root_local_minimum() -> None:
+    # The same flow negated: npv touches zero at r = 0 from above.
+    result = irr([1.0, -2.0, 1.0])
+    assert result.irr == pytest.approx(0.0, abs=1e-6)
+    assert result.is_unique is True
+
+
+def test_irr_tangent_root_away_from_zero() -> None:
+    # A double root at 15%: (1 - 1.15/(1+r))**2 scaled.
+    result = irr([-1.0, 2.3, -1.3225])
+    assert result.irr == pytest.approx(0.15, rel=1e-6)
+    assert result.is_unique is True
+
+
+def test_irr_tangent_root_scales_with_cashflow_magnitude() -> None:
+    # The tangent tolerance is relative to the local |f|, so a 1e9-sized flow with the
+    # same shape must also be recognised.
+    result = irr([-1e9, 2e9, -1e9])
+    assert result.irr == pytest.approx(0.0, abs=1e-6)
+
+
+def test_irr_above_one_thousand_percent() -> None:
+    # 1 -> 12 in one period is an IRR of 1100%, past the old uniform grid's upper bound.
+    result = irr([-1.0, 12.0])
+    assert result.irr == pytest.approx(11.0, rel=1e-9)
+    assert result.is_unique is True
+
+
+def test_irr_two_roots_closer_than_a_grid_step() -> None:
+    # Roots at 10% and 10.01% are ~1e-4 apart, far inside the ~1e-2 uniform grid step.
+    # Built as (x - 1/1.10)(x - 1/1.1001) in x = 1/(1+r).
+    cashflows = [1.0 / (1.10 * 1.1001), -(1.0 / 1.10 + 1.0 / 1.1001), 1.0]
+    result = irr(cashflows)
+    assert len(result.all_irrs) == 2
+    assert result.all_irrs[0] == pytest.approx(0.10, rel=1e-6)
+    assert result.all_irrs[1] == pytest.approx(0.1001, rel=1e-6)
+    assert result.is_unique is False
+    for root in result.all_irrs:
+        assert npv(root, cashflows).npv == pytest.approx(0.0, abs=1e-9)
+
+
+def test_irr_near_tangent_but_not_a_root_is_not_reported() -> None:
+    # min|npv| is 1e-9 with cashflows of order 1 — well above the floating-point
+    # cancellation floor, so this is genuinely rootless and must stay rootless.
+    with pytest.raises(InvalidInput):
+        irr([0.01 + 1e-9, -0.2, 1.0])
+
+
+def test_find_all_roots_without_log_tail() -> None:
+    # log_high == high disables the geometric tail, so a root past `high` is missed.
+    roots = _find_all_roots(lambda x: x - 11.0, log_high=10.0)
+    assert roots == []
+
+
+def test_find_all_roots_skips_flat_sampled_regions() -> None:
+    # A step function has zero first differences almost everywhere; the turning-point
+    # scan must skip those instead of minimizing over a flat bracket.
+    assert _find_all_roots(lambda x: 1.0 if x < 5.0 else 2.0) == []
+
+
+def test_minimize_finds_interior_minimum() -> None:
+    assert _minimize(lambda x: (x - 0.25) ** 2, -1.0, 1.0) == pytest.approx(0.25, abs=1e-9)

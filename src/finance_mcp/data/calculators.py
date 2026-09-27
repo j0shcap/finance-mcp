@@ -74,31 +74,96 @@ def _bisect(f: Callable[[float], float], low: float = -0.999999, high: float = 1
     return _bisect_bracket(f, low, high)
 
 
+_GOLDEN_INV = (math.sqrt(5.0) - 1.0) / 2.0
+
+
+def _minimize(f: Callable[[float], float], low: float, high: float) -> float:
+    """Return the minimizer of a unimodal ``f`` on [low, high] by golden-section search.
+
+    Deterministic: a fixed 100 iterations with no early exit, which shrinks the bracket
+    by 0.618**100 (~1e-21) — far below the precision any caller needs — and keeps the
+    number of ``f`` evaluations, and therefore the result, identical on every run.
+    """
+    a, b = low, high
+    c = b - _GOLDEN_INV * (b - a)
+    d = a + _GOLDEN_INV * (b - a)
+    fc, fd = f(c), f(d)
+    for _ in range(100):
+        if fc < fd:
+            b, d, fd = d, c, fc
+            c = b - _GOLDEN_INV * (b - a)
+            fc = f(c)
+        else:
+            a, c, fc = c, d, fd
+            d = a + _GOLDEN_INV * (b - a)
+            fd = f(d)
+    return (a + b) / 2.0
+
+
 def _find_all_roots(
     f: Callable[[float], float],
     low: float = -0.999999,
     high: float = 10.0,
     grid_points: int = 1100,
+    log_high: float = 1e4,
+    log_points: int = 300,
     dedup_tol: float = 1e-7,
+    tangent_tol: float = 1e-9,
 ) -> list[float]:
-    """Find every real root of ``f`` on (low, high] by scanning a fixed uniform grid.
+    """Find every real root of ``f`` on (low, log_high] by scanning a fixed grid.
 
-    Deterministic: fixed bounds, resolution, and tolerances. Records exact grid-point
-    zeros and bisects every sign-change bracket, then returns sorted, de-duplicated
-    roots. Used for IRR/XIRR, where non-conventional cashflows can have several roots.
+    Deterministic: fixed abscissae, iteration counts, and tolerances. The abscissae are
+    ``grid_points`` uniform samples on (low, high] followed by ``log_points`` geometric
+    samples on (high, log_high] — log spacing keeps the very large rates affordable, so
+    an IRR of several hundred times the principal is still found.
+
+    Three kinds of root are recorded:
+
+    * an exact zero landing on an abscissa;
+    * a sign change between adjacent abscissae, refined by bisection;
+    * a turning point of the sampled sequence, refined by golden-section search. This is
+      what catches a tangent (double) root, where ``f`` touches zero without changing
+      sign, and a pair of roots closer together than one grid step, where both lie
+      inside a single interval and the endpoints share a sign. A refined turning point
+      counts as a root when ``|f|`` there has collapsed to the floating-point
+      cancellation floor, measured relative to the bracket endpoints (``tangent_tol``);
+      if instead it has crossed zero, the two halves each hold a root and are bisected
+      separately.
+
+    Used for IRR/XIRR, where non-conventional cashflows can have several roots.
     """
     step = (high - low) / (grid_points - 1)
-    prev_x = low
-    prev_f = f(low)
-    roots: list[float] = [low] if prev_f == 0.0 else []
-    for i in range(1, grid_points):
-        x = low + i * step
-        fx = f(x)
-        if fx == 0.0:
-            roots.append(x)
-        elif prev_f * fx < 0.0:
-            roots.append(_bisect_bracket(f, prev_x, x))
-        prev_x, prev_f = x, fx
+    abscissae = [low + i * step for i in range(grid_points)]
+    if log_high > high:
+        ratio = (log_high / high) ** (1.0 / log_points)
+        x = high
+        for _ in range(log_points):
+            x *= ratio
+            abscissae.append(x)
+    values = [f(x) for x in abscissae]
+
+    roots = [x for x, fx in zip(abscissae, values, strict=True) if fx == 0.0]
+    for i in range(1, len(abscissae)):
+        if values[i - 1] * values[i] < 0.0:
+            roots.append(_bisect_bracket(f, abscissae[i - 1], abscissae[i]))
+    for i in range(1, len(abscissae) - 1):
+        rise, fall = values[i] - values[i - 1], values[i + 1] - values[i]
+        if rise == 0.0 or fall == 0.0 or (rise > 0.0) == (fall > 0.0):
+            continue  # flat or monotone here: no turning point to refine
+        bracket_low, bracket_high = abscissae[i - 1], abscissae[i + 1]
+        if rise < 0.0:  # local minimum of f
+            turning = _minimize(f, bracket_low, bracket_high)
+        else:  # local maximum of f: minimize -f
+            turning = _minimize(lambda t: -f(t), bracket_low, bracket_high)
+        f_turning = f(turning)
+        tolerance = max(abs(values[i - 1]), abs(values[i + 1])) * tangent_tol
+        if abs(f_turning) <= tolerance:
+            roots.append(turning)  # tangent (double) root
+        elif f_turning * values[i - 1] < 0.0:
+            # The extremum overshot zero: a root on each side, both inside one step.
+            roots.append(_bisect_bracket(f, bracket_low, turning))
+            roots.append(_bisect_bracket(f, turning, bracket_high))
+
     roots.sort()
     deduped: list[float] = []
     for root in roots:
@@ -435,7 +500,7 @@ def irr(cashflows: list[float]) -> IRRResult:
     """Internal rate of return of equally-spaced cashflows; needs >=1 sign change.
 
     Non-conventional cashflows can have multiple IRRs; all real roots found in
-    (-100%, 1000%] are returned (see IRRResult.all_irrs / is_unique). For a single
+    (-100%, 1,000,000%] are returned (see IRRResult.all_irrs / is_unique). For a single
     unambiguous figure use ``mirr``.
     """
     if len(cashflows) < 2:
@@ -444,7 +509,9 @@ def irr(cashflows: list[float]) -> IRRResult:
         raise InvalidInput("irr needs at least one sign change in the cashflows.")
     roots = _find_all_roots(lambda r: npv(r, cashflows).npv)
     if not roots:
-        raise InvalidInput("No internal rate of return exists in (-100%, 1000%]; consider mirr().")
+        raise InvalidInput(
+            "No internal rate of return exists in (-100%, 1,000,000%]; consider mirr()."
+        )
     return _irr_result(roots)
 
 
@@ -508,7 +575,9 @@ def xirr(cashflows: list[DatedCashflow]) -> IRRResult:
         raise InvalidInput("xirr needs at least one sign change in the cashflows.")
     roots = _find_all_roots(lambda r: xnpv(r, cashflows).npv)
     if not roots:
-        raise InvalidInput("No internal rate of return exists in (-100%, 1000%]; consider mirr().")
+        raise InvalidInput(
+            "No internal rate of return exists in (-100%, 1,000,000%]; consider mirr()."
+        )
     return _irr_result(roots)
 
 
