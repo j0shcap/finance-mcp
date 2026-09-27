@@ -27,8 +27,19 @@ async def run_data[T](call: Callable[[], T]) -> T:
 
 
 def run_calc[T](call: Callable[[], T]) -> T:
-    """Run a pure calculator ``call``, translating InvalidInput into a ToolError."""
+    """Run a pure calculator ``call``, translating input errors into a ToolError.
+
+    InvalidInput carries a message written for the model, so it is forwarded verbatim.
+    The numeric clause is defence in depth: the calculators validate their preconditions
+    explicitly, but an extreme argument that no Field bound can screen (a power that
+    overflows, a factor that underflows to zero, a result the model rejects) must still
+    reach the client as a clear ToolError rather than a bare "(34, 'Result too large')".
+    pydantic's ValidationError subclasses ValueError, so result-model failures are
+    covered too.
+    """
     try:
         return call()
     except InvalidInput as exc:
         raise ToolError(str(exc)) from exc
+    except (ZeroDivisionError, OverflowError, ValueError) as exc:
+        raise ToolError(f"The inputs are out of range for this calculation: {exc}") from exc
