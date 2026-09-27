@@ -531,7 +531,10 @@ def convert_rate(
         raise InvalidInput("periods_per_year must be at least 1.")
     if compounding == "continuous":
         if direction == "nominal_to_effective":
-            converted: float = math.exp(rate) - 1.0
+            try:
+                converted: float = math.exp(rate) - 1.0
+            except OverflowError as exc:
+                raise InvalidInput("rate is too large to convert: exp(rate) overflowed.") from exc
         else:
             if 1.0 + rate <= 0.0:
                 raise InvalidInput("Effective rate must be greater than -1 (-100%).")
@@ -539,7 +542,13 @@ def convert_rate(
     elif direction == "nominal_to_effective":
         if 1.0 + rate / periods_per_year <= 0.0:
             raise InvalidInput("Invalid nominal rate for the given compounding frequency.")
-        converted = (1.0 + rate / periods_per_year) ** periods_per_year - 1.0
+        try:
+            converted = (1.0 + rate / periods_per_year) ** periods_per_year - 1.0
+        except OverflowError as exc:
+            raise InvalidInput(
+                "rate is too large for the given compounding frequency: "
+                "(1 + rate/periods_per_year)**periods_per_year overflowed."
+            ) from exc
     else:
         if 1.0 + rate <= 0.0:
             raise InvalidInput("Effective rate must be greater than -1 (-100%).")

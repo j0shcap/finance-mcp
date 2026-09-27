@@ -739,3 +739,15 @@ def test_loan_negligible_rate_behaves_as_zero_rate() -> None:
     assert result.monthly_payment == pytest.approx(100.0, rel=1e-9)
     assert result.n_payments == 12
     assert result.total_interest == pytest.approx(0.0, abs=1e-6)
+
+
+def test_convert_rate_continuous_overflow_raises() -> None:
+    # exp(1000) overflows; the tool must see InvalidInput, not OverflowError.
+    with pytest.raises(InvalidInput, match="too large"):
+        convert_rate(1000.0, 1, "nominal_to_effective", "continuous")
+
+
+def test_convert_rate_discrete_overflow_raises() -> None:
+    # (1 + 1e300/12)**12 overflows too, so the discrete path needs the same guard.
+    with pytest.raises(InvalidInput, match="too large"):
+        convert_rate(1e300, 12, "nominal_to_effective")
