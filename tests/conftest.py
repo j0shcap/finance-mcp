@@ -225,3 +225,23 @@ def make_client(**kw: Any) -> YFinanceClient:
     return YFinanceClient(
         ticker_factory=factory, time_fn=FakeClock(), quote_ttl=30.0, history_ttl=300.0, **extra
     )
+
+
+def make_intraday_df(
+    closes: list[float],
+    start: str = "2026-09-25 09:30",
+    tz: str = "America/New_York",
+    freq: str = "5min",
+) -> pd.DataFrame:
+    """An intraday OHLCV frame with a tz-aware index, as yfinance returns for 1m-1h bars."""
+    idx = pd.date_range(start, periods=len(closes), freq=freq, tz=tz)
+    return pd.DataFrame(
+        {
+            "Open": closes,
+            "High": [c + 1 for c in closes],
+            "Low": [c - 1 for c in closes],
+            "Close": closes,
+            "Volume": [1000 * (i + 1) for i in range(len(closes))],
+        },
+        index=idx,
+    )

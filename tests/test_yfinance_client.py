@@ -1,7 +1,7 @@
 import math
 from collections.abc import Callable
 from types import SimpleNamespace
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 import pandas as pd
 import pytest
@@ -17,6 +17,7 @@ from finance_mcp.data import analytics
 from finance_mcp.data.errors import DataUnavailable, SymbolNotFound
 from finance_mcp.data.models import (
     AnalystData,
+    HistoryInterval,
     CompanyProfile,
     DividendEvent,
     FinancialStatement,
@@ -32,6 +33,7 @@ from finance_mcp.data.models import (
 )
 from finance_mcp.data.yfinance_client import (
     DEFAULT_CACHE_MAX_ENTRIES,
+    _INTRADAY_INTERVALS,
     YFinanceClient,
     _recommendation_trend,
 )
@@ -42,6 +44,7 @@ from tests.conftest import (
     make_client,
     make_financials_df,
     make_history_df,
+    make_intraday_df,
     make_news_item,
     make_recommendations_df,
     make_series,
@@ -1845,3 +1848,44 @@ def test_rate_limit_error_stays_data_unavailable() -> None:
         client.get_quote(["AAPL"])
     assert not isinstance(raised.value, SymbolNotFound)
     assert "Rate limited" in str(raised.value)
+
+
+# --- intraday bars keep their time (item 1) ---
+
+
+def test_intraday_bars_carry_a_full_timestamp_with_utc_offset() -> None:
+    df = make_intraday_df([100.0, 101.0, 102.0])
+    client = _client(factory=fake_ticker_factory(history_df=df))
+    hist = client.get_price_history("AAPL", period="1d", interval="5m")
+    assert [b.date for b in hist.bars] == [
+        "2026-09-25T09:30:00-04:00",
+        "2026-09-25T09:35:00-04:00",
+        "2026-09-25T09:40:00-04:00",
+    ]
+    assert hist.summary.start_date == "2026-09-25T09:30:00-04:00"
+    assert hist.summary.end_date == "2026-09-25T09:40:00-04:00"
+
+
+@pytest.mark.parametrize("interval", ["1m", "5m", "15m", "30m", "1h"])
+def test_every_intraday_interval_emits_distinct_timestamps(interval: str) -> None:
+    df = make_intraday_df([100.0, 101.0])
+    client = _client(factory=fake_ticker_factory(history_df=df))
+    dates = [b.date for b in client.get_price_history("AAPL", "1d", interval).bars]
+    assert len(set(dates)) == 2
+    assert all("T" in d and d.endswith("-04:00") for d in dates)
+
+
+@pytest.mark.parametrize("interval", ["1d", "1wk", "1mo"])
+def test_daily_and_longer_bars_stay_date_only(interval: str) -> None:
+    # Yahoo's daily index is midnight in the EXCHANGE's timezone; emitting a timestamp (or
+    # converting to UTC) would either lie about the time or shift the calendar date.
+    df = make_intraday_df([100.0, 101.0], start="2026-09-24 00:00", freq="1D")
+    client = _client(factory=fake_ticker_factory(history_df=df))
+    dates = [b.date for b in client.get_price_history("AAPL", "1mo", interval).bars]
+    assert dates == ["2026-09-24", "2026-09-25"]
+
+
+def test_intraday_intervals_are_the_non_daily_history_intervals() -> None:
+    # Pins the two sets against HistoryInterval so a newly supported interval cannot
+    # silently default to date-only formatting.
+    assert _INTRADAY_INTERVALS == set(get_args(HistoryInterval)) - {"1d", "1wk", "1mo"}

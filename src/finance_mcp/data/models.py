@@ -146,7 +146,11 @@ class Quote(BaseModel):
 class PriceBar(BaseModel):
     """One OHLCV bar. Prices are auto-adjusted for splits and dividends."""
 
-    date: str = Field(description="Bar date (ISO 8601).")
+    date: str = Field(
+        description="Bar timestamp (ISO 8601). Date-only ('2026-09-25') for the daily and "
+        "longer intervals (1d/1wk/1mo), which cover whole sessions; a full timestamp with the "
+        "exchange's UTC offset ('2026-09-25T09:35:00-04:00') for intraday intervals (1m-1h)."
+    )
     open: float = Field(description="Adjusted open, in quote currency.")
     high: float = Field(description="Adjusted high, in quote currency.")
     low: float = Field(description="Adjusted low, in quote currency.")
@@ -157,8 +161,8 @@ class PriceBar(BaseModel):
 class PriceSummary(BaseModel):
     """Compact summary over the requested history window."""
 
-    start_date: str = Field(description="First bar date.")
-    end_date: str = Field(description="Last bar date.")
+    start_date: str = Field(description="First bar date/timestamp (see PriceBar.date).")
+    end_date: str = Field(description="Last bar date/timestamp (see PriceBar.date).")
     start_close: float = Field(description="Adjusted close of the first bar, in quote currency.")
     end_close: float = Field(description="Adjusted close of the last bar, in quote currency.")
     total_return_percent: float = Field(

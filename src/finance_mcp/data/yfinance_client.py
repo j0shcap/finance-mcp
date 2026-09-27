@@ -42,6 +42,9 @@ from finance_mcp.data.models import (
 
 DEFAULT_MAX_BARS = 260
 DEFAULT_CACHE_MAX_ENTRIES = 256
+# Intervals whose bars are points in time rather than whole sessions. Kept in sync with
+# HistoryInterval (a test pins it): everything that is not a daily-or-longer interval.
+_INTRADAY_INTERVALS = frozenset({"1m", "5m", "15m", "30m", "1h"})
 SMA_SHORT_WINDOW = 50
 SMA_LONG_WINDOW = 200
 # Below roughly a quarter of calendar time, annualizing compounds short-run noise into a
@@ -189,6 +192,7 @@ class YFinanceClient:
 
     def _fetch_all_bars(self, symbol: str, period: str, interval: str) -> list[PriceBar]:
         """Fetch and parse the FULL (untruncated) OHLCV bars, dropping non-finite rows."""
+        intraday = interval in _INTRADAY_INTERVALS
         try:
             df = self._ticker(symbol).history(period=period, interval=interval, auto_adjust=True)
         except Exception as exc:  # surface any yfinance failure verbatim
@@ -211,7 +215,7 @@ class YFinanceClient:
                     continue
                 all_bars.append(
                     PriceBar(
-                        date=idx.date().isoformat(), open=o, high=h, low=low, close=c, volume=v
+                        date=_bar_date(idx, intraday), open=o, high=h, low=low, close=c, volume=v
                     )
                 )
             if not all_bars:
@@ -504,6 +508,17 @@ def _elapsed_days(start: str, end: str) -> int:
     both a bare date ("2024-01-01") and a full intraday timestamp with offset.
     """
     return (datetime.fromisoformat(end).date() - datetime.fromisoformat(start).date()).days
+
+
+def _bar_date(idx: Any, intraday: bool) -> str:
+    """Format a bar's index value.
+
+    Intraday bars are moments, so they keep the clock time and the exchange's UTC offset
+    (2026-09-25T09:35:00-04:00). Daily and longer bars are whole sessions indexed at
+    midnight in the exchange's timezone, so they stay date-only — emitting the timestamp
+    would imply a trade time, and normalizing it to UTC would shift the calendar date.
+    """
+    return str(idx.isoformat() if intraday else idx.date().isoformat())
 
 
 def _norm(symbol: str) -> str:
