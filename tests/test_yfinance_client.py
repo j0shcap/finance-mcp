@@ -5,7 +5,13 @@ from typing import Any, Literal
 
 import pandas as pd
 import pytest
-from yfinance.exceptions import YFException
+from yfinance.exceptions import (
+    YFException,
+    YFPricesMissingError,
+    YFRateLimitError,
+    YFTickerMissingError,
+    YFTzMissingError,
+)
 
 from finance_mcp.data import analytics
 from finance_mcp.data.errors import DataUnavailable, SymbolNotFound
@@ -1760,3 +1766,82 @@ def test_cache_default_max_entries_is_bounded() -> None:
     client = YFinanceClient(ticker_factory=fake_ticker_factory(fast_info=QUOTE_FI))
     assert client._cache_max_entries == DEFAULT_CACHE_MAX_ENTRIES
     assert DEFAULT_CACHE_MAX_ENTRIES > 0
+
+
+# --- error classification: transport failure vs. missing symbol (item 3) ---
+
+
+class _FakeResponse:
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+
+
+class _FakeHTTPError(Exception):
+    """Shaped like the curl_cffi/requests HTTPError yfinance lets escape raise_for_status()."""
+
+    def __init__(self, message: str, status_code: int) -> None:
+        super().__init__(message)
+        self.response = _FakeResponse(status_code)
+
+
+TRANSPORT_ERRORS = [
+    ConnectionError("Connection reset by peer"),
+    TimeoutError("timed out after 30s"),
+    OSError("network is unreachable"),
+    _FakeHTTPError("500 Server Error: Internal Server Error for url: ...", 500),
+    _FakeHTTPError("503 Server Error: Service Unavailable for url: ...", 503),
+    ValueError("Expecting value: line 1 column 1 (char 0)"),
+]
+
+
+@pytest.mark.parametrize("exc", TRANSPORT_ERRORS, ids=lambda e: type(e).__name__ + str(e)[:12])
+def test_quote_transport_failure_is_data_unavailable_not_symbol_not_found(exc: Exception) -> None:
+    client = _client(factory=fake_ticker_factory(fast_info_error=exc))
+    with pytest.raises(DataUnavailable) as raised:
+        client.get_quote(["AAPL"])
+    assert not isinstance(raised.value, SymbolNotFound)
+    assert str(exc) in str(raised.value)  # underlying message preserved
+    assert "may be invalid or delisted" not in str(raised.value)
+
+
+@pytest.mark.parametrize("exc", TRANSPORT_ERRORS, ids=lambda e: type(e).__name__ + str(e)[:12])
+def test_info_transport_failure_is_data_unavailable_not_symbol_not_found(exc: Exception) -> None:
+    client = _client(factory=fake_ticker_factory(info_error=exc))
+    with pytest.raises(DataUnavailable) as raised:
+        client.get_company_profile("AAPL")
+    assert not isinstance(raised.value, SymbolNotFound)
+    assert str(exc) in str(raised.value)
+
+
+NO_DATA_ERRORS = [
+    KeyError("exchangeTimezoneName"),
+    YFTickerMissingError("NOPE", "possibly delisted; no price data found"),
+    YFTzMissingError("NOPE"),
+    YFPricesMissingError("NOPE", ""),
+    _FakeHTTPError("404 Client Error: Not Found for url: ...", 404),
+    Exception("Quote not found for ticker symbol: NOPE"),
+]
+
+
+@pytest.mark.parametrize("exc", NO_DATA_ERRORS, ids=lambda e: type(e).__name__ + str(e)[:12])
+def test_quote_no_data_signals_are_symbol_not_found(exc: Exception) -> None:
+    client = _client(factory=fake_ticker_factory(fast_info_error=exc))
+    with pytest.raises(SymbolNotFound) as raised:
+        client.get_quote(["NOPE"])
+    assert str(raised.value) == "No quote data for 'NOPE'. The symbol may be invalid or delisted."
+
+
+@pytest.mark.parametrize("exc", NO_DATA_ERRORS, ids=lambda e: type(e).__name__ + str(e)[:12])
+def test_info_no_data_signals_are_symbol_not_found(exc: Exception) -> None:
+    client = _client(factory=fake_ticker_factory(info_error=exc))
+    with pytest.raises(SymbolNotFound) as raised:
+        client.get_key_metrics("NOPE")
+    assert "No metrics data for 'NOPE'" in str(raised.value)
+
+
+def test_rate_limit_error_stays_data_unavailable() -> None:
+    client = _client(factory=fake_ticker_factory(fast_info_error=YFRateLimitError()))
+    with pytest.raises(DataUnavailable) as raised:
+        client.get_quote(["AAPL"])
+    assert not isinstance(raised.value, SymbolNotFound)
+    assert "Rate limited" in str(raised.value)

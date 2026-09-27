@@ -2,7 +2,9 @@
 
 Network access is isolated here. yfinance errors and empty results become
 DataUnavailable/SymbolNotFound whose message is surfaced to the caller verbatim,
-because we cannot enumerate every Yahoo failure mode.
+because we cannot enumerate every Yahoo failure mode. SymbolNotFound is reserved for
+signals that really mean "no data for this symbol" (see _is_no_data_error): everything
+else, transport failures included, stays a plain DataUnavailable.
 """
 
 import math
@@ -13,7 +15,7 @@ from datetime import datetime
 from typing import Any, cast
 
 import yfinance as yf
-from yfinance.exceptions import YFException
+from yfinance.exceptions import YFTickerMissingError
 
 from finance_mcp.data import analytics
 from finance_mcp.data.errors import DataUnavailable, SymbolNotFound
@@ -112,17 +114,15 @@ class YFinanceClient:
     ) -> tuple[Any, dict[str, Any]]:
         """Fetch a ticker and its ``.info``, asserting the symbol names a real instrument.
 
-        Shared by the profile/metrics/analyst fetchers. A yfinance-typed error becomes
-        DataUnavailable; any other access error, or an ``info`` dict with no longName/
-        shortName (Yahoo's tell for an unknown symbol), becomes SymbolNotFound.
+        Shared by the profile/metrics/analyst fetchers. Access errors are classified by
+        _data_error; an ``info`` dict that is empty or has no longName/shortName (Yahoo's
+        tell for an unknown symbol) becomes SymbolNotFound.
         """
         ticker = self._ticker(symbol)
         try:
             info = ticker.info
-        except YFException as exc:
-            raise DataUnavailable(f"Failed to fetch {fetch_label} for '{symbol}': {exc}") from exc
-        except Exception as exc:  # raw leak for symbols with no data
-            raise SymbolNotFound(_no_data_msg(kind, symbol)) from exc
+        except Exception as exc:
+            raise _data_error(exc, fetch_label, kind, symbol) from exc
         if not info or not (info.get("longName") or info.get("shortName")):
             raise SymbolNotFound(_no_data_msg(kind, symbol))
         return ticker, info
@@ -146,12 +146,8 @@ class YFinanceClient:
             year_low = _opt(getattr(fi, "year_low", None))
             market_cap = _opt(getattr(fi, "market_cap", None))
             volume = _opt(getattr(fi, "last_volume", None))
-        except YFException as exc:
-            # yfinance's own typed errors (rate limit, etc.) — surface verbatim.
-            raise DataUnavailable(f"Failed to fetch quote for '{symbol}': {exc}") from exc
         except Exception as exc:
-            # fast_info leaks raw errors (e.g. KeyError) for symbols with no data.
-            raise SymbolNotFound(_no_data_msg("quote", symbol)) from exc
+            raise _data_error(exc, "quote", "quote", symbol) from exc
         if price is None:
             raise SymbolNotFound(_no_data_msg("quote", symbol))
         change = (price - prev) if prev is not None else None
@@ -469,8 +465,6 @@ class YFinanceClient:
     def _fetch_news(self, symbol: str, count: int) -> NewsResult:
         try:
             items = self._ticker(symbol).get_news(count=count, tab="news")
-        except YFException as exc:
-            raise DataUnavailable(f"Failed to fetch news for '{symbol}': {exc}") from exc
         except Exception as exc:  # a failed news fetch is a data issue, not a missing symbol
             raise DataUnavailable(f"Failed to fetch news for '{symbol}': {exc}") from exc
         if not items:
@@ -522,6 +516,36 @@ def _norm(symbol: str) -> str:
     if not normalized:
         raise SymbolNotFound("Empty ticker symbol.")
     return normalized
+
+
+# Signals that genuinely mean "Yahoo has no data for this symbol". KeyError is what
+# fast_info leaks for an unknown symbol; YFTickerMissingError covers yfinance's own
+# missing-ticker/timezone/prices errors (YFTzMissingError and YFPricesMissingError
+# subclass it). Anything outside this set is treated as a source/transport failure.
+_NO_DATA_ERRORS = (KeyError, YFTickerMissingError)
+
+
+def _is_no_data_error(exc: Exception) -> bool:
+    """True only for "this symbol has no data" signals — never for transport failures."""
+    if isinstance(exc, _NO_DATA_ERRORS):
+        return True
+    # yfinance calls response.raise_for_status(), so Yahoo's 404 for an unknown symbol
+    # escapes as a raw HTTP error from its HTTP client rather than a YFException.
+    if getattr(getattr(exc, "response", None), "status_code", None) == 404:
+        return True
+    return "quote not found" in str(exc).lower()
+
+
+def _data_error(exc: Exception, fetch_label: str, kind: str, symbol: str) -> DataUnavailable:
+    """Classify a raw fetch failure as a missing symbol or an unavailable source.
+
+    A connection reset, DNS failure, timeout, HTTP 5xx, rate limit or malformed payload
+    says nothing about the symbol, so it stays a DataUnavailable carrying the underlying
+    message; only the no-data signals become SymbolNotFound.
+    """
+    if _is_no_data_error(exc):
+        return SymbolNotFound(_no_data_msg(kind, symbol))
+    return DataUnavailable(f"Failed to fetch {fetch_label} for '{symbol}': {exc}")
 
 
 def _no_data_msg(kind: str, symbol: str) -> str:
