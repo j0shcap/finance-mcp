@@ -206,6 +206,22 @@ class FinancialStatement(BaseModel):
         description="Line item label -> values aligned to period_ends, in the company's reporting "
         "currency in absolute units (e.g. 416161000000 = 416.161B); null if not reported."
     )
+    missing_line_items: list[str] = Field(
+        default_factory=list,
+        description="Requested line-item labels that this statement does not contain. Labels are "
+        "matched ignoring case and extra whitespace, so anything listed here is genuinely a "
+        "different label - check line_item_suggestions and available_line_items and retry.",
+    )
+    available_line_items: list[str] = Field(
+        default_factory=list,
+        description="Every line-item label the statement contains. Populated only when some "
+        "requested label was missing (otherwise it would just repeat line_items' keys).",
+    )
+    line_item_suggestions: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description="For each missing label, the closest actual labels (e.g. 'Revenue' -> "
+        "'Total Revenue'). Omits labels with no close match.",
+    )
 
 
 class DividendEvent(BaseModel):

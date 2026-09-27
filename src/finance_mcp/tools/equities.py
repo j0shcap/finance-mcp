@@ -67,15 +67,19 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
         line_items: Annotated[
             list[str] | None,
             Field(
-                description="Specific line-item labels to return (exactly as they appear in the "
-                "statement, e.g. 'Total Revenue'); omit for the full statement."
+                description="Specific line-item labels to return (as they appear in the statement, "
+                "e.g. 'Total Revenue'; case and extra whitespace are ignored); omit for the full "
+                "statement."
             ),
         ] = None,
     ) -> FinancialStatement:
         """Income statement, balance sheet, or cash flow.
 
-        Returns line items by period (most recent first); values are in the company's reporting
-        currency in absolute units (e.g. 416161000000 = 416.161 billion), null where not reported.
+        Returns line items by period (most recent first); values are in the currency named by
+        `currency` (the company's reporting currency, which can differ from the currency its
+        shares trade in) in absolute units (e.g. 416161000000 = 416.161 billion), null where not
+        reported. Filtered labels that do not exist are reported in `missing_line_items`, with
+        `available_line_items` and `line_item_suggestions` to retry from.
         """
         return await run_data(lambda: client.get_financials(ticker, statement, period, line_items))
 

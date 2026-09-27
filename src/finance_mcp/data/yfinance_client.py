@@ -7,6 +7,7 @@ signals that really mean "no data for this symbol" (see _is_no_data_error): ever
 else, transport failures included, stays a plain DataUnavailable.
 """
 
+import difflib
 import math
 import time
 from collections import OrderedDict
@@ -308,8 +309,7 @@ class YFinanceClient:
         )
         if line_items is None:
             return full
-        wanted = {li: full.line_items[li] for li in line_items if li in full.line_items}
-        return full.model_copy(update={"line_items": wanted})
+        return _filter_line_items(full, line_items)
 
     def _fetch_financials(
         self,
@@ -512,6 +512,45 @@ def _elapsed_days(start: str, end: str) -> int:
     both a bare date ("2024-01-01") and a full intraday timestamp with offset.
     """
     return (datetime.fromisoformat(end).date() - datetime.fromisoformat(start).date()).days
+
+
+def _label_key(label: str) -> str:
+    """Comparison key for a line-item label: case- and whitespace-insensitive."""
+    return " ".join(label.split()).casefold()
+
+
+def _filter_line_items(full: FinancialStatement, requested: list[str]) -> FinancialStatement:
+    """Narrow a statement to the requested labels, reporting whatever did not match.
+
+    Labels are matched on _label_key, so 'total revenue' finds 'Total Revenue' (the exact
+    Yahoo spelling is easy to get almost right). Anything still unmatched is reported in
+    missing_line_items with close-match suggestions and the full label list, instead of
+    being dropped silently and leaving the caller to wonder why the statement is short.
+    """
+    available = list(full.line_items)
+    by_key = {_label_key(label): label for label in available}
+    wanted: dict[str, list[float | None]] = {}
+    missing: list[str] = []
+    for label in requested:
+        match = by_key.get(_label_key(label))
+        if match is None:
+            if label not in missing:
+                missing.append(label)
+        else:
+            wanted.setdefault(match, full.line_items[match])
+    suggestions = {}
+    for label in missing:
+        close = difflib.get_close_matches(_label_key(label), list(by_key), n=3, cutoff=0.6)
+        if close:
+            suggestions[label] = [by_key[key] for key in close]
+    return full.model_copy(
+        update={
+            "line_items": wanted,
+            "missing_line_items": missing,
+            "available_line_items": available if missing else [],
+            "line_item_suggestions": suggestions,
+        }
+    )
 
 
 def _statement_currency(ticker: Any) -> str | None:

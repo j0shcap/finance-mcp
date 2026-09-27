@@ -1949,3 +1949,60 @@ def test_key_metrics_currencies_are_none_when_absent() -> None:
     client = _metrics_client(factory=fake_ticker_factory(info={"longName": "X"}))
     metrics = client.get_key_metrics("X")
     assert metrics.currency is None and metrics.financial_currency is None
+
+
+# --- unknown line-item labels are surfaced, not silently dropped (item 4) ---
+
+
+def _income_client() -> YFinanceClient:
+    df = make_financials_df(INCOME, ["2024-09-30", "2023-09-30"])
+    return _fin_client(factory=fake_ticker_factory(financials={"income_stmt": df}))
+
+
+def test_unknown_line_items_are_reported_with_suggestions() -> None:
+    fs = _income_client().get_financials(
+        "AAPL", "income", "annual", line_items=["Total Revenue", "Revenue"]
+    )
+    assert list(fs.line_items) == ["Total Revenue"]
+    assert fs.missing_line_items == ["Revenue"]
+    assert fs.available_line_items == ["Total Revenue", "Net Income"]
+    assert fs.line_item_suggestions["Revenue"] == ["Total Revenue"]
+
+
+def test_matching_line_items_report_no_misses() -> None:
+    fs = _income_client().get_financials("AAPL", "income", "annual", line_items=["Net Income"])
+    assert list(fs.line_items) == ["Net Income"]
+    assert fs.missing_line_items == []
+    # Redundant with line_items when nothing is missing, so it stays empty.
+    assert fs.available_line_items == []
+    assert fs.line_item_suggestions == {}
+
+
+def test_line_items_match_case_and_whitespace_insensitively() -> None:
+    fs = _income_client().get_financials(
+        "AAPL", "income", "annual", line_items=["total revenue", "  Net   Income  "]
+    )
+    # Keyed by the statement's canonical label, whatever spelling was requested.
+    assert list(fs.line_items) == ["Total Revenue", "Net Income"]
+    assert fs.missing_line_items == []
+
+
+def test_repeated_line_items_collapse() -> None:
+    fs = _income_client().get_financials(
+        "AAPL", "income", "annual", line_items=["Total Revenue", "TOTAL REVENUE", "Nope", "Nope"]
+    )
+    assert list(fs.line_items) == ["Total Revenue"]
+    assert fs.missing_line_items == ["Nope"]
+
+
+def test_line_item_with_no_close_match_gets_no_suggestion() -> None:
+    fs = _income_client().get_financials("AAPL", "income", "annual", line_items=["zzzzzzzz"])
+    assert fs.line_items == {}
+    assert fs.missing_line_items == ["zzzzzzzz"]
+    assert fs.available_line_items == ["Total Revenue", "Net Income"]
+    assert "zzzzzzzz" not in fs.line_item_suggestions
+
+
+def test_unfiltered_statement_reports_no_misses() -> None:
+    fs = _income_client().get_financials("AAPL", "income", "annual")
+    assert fs.missing_line_items == [] and fs.available_line_items == []
