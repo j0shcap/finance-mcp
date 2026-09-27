@@ -17,10 +17,10 @@ from finance_mcp.data import analytics
 from finance_mcp.data.errors import DataUnavailable, SymbolNotFound
 from finance_mcp.data.models import (
     AnalystData,
-    HistoryInterval,
     CompanyProfile,
     DividendEvent,
     FinancialStatement,
+    HistoryInterval,
     KeyMetrics,
     NewsResult,
     PerformanceStats,
@@ -32,8 +32,8 @@ from finance_mcp.data.models import (
     SymbolSearchResult,
 )
 from finance_mcp.data.yfinance_client import (
-    DEFAULT_CACHE_MAX_ENTRIES,
     _INTRADAY_INTERVALS,
+    DEFAULT_CACHE_MAX_ENTRIES,
     YFinanceClient,
     _recommendation_trend,
 )
@@ -1888,4 +1888,64 @@ def test_daily_and_longer_bars_stay_date_only(interval: str) -> None:
 def test_intraday_intervals_are_the_non_daily_history_intervals() -> None:
     # Pins the two sets against HistoryInterval so a newly supported interval cannot
     # silently default to date-only formatting.
-    assert _INTRADAY_INTERVALS == set(get_args(HistoryInterval)) - {"1d", "1wk", "1mo"}
+    assert set(get_args(HistoryInterval)) - {"1d", "1wk", "1mo"} == _INTRADAY_INTERVALS
+
+
+# --- currency labelling for cross-currency comparisons (item 2) ---
+
+SAP_INFO = {  # SAP's US listing quotes in USD while it reports its financials in EUR
+    "longName": "SAP SE",
+    "currency": "USD",
+    "financialCurrency": "EUR",
+    "enterpriseValue": 3.42e12,
+    "totalDebt": 9.94e9,
+    "totalCash": 1.16e10,
+    "freeCashflow": 9.09e9,
+    "ebitda": 1.18e10,
+}
+
+
+def test_financial_statement_is_labelled_with_the_reporting_currency() -> None:
+    df = make_financials_df(INCOME, ["2024-12-31", "2023-12-31"])
+    client = _fin_client(factory=fake_ticker_factory(financials={"income_stmt": df}, info=SAP_INFO))
+    assert client.get_financials("SAP", "income", "annual").currency == "EUR"
+
+
+def test_financial_statement_currency_falls_back_to_quote_currency() -> None:
+    df = make_financials_df(INCOME, ["2024-12-31", "2023-12-31"])
+    client = _fin_client(
+        factory=fake_ticker_factory(
+            financials={"income_stmt": df}, info={"longName": "Apple Inc.", "currency": "USD"}
+        )
+    )
+    assert client.get_financials("AAPL", "income", "annual").currency == "USD"
+
+
+def test_financial_statement_currency_is_none_when_info_is_unusable() -> None:
+    df = make_financials_df(INCOME, ["2024-12-31", "2023-12-31"])
+    for factory in (
+        fake_ticker_factory(financials={"income_stmt": df}, info={}),
+        fake_ticker_factory(financials={"income_stmt": df}, info_error=OSError("no network")),
+    ):
+        client = _fin_client(factory=factory)
+        # An unlabelled statement beats a failed one: the values are still correct.
+        fs = client.get_financials("AAPL", "income", "annual")
+        assert fs.currency is None
+        assert fs.line_items["Total Revenue"] == [400.0, 380.0]
+
+
+def test_key_metrics_carry_both_quote_and_financial_currency() -> None:
+    client = _metrics_client(factory=fake_ticker_factory(info=SAP_INFO))
+    metrics = client.get_key_metrics("SAP")
+    # EBITDA/debt/cash/FCF come from Yahoo's financialData (EUR); EV is derived from
+    # market cap and is in the quote currency (USD). One currency field would misreport half.
+    assert metrics.currency == "USD"
+    assert metrics.financial_currency == "EUR"
+    assert metrics.ebitda == 1.18e10
+    assert metrics.enterprise_value == 3.42e12
+
+
+def test_key_metrics_currencies_are_none_when_absent() -> None:
+    client = _metrics_client(factory=fake_ticker_factory(info={"longName": "X"}))
+    metrics = client.get_key_metrics("X")
+    assert metrics.currency is None and metrics.financial_currency is None

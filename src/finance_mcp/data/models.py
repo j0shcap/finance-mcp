@@ -192,6 +192,13 @@ class FinancialStatement(BaseModel):
     symbol: str = Field(description="Ticker symbol.")
     statement: Statement = Field(description="Which statement.")
     period: StatementPeriod = Field(description="Reporting period granularity.")
+    currency: str | None = Field(
+        default=None,
+        description="Currency (ISO 4217) the values are reported in: Yahoo's financialCurrency, "
+        "falling back to the quote currency. This can differ from the currency the shares trade "
+        "in (SAP reports in EUR while its US listing quotes in USD), so never compare absolute "
+        "figures across companies without checking it. Null if Yahoo does not report it.",
+    )
     period_ends: list[str] = Field(
         description="Period-end dates (ISO 8601), most recent first; values align to this order."
     )
@@ -257,16 +264,38 @@ class CompanyProfile(BaseModel):
 
 
 class KeyMetrics(BaseModel):
-    """Valuation / profitability / leverage ratios as reported by Yahoo. Units vary by field."""
+    """Valuation / profitability / leverage ratios as reported by Yahoo. Units vary by field.
+
+    Absolute amounts are NOT all in one currency: the financialData figures (total debt/cash,
+    free cash flow, EBITDA) are in ``financial_currency``, while the market-derived enterprise
+    value is in ``currency``. When the two differ (ADRs and other cross-listings) Yahoo's
+    derived per-share figures can also be internally inconsistent, so compare such companies
+    on the ratios rather than on absolute amounts.
+    """
 
     symbol: str = Field(description="Ticker symbol.")
+    currency: str | None = Field(
+        default=None,
+        description="Quote currency (ISO 4217, e.g. 'USD') the shares trade in; the unit for "
+        "enterprise_value and the EPS fields.",
+    )
+    financial_currency: str | None = Field(
+        default=None,
+        description="Currency (ISO 4217) the company reports its financials in (Yahoo's "
+        "financialCurrency); the unit for total_debt, total_cash, free_cashflow, ebitda, "
+        "revenue_per_share and book_value. May differ from `currency`, e.g. SAP reports in EUR "
+        "while its US listing quotes in USD.",
+    )
     trailing_pe: float | None = Field(default=None, description="Trailing P/E ratio.")
     forward_pe: float | None = Field(default=None, description="Forward P/E ratio.")
     price_to_book: float | None = Field(default=None, description="Price/book ratio.")
     price_to_sales: float | None = Field(default=None, description="Price/sales (TTM) ratio.")
     peg_ratio: float | None = Field(default=None, description="P/E-to-growth ratio.")
     enterprise_value: float | None = Field(
-        default=None, description="Enterprise value, in the reporting currency (absolute units)."
+        default=None,
+        description="Enterprise value in `currency` (absolute units). Yahoo derives it from "
+        "market cap, so for cross-listings whose share count and quote currency disagree it can "
+        "be badly wrong - sanity-check it against market_cap + total_debt - total_cash.",
     )
     ev_to_ebitda: float | None = Field(default=None, description="Enterprise value / EBITDA ratio.")
     ev_to_revenue: float | None = Field(
@@ -292,21 +321,29 @@ class KeyMetrics(BaseModel):
     current_ratio: float | None = Field(default=None, description="Current ratio.")
     quick_ratio: float | None = Field(default=None, description="Quick ratio.")
     total_debt: float | None = Field(
-        default=None, description="Total debt, in the reporting currency (absolute units)."
+        default=None, description="Total debt in `financial_currency` (absolute units)."
     )
     total_cash: float | None = Field(
-        default=None, description="Total cash, in the reporting currency (absolute units)."
+        default=None, description="Total cash in `financial_currency` (absolute units)."
     )
     free_cashflow: float | None = Field(
-        default=None, description="Free cash flow, in the reporting currency (absolute units)."
+        default=None, description="Free cash flow in `financial_currency` (absolute units)."
     )
     ebitda: float | None = Field(
-        default=None, description="EBITDA, in the reporting currency (absolute units)."
+        default=None, description="EBITDA in `financial_currency` (absolute units)."
     )
-    trailing_eps: float | None = Field(default=None, description="Trailing EPS, per share.")
-    forward_eps: float | None = Field(default=None, description="Forward EPS, per share.")
-    revenue_per_share: float | None = Field(default=None, description="Revenue per share.")
-    book_value: float | None = Field(default=None, description="Book value per share.")
+    trailing_eps: float | None = Field(
+        default=None, description="Trailing EPS, per share in `currency` (matches trailing_pe)."
+    )
+    forward_eps: float | None = Field(
+        default=None, description="Forward EPS, per share in `currency` (matches forward_pe)."
+    )
+    revenue_per_share: float | None = Field(
+        default=None, description="Revenue per share, in `financial_currency`."
+    )
+    book_value: float | None = Field(
+        default=None, description="Book value per share, in `financial_currency`."
+    )
 
 
 class RecommendationPeriod(BaseModel):

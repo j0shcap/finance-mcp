@@ -318,8 +318,9 @@ class YFinanceClient:
         period: StatementPeriod,
     ) -> FinancialStatement:
         attr = _FINANCIALS_ATTR[(statement, period)]
+        ticker = self._ticker(symbol)
         try:
-            df = getattr(self._ticker(symbol), attr)
+            df = getattr(ticker, attr)
         except Exception as exc:  # surface any yfinance failure verbatim
             raise DataUnavailable(
                 f"Failed to fetch {statement} statement for '{symbol}': {exc}"
@@ -338,6 +339,7 @@ class YFinanceClient:
                 symbol=symbol,
                 statement=statement,
                 period=period,
+                currency=_statement_currency(ticker),
                 period_ends=period_ends,
                 line_items=line_items,
             )
@@ -387,6 +389,8 @@ class YFinanceClient:
         try:
             return KeyMetrics(
                 symbol=symbol,
+                currency=info.get("currency"),
+                financial_currency=info.get("financialCurrency"),
                 trailing_pe=_opt(info.get("trailingPE")),
                 forward_pe=_opt(info.get("forwardPE")),
                 price_to_book=_opt(info.get("priceToBook")),
@@ -508,6 +512,21 @@ def _elapsed_days(start: str, end: str) -> int:
     both a bare date ("2024-01-01") and a full intraday timestamp with offset.
     """
     return (datetime.fromisoformat(end).date() - datetime.fromisoformat(start).date()).days
+
+
+def _statement_currency(ticker: Any) -> str | None:
+    """The currency a statement is reported in: financialCurrency, else the quote currency.
+
+    Read defensively from ``.info`` (a separate Yahoo endpoint from the statement itself):
+    an unlabelled statement is far more useful than a failed one, and the figures are
+    already in hand by the time this is called.
+    """
+    try:
+        info = ticker.info or {}
+        currency = info.get("financialCurrency") or info.get("currency")
+    except Exception:  # labelling is best-effort, never fatal
+        return None
+    return str(currency) if currency else None
 
 
 def _bar_date(idx: Any, intraday: bool) -> str:
