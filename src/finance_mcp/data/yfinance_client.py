@@ -350,7 +350,7 @@ class YFinanceClient:
             self._fundamentals_ttl,
             lambda: self._fetch_financials(symbol, statement, period),
         )
-        if line_items is None:
+        if not line_items:  # None or [] - an empty filter means the whole statement
             return full
         return _filter_line_items(full, line_items)
 

@@ -74,9 +74,10 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
         line_items: Annotated[
             list[str] | None,
             Field(
+                min_length=1,
                 description="Specific line-item labels to return (as they appear in the statement, "
                 "e.g. 'Total Revenue'; case and extra whitespace are ignored); omit for the full "
-                "statement."
+                "statement.",
             ),
         ] = None,
     ) -> FinancialStatement:

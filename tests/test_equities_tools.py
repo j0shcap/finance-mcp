@@ -348,3 +348,15 @@ async def test_get_quote_tool_accepts_25_tickers() -> None:
     async with Client(server) as client:
         result = await client.call_tool("get_quote", {"tickers": [f"SYM{i}" for i in range(25)]})
         assert len(result.data.quotes) == 25
+
+
+async def test_get_financials_tool_rejects_an_empty_line_items_filter() -> None:
+    df = make_financials_df(INCOME, ["2024-09-30", "2023-09-30"])
+    server = create_server(
+        yf_client=make_client(factory=fake_ticker_factory(financials={"income_stmt": df}))
+    )
+    async with Client(server) as client:
+        with pytest.raises(ToolError):
+            await client.call_tool(
+                "get_financials", {"ticker": "AAPL", "statement": "income", "line_items": []}
+            )

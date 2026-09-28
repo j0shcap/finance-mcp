@@ -2190,3 +2190,11 @@ def test_refreshing_a_present_key_makes_it_most_recently_used() -> None:
     # older slot would evict the entry that was just written.
     assert client._cache[("k", "A")][2] == "fresh"
     assert ("k", "B") not in client._cache
+
+
+def test_empty_line_items_filter_returns_the_whole_statement() -> None:
+    # An empty filter cannot mean "return nothing useful": that was the one silent-drop
+    # case left. Library callers get the full statement; the tool rejects [] outright.
+    fs = _income_client().get_financials("AAPL", "income", "annual", line_items=[])
+    assert list(fs.line_items) == ["Total Revenue", "Net Income"]
+    assert fs.missing_line_items == []
