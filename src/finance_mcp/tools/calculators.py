@@ -20,13 +20,21 @@ from finance_mcp.data.models import (
     TVMResult,
     TVMVariable,
 )
+from finance_mcp.tools._annotations import calculator
 from finance_mcp.tools._dispatch import run_calc
+from finance_mcp.tools._inputs import (
+    MAX_BOND_YEARS,
+    MAX_CASHFLOWS,
+    MAX_COUPON_FREQUENCY,
+    MAX_LOAN_TERM_MONTHS,
+    MAX_PERIODS_PER_YEAR,
+)
 
 
 def register(mcp: FastMCP) -> None:
     """Register calculator tools on the given server instance."""
 
-    @mcp.tool
+    @mcp.tool(annotations=calculator("Time Value of Money"))
     def time_value_of_money(
         solve_for: Annotated[
             TVMVariable,
@@ -48,7 +56,10 @@ def register(mcp: FastMCP) -> None:
         ] = None,
         rate: Annotated[
             float | None,
-            Field(description="Interest rate per period as a decimal, e.g. 0.05 for 5%."),
+            Field(
+                gt=-1,
+                description="Interest rate per period as a decimal, e.g. 0.05 for 5%.",
+            ),
         ] = None,
         nper: Annotated[
             float | None,
@@ -72,20 +83,27 @@ def register(mcp: FastMCP) -> None:
             )
         )
 
-    @mcp.tool
+    @mcp.tool(annotations=calculator("Bond Price, Duration & Convexity"))
     def bond_price(
         face: Annotated[float, Field(gt=0, description="Face (par) value of the bond.")],
         coupon_rate: Annotated[
             float,
             Field(description="Annual coupon rate as a decimal, e.g. 0.05 for 5%."),
         ],
-        years_to_maturity: Annotated[float, Field(gt=0, description="Years until maturity.")],
+        years_to_maturity: Annotated[
+            float, Field(gt=0, le=MAX_BOND_YEARS, description="Years until maturity.")
+        ],
         ytm: Annotated[
             float,
             Field(description="Annual yield to maturity as a decimal, e.g. 0.06 for 6%."),
         ],
         frequency: Annotated[
-            int, Field(gt=0, description="Coupon payments per year, e.g. 2 for semiannual.")
+            int,
+            Field(
+                gt=0,
+                le=MAX_COUPON_FREQUENCY,
+                description="Coupon payments per year, e.g. 2 for semiannual.",
+            ),
         ] = 2,
     ) -> BondAnalytics:
         """Price a fixed-coupon bond at a given yield, with duration and convexity."""
@@ -99,17 +117,24 @@ def register(mcp: FastMCP) -> None:
             )
         )
 
-    @mcp.tool
+    @mcp.tool(annotations=calculator("Bond Yield to Maturity"))
     def bond_ytm(
         face: Annotated[float, Field(gt=0, description="Face (par) value of the bond.")],
         coupon_rate: Annotated[
             float,
             Field(description="Annual coupon rate as a decimal, e.g. 0.05 for 5%."),
         ],
-        years_to_maturity: Annotated[float, Field(gt=0, description="Years until maturity.")],
+        years_to_maturity: Annotated[
+            float, Field(gt=0, le=MAX_BOND_YEARS, description="Years until maturity.")
+        ],
         price: Annotated[float, Field(gt=0, description="Current market price of the bond.")],
         frequency: Annotated[
-            int, Field(gt=0, description="Coupon payments per year, e.g. 2 for semiannual.")
+            int,
+            Field(
+                gt=0,
+                le=MAX_COUPON_FREQUENCY,
+                description="Coupon payments per year, e.g. 2 for semiannual.",
+            ),
         ] = 2,
     ) -> BondYTM:
         """Solve the annual yield to maturity that prices the bond at the given market price."""
@@ -123,7 +148,7 @@ def register(mcp: FastMCP) -> None:
             )
         )
 
-    @mcp.tool
+    @mcp.tool(annotations=calculator("Loan Payment & Amortization Schedule"))
     def loan_schedule(
         principal: Annotated[float, Field(gt=0, description="Loan amount borrowed.")],
         annual_rate: Annotated[
@@ -132,7 +157,11 @@ def register(mcp: FastMCP) -> None:
         ],
         term_months: Annotated[
             int,
-            Field(gt=0, description="Loan term in months, e.g. 360 for 30 years."),
+            Field(
+                gt=0,
+                le=MAX_LOAN_TERM_MONTHS,
+                description="Loan term in months, e.g. 360 for 30 years.",
+            ),
         ],
         extra_payment: Annotated[
             float,
@@ -159,27 +188,33 @@ def register(mcp: FastMCP) -> None:
             )
         )
 
-    @mcp.tool
+    @mcp.tool(annotations=calculator("Net Present Value"))
     def npv(
         rate: Annotated[
             float,
-            Field(description="Discount rate per period as a decimal, e.g. 0.10 for 10%."),
+            Field(gt=-1, description="Discount rate per period as a decimal, e.g. 0.10 for 10%."),
         ],
         cashflows: Annotated[
             list[float],
             Field(
-                description="Cashflows by period; cashflows[0] is at t=0 (now), outflows negative."
+                min_length=1,
+                max_length=MAX_CASHFLOWS,
+                description="Cashflows by period; cashflows[0] is at t=0 (now), outflows negative.",
             ),
         ],
     ) -> NPVResult:
         """Net present value of equally-spaced cashflows (cashflows[0] is at t=0, undiscounted)."""
         return run_calc(lambda: calculators.npv(rate, cashflows))
 
-    @mcp.tool
+    @mcp.tool(annotations=calculator("Internal Rate of Return"))
     def irr(
         cashflows: Annotated[
             list[float],
-            Field(description="Cashflows by period; needs >=1 sign change. Outflows negative."),
+            Field(
+                min_length=2,
+                max_length=MAX_CASHFLOWS,
+                description="Cashflows by period; needs >=1 sign change. Outflows negative.",
+            ),
         ],
     ) -> IRRResult:
         """Internal rate of return (per period) of equally-spaced cashflows.
@@ -189,18 +224,29 @@ def register(mcp: FastMCP) -> None:
         """
         return run_calc(lambda: calculators.irr(cashflows))
 
-    @mcp.tool
+    @mcp.tool(annotations=calculator("Modified Internal Rate of Return"))
     def mirr(
         cashflows: Annotated[
             list[float],
-            Field(description="Cashflows by period; needs >=1 negative and >=1 positive."),
+            Field(
+                min_length=2,
+                max_length=MAX_CASHFLOWS,
+                description="Cashflows by period; needs >=1 negative and >=1 positive.",
+            ),
         ],
         finance_rate: Annotated[
-            float, Field(description="Rate to finance (discount) negative cashflows, as a decimal.")
+            float,
+            Field(
+                gt=-1,
+                description="Rate to finance (discount) negative cashflows, as a decimal.",
+            ),
         ],
         reinvest_rate: Annotated[
             float,
-            Field(description="Rate to reinvest (compound) positive cashflows, as a decimal."),
+            Field(
+                gt=-1,
+                description="Rate to reinvest (compound) positive cashflows, as a decimal.",
+            ),
         ],
     ) -> MIRRResult:
         """Modified internal rate of return: single-valued, unlike irr.
@@ -210,12 +256,16 @@ def register(mcp: FastMCP) -> None:
         """
         return run_calc(lambda: calculators.mirr(cashflows, finance_rate, reinvest_rate))
 
-    @mcp.tool
+    @mcp.tool(annotations=calculator("Net Present Value (Dated Cashflows)"))
     def xnpv(
-        rate: Annotated[float, Field(description="Annual discount rate as a decimal.")],
+        rate: Annotated[float, Field(gt=-1, description="Annual discount rate as a decimal.")],
         cashflows: Annotated[
             list[DatedCashflow],
-            Field(description="Dated cashflows; discounted by actual days from the earliest date."),
+            Field(
+                min_length=1,
+                max_length=MAX_CASHFLOWS,
+                description="Dated cashflows; discounted by actual days from the earliest date.",
+            ),
         ],
     ) -> NPVResult:
         """Net present value of cashflows on actual calendar dates (irregular spacing allowed).
@@ -224,12 +274,14 @@ def register(mcp: FastMCP) -> None:
         """
         return run_calc(lambda: calculators.xnpv(rate, cashflows))
 
-    @mcp.tool
+    @mcp.tool(annotations=calculator("Internal Rate of Return (Dated Cashflows)"))
     def xirr(
         cashflows: Annotated[
             list[DatedCashflow],
             Field(
-                description="Dated cashflows; needs at least one sign change. Outflows negative."
+                min_length=2,
+                max_length=MAX_CASHFLOWS,
+                description="Dated cashflows; needs at least one sign change. Outflows negative.",
             ),
         ],
     ) -> IRRResult:
@@ -239,12 +291,17 @@ def register(mcp: FastMCP) -> None:
         """
         return run_calc(lambda: calculators.xirr(cashflows))
 
-    @mcp.tool
+    @mcp.tool(annotations=calculator("Nominal / Effective Rate Conversion"))
     def convert_rate(
         rate: Annotated[float, Field(description="The rate to convert, as a decimal.")],
         periods_per_year: Annotated[
             int,
-            Field(gt=0, description="Compounding periods per year, e.g. 12 for monthly."),
+            Field(
+                gt=0,
+                le=MAX_PERIODS_PER_YEAR,
+                description="Compounding periods per year, e.g. 12 for monthly (365 = daily is "
+                "the finest discrete step; use compounding='continuous' for the limit).",
+            ),
         ],
         direction: Annotated[
             RateDirection,

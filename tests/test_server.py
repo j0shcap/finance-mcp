@@ -1,7 +1,10 @@
 """Tests for server assembly and settings."""
 
+from pathlib import Path
+
 import pytest
 from fastmcp import FastMCP
+from pydantic import ValidationError
 
 from finance_mcp.server import build_default_client, create_server, main
 from finance_mcp.settings import get_settings
@@ -56,3 +59,36 @@ def test_main_invokes_run(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(FastMCP, "run", fake_run)
     main()
     assert calls == [True]
+
+
+def test_max_history_bars_default_is_260() -> None:
+    assert get_settings().max_history_bars == 260
+
+
+def test_build_default_client_honors_max_history_bars_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FINANCE_MCP_MAX_HISTORY_BARS", "40")
+    assert build_default_client()._max_bars == 40
+
+
+def test_settings_ignore_a_dotenv_file_in_the_launch_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An MCP client launches the server in whatever CWD it chooses, so a stray .env
+    there must not silently reconfigure the server."""
+    (tmp_path / ".env").write_text("FINANCE_MCP_QUOTE_CACHE_TTL_SECONDS=999\n")
+    monkeypatch.chdir(tmp_path)
+    assert get_settings().quote_cache_ttl_seconds == 30
+
+
+def test_settings_reject_a_nonsensical_max_history_bars(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FINANCE_MCP_MAX_HISTORY_BARS", "0")
+    with pytest.raises(ValidationError):
+        get_settings()
+
+
+def test_settings_reject_a_negative_cache_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FINANCE_MCP_QUOTE_CACHE_TTL_SECONDS", "-1")
+    with pytest.raises(ValidationError):
+        get_settings()

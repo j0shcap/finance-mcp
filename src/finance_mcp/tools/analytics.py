@@ -7,15 +7,17 @@ from pydantic import Field
 
 from finance_mcp.data.models import HistoryPeriod, KeyMetrics, PerformanceStats
 from finance_mcp.data.yfinance_client import YFinanceClient
+from finance_mcp.tools._annotations import market_data
 from finance_mcp.tools._dispatch import run_data
+from finance_mcp.tools._inputs import Ticker
 
 
 def register(mcp: FastMCP, client: YFinanceClient) -> None:
     """Register analytics tools bound to a YFinanceClient."""
 
-    @mcp.tool
+    @mcp.tool(annotations=market_data("Key Valuation & Profitability Metrics"))
     async def get_key_metrics(
-        ticker: Annotated[str, Field(description="Ticker symbol, e.g. 'AAPL'.")],
+        ticker: Ticker,
     ) -> KeyMetrics:
         """Valuation, profitability, and leverage ratios (as reported by Yahoo).
 
@@ -28,9 +30,9 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
         """
         return await run_data(lambda: client.get_key_metrics(ticker))
 
-    @mcp.tool
+    @mcp.tool(annotations=market_data("Return & Risk Statistics"))
     async def analyze_performance(
-        ticker: Annotated[str, Field(description="Ticker symbol, e.g. 'AAPL'.")],
+        ticker: Ticker,
         period: Annotated[
             HistoryPeriod, Field(description="Look-back window for the statistics.")
         ] = "1y",

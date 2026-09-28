@@ -6,7 +6,9 @@ from typing import Annotated
 from fastmcp import FastMCP
 from pydantic import Field
 
-ANALYZE_STOCK_TEMPLATE = """\
+from finance_mcp.conventions import CONVENTIONS_URI, UNITS_GLOSSARY
+
+_ANALYZE_STOCK_TEMPLATE = """\
 You are a senior equity research analyst. Produce a deep-dive on \
 {ticker}, framed for a {horizon} investment horizon, using ONLY the finance-mcp tools listed \
 below. Cite the tool and period behind every quantitative claim.
@@ -22,29 +24,10 @@ period="annual" and "quarterly")
 - get_quote(tickers=["{ticker}"]) - returns quotes plus a per-ticker errors list
 
 ## Data conventions & guardrails (respect exactly - the source units are inconsistent)
-- return_on_equity, return_on_assets, gross_margins, operating_margins, profit_margins, and \
-ebitda_margins are FRACTIONS (0.27 = 27%, 1.41 = 141%) - multiply by 100 for display.
-- debt_to_equity is ALREADY A PERCENT (79.5 means 79.5% ~ 0.80x) - it is NOT 79.5x.
-- dividend_yield (profile) is ALREADY A PERCENT (0.35 = 0.35%, 5.92 = 5.92%) - not a fraction.
-- recommendation_mean is INVERTED: 1 = strong buy ... 5 = strong sell (lower = more bullish).
-- P/E, forward P/E, P/B, P/S, PEG, EV/EBITDA, EV/Revenue, current/quick ratio are plain ratios; \
-EV, total debt/cash, FCF, EBITDA are absolute amounts; EPS and book value are per-share.
-- Absolute amounts are not all in one currency: get_key_metrics reports total debt/cash, FCF, \
-EBITDA, revenue per share and book value in financial_currency, while enterprise_value and the EPS \
-fields are in currency (the quote currency). get_financials values are in the statement's currency \
-field. For most US names these are the same; for ADRs and other cross-listings they are not.
-- analyze_performance runs on auto-adjusted prices, so its returns already include reinvested \
-dividends (~ total return) - do not add the dividend yield on top.
-- analyze_performance annualizes over calendar time, so annualized_return_percent equals \
-total_return_percent on a one-year window. For windows under ~3 months it returns null for \
-annualized_return_percent, annualized_volatility_percent and periods_per_year - quote the total \
-return for that window and never annualize it yourself.
-- Use get_quote's price as the single headline price if sources disagree - and take it from the \
-entry in quotes whose symbol matches the ticker you are pricing, never by position: a batched call \
-returns one entry per ticker and any that failed are in errors instead, so positions shift. A \
-ticker listed in errors was not fetched at all - say so rather than substituting another source's \
-price. If a tool returns no data (e.g. an ETF has no analyst coverage) or a figure is \
-unavailable (no historical valuation range, no Sharpe), say so - never fabricate.
+{units_glossary}
+- If a tool returns no data (e.g. an ETF has no analyst coverage) or a figure is unavailable (no \
+historical valuation range, no Sharpe), say so - never fabricate.
+- The same glossary is available as the {conventions_uri} resource if you need it again later.
 
 ## Phase 2 - Set the sector lens
 From get_company_profile's sector/industry, name the 1-2 metrics that matter most and adapt the \
@@ -86,19 +69,21 @@ high-low spread as a disagreement/uncertainty signal, and the 4-period recommend
 catalysts weighted to the {horizon} horizon.
 
 ## Phase 7 - Synthesis
-- Earnings-quality flags, including the forward-P/E credibility check: forward P/E / forward_eps \
-implies an earnings jump - verify the quarterly trajectory supports it.
+- Earnings-quality flags, including the forward-P/E credibility check: forward_eps above \
+trailing_eps implies expected earnings growth - verify the quarterly trajectory supports it, and \
+treat an unsupported gap as a flag. When trailing_eps is positive, a forward P/E below the \
+trailing P/E says the same thing; when trailing_eps is zero or negative the trailing P/E is \
+meaningless, so compare the EPS figures directly instead.
 - Risk posture: consolidate beta (profile) + volatility + max drawdown into one read.
 - Dividend posture: yield + recent-dividend trend (forward income; do not double-count vs the \
 historical return).
 - Bull case / Bear case: each bullet backed by a cited figure.
 - Fair-value range with stated assumptions, then cross-check it against the analyst target range \
 (agreement or divergence is itself a finding).
-- Implied return to target: the analyst mean target is a ~12-month consensus. Compute the implied \
-return to that target on a 12-month basis using the time_value_of_money calculator \
-(solve_for="rate", pv = negative current price, fv = mean target, nper = 1, pmt = 0). If \
-{horizon} is longer than a year, present this 12-month figure AND frame the longer thesis \
-qualitatively - never extrapolate a 12-month target across multiple years.
+- Implied return to target: the analyst mean target is a ~12-month consensus, so the implied \
+return is simply (mean target / current price) - 1, using get_quote's price. If {horizon} is \
+longer than a year, present this 12-month figure AND frame the longer thesis qualitatively - \
+never extrapolate a 12-month target across multiple years.
 - Verdict framed to the {horizon} horizon: conviction (high/medium/low), fair-value range, \
 upside/downside, key levels.
 
@@ -110,6 +95,11 @@ verdict -> Disclaimer. Bold the most important numbers; show margins/ROE as perc
 End with exactly: Disclaimer: This is quantitative analysis for research purposes, not investment \
 advice. Always do your own due diligence.
 """
+
+
+ANALYZE_STOCK_TEMPLATE = _ANALYZE_STOCK_TEMPLATE.replace(
+    "{units_glossary}", UNITS_GLOSSARY
+).replace("{conventions_uri}", CONVENTIONS_URI)
 
 
 def register(mcp: FastMCP) -> None:
