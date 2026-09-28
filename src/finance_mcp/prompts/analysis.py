@@ -67,7 +67,7 @@ figures across currencies without noting it.
 ## Phase 5 - Performance & technical posture
 From analyze_performance: total & annualized return, annualized volatility, max drawdown, and the \
 50/200-day SMA cross -> trend posture. The volatility figure is scaled by periods_per_year, which \
-is inferred per instrument (~261 for a weekday-traded equity, ~365 for a 24/7 instrument such as \
+is inferred per instrument (~252 for a weekday-traded equity, ~365 for a 24/7 instrument such as \
 crypto) - state it when comparing volatility across asset classes. From get_quote: where the \
 price sits in its 52-week range (context, not a signal).
 
