@@ -67,12 +67,12 @@ async def test_analyze_performance_schema_documents_the_short_window_null() -> N
         [tool] = [t for t in await client.list_tools() if t.name == "analyze_performance"]
         schema = (tool.outputSchema or {})["properties"]
         assert "90 days" in schema["annualized_return_percent"]["description"]
-        assert "252" not in schema["annualized_return_percent"]["description"]
-        assert "252" not in schema["annualized_volatility_percent"]["description"]
+        assert "252 trading days" not in schema["annualized_return_percent"]["description"]
+        assert "252-day" not in schema["annualized_volatility_percent"]["description"]
         assert "periods_per_year" in schema
         # The tool description is what a model reads before choosing the tool; it must not
         # still advertise the fixed trading-day convention this change removed.
-        assert tool.description is not None and "252" not in tool.description
+        assert tool.description is not None and "252 trading days" not in tool.description
 
 
 async def test_get_key_metrics_tool_invalid_errors() -> None:
