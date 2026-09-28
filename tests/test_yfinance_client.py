@@ -2082,3 +2082,111 @@ def test_get_quote_concurrency_is_bounded() -> None:
     client = _client(factory=fake_symbol_ticker_factory(fast_info=dict.fromkeys(symbols, QUOTE_FI)))
     # More tickers than workers still completes: the pool queues the overflow.
     assert len(client.get_quote(symbols).quotes) == len(symbols)
+
+
+# --- the statement currency is read once per symbol, and failures are not cached ---
+
+
+def _statement_currency_factory(
+    info_reads: list[str], info: dict[str, Any], fail_first: int = 0
+) -> Callable[[str], Any]:
+    """A ticker factory that records every ``.info`` read and can fail the first N of them."""
+    df = make_financials_df(INCOME, ["2024-09-30", "2023-09-30"])
+    state = {"failures_left": fail_first}
+
+    class _Ticker:
+        def __init__(self, symbol: str) -> None:
+            self._symbol = symbol
+
+        @property
+        def info(self) -> Any:
+            info_reads.append(self._symbol)
+            if state["failures_left"] > 0:
+                state["failures_left"] -= 1
+                raise YFRateLimitError()
+            return info
+
+        def __getattr__(self, name: str) -> Any:
+            return df
+
+    return _Ticker
+
+
+def test_statement_currency_is_fetched_once_per_symbol() -> None:
+    info_reads: list[str] = []
+    client = _fin_client(factory=_statement_currency_factory(info_reads, SAP_INFO))
+    for statement in ("income", "balance", "cashflow"):
+        for period in ("annual", "quarterly"):
+            fs = client.get_financials("SAP", statement, period)
+            assert fs.currency == "EUR"
+    # All six statement/period combinations share one currency, so one .info request.
+    assert info_reads == ["SAP"]
+
+
+def test_failed_statement_currency_read_is_not_cached() -> None:
+    info_reads: list[str] = []
+    client = _fin_client(factory=_statement_currency_factory(info_reads, SAP_INFO, fail_first=1))
+    first = client.get_financials("SAP", "income", "annual")
+    assert first.currency is None  # unlabelled beats failing the statement
+    # A rate limit says nothing about the reporting currency, so the next call retries
+    # instead of asserting "Yahoo does not report it" for the whole fundamentals TTL.
+    second = client.get_financials("SAP", "balance", "annual")
+    assert second.currency == "EUR"
+    assert info_reads == ["SAP", "SAP"]
+
+
+def test_absent_statement_currency_is_cached() -> None:
+    info_reads: list[str] = []
+    client = _fin_client(factory=_statement_currency_factory(info_reads, {}))
+    assert client.get_financials("X", "income", "annual").currency is None
+    assert client.get_financials("X", "balance", "annual").currency is None
+    # A genuine "Yahoo reports no currency" IS cacheable - no repeat request.
+    assert info_reads == ["X"]
+
+
+# --- cache entries are timestamped when the fetch completes ---
+
+
+def test_cache_entry_is_timestamped_after_the_fetch_completes() -> None:
+    clock = FakeClock()
+    calls: list[str] = []
+
+    def slow_factory(symbol: str) -> Any:
+        class _Ticker:
+            @property
+            def fast_info(self) -> Any:
+                calls.append(symbol)
+                clock.advance(35.0)  # the fetch itself outlasts the 30s quote TTL
+                return SimpleNamespace(**QUOTE_FI)
+
+        return _Ticker()
+
+    client = YFinanceClient(ticker_factory=slow_factory, time_fn=clock, quote_ttl=30.0)
+    client.get_quote(["AAPL"])
+    client.get_quote(["AAPL"])
+    # Timestamping at the start would insert the entry already expired, making the cache
+    # a no-op during exactly the slowdown it exists to absorb.
+    assert calls == ["AAPL"]
+
+
+def test_refreshing_a_present_key_makes_it_most_recently_used() -> None:
+    client = YFinanceClient(
+        ticker_factory=fake_ticker_factory(fast_info=QUOTE_FI),
+        time_fn=FakeClock(),
+        cache_max_entries=2,
+    )
+
+    def racing_fetch() -> str:
+        # What concurrent get_quote calls do: another thread inserts this key while this
+        # fetch is in flight (so the write below lands on a key already present), and a
+        # third key is cached after it.
+        client._cache[("k", "A")] = (client._now(), 30.0, "stale")
+        client._cache[("k", "B")] = (client._now(), 30.0, "B")
+        return "fresh"
+
+    assert client._cached(("k", "A"), 30.0, racing_fetch) == "fresh"
+    client._cached(("k", "C"), 30.0, lambda: "C")  # over the bound: evict the LRU entry
+    # Refreshing A must make it most recently used; leaving it in the racing thread's
+    # older slot would evict the entry that was just written.
+    assert client._cache[("k", "A")][2] == "fresh"
+    assert ("k", "B") not in client._cache

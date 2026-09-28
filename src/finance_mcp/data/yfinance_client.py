@@ -115,9 +115,13 @@ class YFinanceClient:
                     return cast(T, hit[2])
                 del self._cache[key]  # stale: drop before refetching
         value = fetch()
+        stored_at = self._now()  # read AFTER the fetch: a slow fetch must not age its entry
         with self._cache_lock:
-            self._purge_expired(now)
-            self._cache[key] = (now, ttl, value)
+            self._purge_expired(stored_at)
+            self._cache[key] = (stored_at, ttl, value)
+            # Assigning a key that is still present (a concurrent fetch of the same key
+            # got there first) leaves it in its old position, so order it explicitly.
+            self._cache.move_to_end(key)
             while len(self._cache) > self._cache_max_entries:
                 self._cache.popitem(last=False)  # evict the least recently used entry
         return value
@@ -378,7 +382,7 @@ class YFinanceClient:
                 symbol=symbol,
                 statement=statement,
                 period=period,
-                currency=_statement_currency(ticker),
+                currency=self._statement_currency(symbol, ticker),
                 period_ends=period_ends,
                 line_items=line_items,
             )
@@ -386,6 +390,24 @@ class YFinanceClient:
             raise DataUnavailable(
                 f"Failed to parse {statement} statement for '{symbol}': {exc}"
             ) from exc
+
+    def _statement_currency(self, symbol: str, ticker: Any) -> str | None:
+        """The currency a statement is reported in, cached per symbol.
+
+        It comes from ``.info``, a different Yahoo endpoint than the statement itself, and
+        is the same for all six statement/period combinations — so it is cached under its
+        own key rather than re-requested per statement against a rate-limited source.
+        Best-effort: a failed read leaves the statement unlabelled instead of failing it,
+        and is NOT cached, because a rate limit says nothing about the reporting currency.
+        """
+        try:
+            return self._cached(
+                ("statement_currency", symbol),
+                self._fundamentals_ttl,
+                lambda: _read_statement_currency(ticker),
+            )
+        except Exception:  # labelling is best-effort, never fatal
+            return None
 
     def get_company_profile(self, symbol: str) -> CompanyProfile:
         symbol = _norm(symbol)
@@ -592,18 +614,10 @@ def _filter_line_items(full: FinancialStatement, requested: list[str]) -> Financ
     )
 
 
-def _statement_currency(ticker: Any) -> str | None:
-    """The currency a statement is reported in: financialCurrency, else the quote currency.
-
-    Read defensively from ``.info`` (a separate Yahoo endpoint from the statement itself):
-    an unlabelled statement is far more useful than a failed one, and the figures are
-    already in hand by the time this is called.
-    """
-    try:
-        info = ticker.info or {}
-        currency = info.get("financialCurrency") or info.get("currency")
-    except Exception:  # labelling is best-effort, never fatal
-        return None
+def _read_statement_currency(ticker: Any) -> str | None:
+    """financialCurrency, else the quote currency; None when Yahoo reports neither."""
+    info = ticker.info or {}
+    currency = info.get("financialCurrency") or info.get("currency")
     return str(currency) if currency else None
 
 
