@@ -15,9 +15,9 @@ and deterministic financial calculators.
 
 **Market data (yfinance)**
 
-- `get_quote` — current price snapshot for one or more tickers: price, change, day/52-week ranges, market cap (batched; cached briefly).
-- `get_price_history` — OHLCV bars plus a computed summary for a ticker, by period and interval (long windows are truncated; the summary covers the full window).
-- `get_financials` — income statement, balance sheet, or cash flow (annual or quarterly) as line items by period; values in the company's reporting currency, with an optional line-item filter.
+- `get_quote` — current price snapshots for 1–25 tickers: price, change, day/52-week ranges, market cap (fetched in parallel; cached briefly). Results are partial: successful quotes plus a per-ticker `errors` list, so one bad symbol doesn't sink the batch.
+- `get_price_history` — OHLCV bars plus a computed summary for a ticker, by period and interval (long windows are truncated; the summary covers the full window). Intraday bars carry a full timestamp with the exchange's UTC offset; daily and longer bars are dated.
+- `get_financials` — income statement, balance sheet, or cash flow (annual or quarterly) as line items by period; values labelled with the company's reporting `currency`, with an optional line-item filter that reports any labels it couldn't match (plus close-match suggestions).
 - `get_company_profile` — sector, industry, market cap, P/E, beta, business summary, plus recent dividends and stock splits.
 - `get_analyst_data` — sell-side analyst consensus: price targets, consensus recommendation, and the recent rating trend (analyst counts over the last four months).
 - `search_symbols` — resolve a company or instrument name to ticker symbol(s), best match first, across all instrument types (equity, ETF, crypto, …).
@@ -25,7 +25,7 @@ and deterministic financial calculators.
 
 **Analytics**
 
-- `get_key_metrics` — valuation/profitability/leverage ratios (P/E, EV/EBITDA, margins, ROE, debt/equity, FCF, EPS, …) as reported by Yahoo; units noted per field.
+- `get_key_metrics` — valuation/profitability/leverage ratios (P/E, EV/EBITDA, margins, ROE, debt/equity, FCF, EPS, …) as reported by Yahoo; units noted per field, and absolute amounts labelled with the quote vs. reporting currency they're in.
 - `analyze_performance` — total & annualized return, annualized volatility, max drawdown, and 50/200-day SMAs computed from the daily price series.
 
 **Time value & loans**

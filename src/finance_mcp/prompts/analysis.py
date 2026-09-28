@@ -19,7 +19,7 @@ period="annual" and "quarterly")
 - analyze_performance(ticker="{ticker}")
 - get_analyst_data(ticker="{ticker}")
 - get_news(ticker="{ticker}")
-- get_quote(tickers=["{ticker}"])
+- get_quote(tickers=["{ticker}"]) - returns quotes plus a per-ticker errors list
 
 ## Data conventions & guardrails (respect exactly - the source units are inconsistent)
 - return_on_equity, return_on_assets, gross_margins, operating_margins, profit_margins, and \
@@ -28,8 +28,11 @@ ebitda_margins are FRACTIONS (0.27 = 27%, 1.41 = 141%) - multiply by 100 for dis
 - dividend_yield (profile) is ALREADY A PERCENT (0.35 = 0.35%, 5.92 = 5.92%) - not a fraction.
 - recommendation_mean is INVERTED: 1 = strong buy ... 5 = strong sell (lower = more bullish).
 - P/E, forward P/E, P/B, P/S, PEG, EV/EBITDA, EV/Revenue, current/quick ratio are plain ratios; \
-EV, total debt/cash, FCF, EBITDA are absolute amounts in the reporting currency; EPS and book \
-value are per-share.
+EV, total debt/cash, FCF, EBITDA are absolute amounts; EPS and book value are per-share.
+- Absolute amounts are not all in one currency: get_key_metrics reports total debt/cash, FCF, \
+EBITDA, revenue per share and book value in financial_currency, while enterprise_value and the EPS \
+fields are in currency (the quote currency). get_financials values are in the statement's currency \
+field. For most US names these are the same; for ADRs and other cross-listings they are not.
 - analyze_performance runs on auto-adjusted prices, so its returns already include reinvested \
 dividends (~ total return) - do not add the dividend yield on top.
 - analyze_performance annualizes over calendar time, so annualized_return_percent equals \
@@ -39,6 +42,12 @@ return for that window and never annualize it yourself.
 - Use get_quote's price as the single headline price if sources disagree. If a tool returns no \
 data (e.g. an ETF has no analyst coverage) or a figure is unavailable (no historical valuation \
 range, no Sharpe), say so - never fabricate.
+
+
+- Use get_quote's quotes[0].price as the single headline price if sources disagree. A ticker \
+listed in get_quote's errors was not fetched at all - say so rather than substituting another \
+source's price. If a tool returns no data (e.g. an ETF has no analyst coverage) or a figure is \
+unavailable (no historical valuation range, no Sharpe), say so - never fabricate.
 
 ## Phase 2 - Set the sector lens
 From get_company_profile's sector/industry, name the 1-2 metrics that matter most and adapt the \
@@ -59,10 +68,12 @@ free cash flow.
 
 ## Phase 4 - Peer-relative valuation (light)
 Name ~3 genuinely comparable competitors (same sector AND similar business model/size; state these \
-are your own selection, not from a tool). Call get_key_metrics and get_quote on each. Compare on a \
-GROWTH-ADJUSTED basis (PEG / growth-vs-multiple), not raw P/E. Flag currency: non-US peers report \
-figures in their own currency (get_analyst_data.currency, e.g. EUR/CAD) - never compare absolute \
-figures across currencies without noting it.
+are your own selection, not from a tool). Call get_key_metrics on each and get_quote once for all \
+of them (it takes up to 25 tickers). Compare on a GROWTH-ADJUSTED basis (PEG / \
+growth-vs-multiple), not raw P/E. Flag \
+currency: non-US peers report figures in their own currency (get_key_metrics.financial_currency, \
+get_financials' currency, get_analyst_data.currency, e.g. EUR/CAD) - never compare absolute \
+figures across currencies without noting it, and prefer ratios when they differ.
 
 ## Phase 5 - Performance & technical posture
 From analyze_performance: total & annualized return, annualized volatility, max drawdown, and the \
