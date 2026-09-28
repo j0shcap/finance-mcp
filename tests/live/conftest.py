@@ -46,6 +46,7 @@ import asyncio
 import re
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -56,6 +57,9 @@ from yfinance.exceptions import YFRateLimitError
 from finance_mcp.data.errors import DataUnavailable
 from finance_mcp.data.yfinance_client import YFinanceClient
 from finance_mcp.server import build_default_client, create_server
+
+#: Only items under this directory get the ``live`` marker (see pytest_collection_modifyitems).
+_LIVE_DIR = Path(__file__).parent
 
 #: Symbols are deliberately few and reused across tests so the shared cache absorbs most
 #: of the traffic. Each one is here for a reason the tests name.
@@ -80,9 +84,16 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     Directory-based rather than a per-test decorator on purpose: a forgotten decorator
     would put a real network call inside ``make check``, and there is no way to forget
     this.
+
+    The path filter is essential, not defensive: this hook lives in a subdirectory
+    conftest, but pytest still calls it once with EVERY collected item in the session. Left
+    unfiltered it marks the whole offline suite as live, and `-m 'not live'` then deselects
+    all 500-odd of them - a silently empty quality gate. tests/test_live_marker.py runs a
+    real collection pass to keep that from coming back.
     """
     for item in items:
-        item.add_marker(pytest.mark.live)
+        if item.path is not None and item.path.is_relative_to(_LIVE_DIR):
+            item.add_marker(pytest.mark.live)
 
 
 def _is_rate_limited(exc: BaseException) -> bool:
