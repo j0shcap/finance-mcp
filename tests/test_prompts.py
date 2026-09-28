@@ -95,10 +95,21 @@ async def test_analyze_stock_states_the_forward_pe_check_correctly() -> None:
         text = (
             (await client.get_prompt("analyze_stock", {"ticker": "AAPL"})).messages[0].content.text
         )
-        assert "forward P/E below trailing P/E" in text
         assert "forward_eps above trailing_eps" in text
         assert "expected earnings growth" in text
+        assert "forward P/E below the trailing P/E" in text
         assert "forward P/E / forward_eps" not in text  # the garbled original
+
+
+async def test_analyze_stock_qualifies_the_forward_pe_shortcut_for_negative_eps() -> None:
+    """A forward P/E below trailing P/E only implies growth while trailing_eps > 0; with
+    negative trailing EPS the trailing P/E is meaningless and the shortcut inverts."""
+    async with Client(create_server()) as client:
+        text = (
+            (await client.get_prompt("analyze_stock", {"ticker": "AAPL"})).messages[0].content.text
+        )
+        assert "when trailing_eps is zero or negative" in text
+        assert "compare the EPS figures directly" in text
 
 
 async def test_analyze_stock_computes_implied_return_arithmetically() -> None:

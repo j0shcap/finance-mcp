@@ -12,6 +12,33 @@ from fastmcp import FastMCP
 
 CONVENTIONS_URI = "finance://conventions"
 
+#: The two tool families, named for the server instructions. Tested against the registry
+#: (see tests/test_tool_metadata.py), so a tool added or renamed cannot leave the model
+#: with a stale map of the server.
+MARKET_DATA_TOOLS = (
+    "search_symbols",
+    "get_quote",
+    "get_price_history",
+    "get_financials",
+    "get_company_profile",
+    "get_key_metrics",
+    "get_analyst_data",
+    "analyze_performance",
+    "get_news",
+)
+CALCULATOR_TOOLS = (
+    "time_value_of_money",
+    "loan_schedule",
+    "npv",
+    "irr",
+    "mirr",
+    "xnpv",
+    "xirr",
+    "bond_price",
+    "bond_ytm",
+    "convert_rate",
+)
+
 #: Per-field units. Shared verbatim by the resource and the analyze_stock prompt.
 UNITS_GLOSSARY = """\
 - return_on_equity, return_on_assets, gross_margins, operating_margins, profit_margins, and \
@@ -64,13 +91,11 @@ SERVER_INSTRUCTIONS = f"""\
 Finance tools over Yahoo Finance market data plus offline financial calculators.
 
 Two tool families:
-- Market data (open world, live, one Yahoo call each): get_quote (batch, up to 25 tickers),
-  get_price_history, get_financials, get_company_profile, get_analyst_data, get_news,
-  search_symbols, get_key_metrics, analyze_performance. Use search_symbols to resolve a name
-  to a ticker first. Tickers are Yahoo symbols, case-insensitive, with the usual prefixes and
+- Market data (open world, live, one Yahoo call each): {", ".join(MARKET_DATA_TOOLS)}.
+  Resolve a name to a ticker with search_symbols first; get_quote prices up to 25 tickers in
+  one call. Tickers are Yahoo symbols, case-insensitive, with the usual prefixes and
   suffixes: BRK-B, ^GSPC, RY.TO, BTC-USD, EURUSD=X.
-- Calculators (pure, deterministic, no network): time_value_of_money, loan_schedule, npv, irr,
-  mirr, xnpv, xirr, bond_price, bond_ytm, convert_rate.
+- Calculators (pure, deterministic, no network): {", ".join(CALCULATOR_TOOLS)}.
 
 Conventions that change the answer:
 {CALCULATOR_CONVENTIONS}

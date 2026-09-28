@@ -7,7 +7,7 @@ from fastmcp.client.transports import FastMCPTransport
 from fastmcp.exceptions import ToolError
 from mcp.types import TextResourceContents, Tool, ToolAnnotations
 
-from finance_mcp import __version__
+from finance_mcp import __version__, conventions
 from finance_mcp.server import create_server
 
 
@@ -135,3 +135,17 @@ async def test_unexpected_exceptions_do_not_leak_internals() -> None:
         with pytest.raises(ToolError) as excinfo:
             await connected.call_tool("explode", {})
     assert "hunter2" not in str(excinfo.value)
+
+
+async def test_instructions_name_exactly_the_registered_tools(
+    client: Client[FastMCPTransport],
+) -> None:
+    """The instructions map the server for the model by naming both tool families. A tool
+    added, removed, or renamed without updating those lists would leave a stale map."""
+    initialized = client.initialize_result
+    assert initialized is not None
+    instructions = initialized.instructions or ""
+    families = set(conventions.MARKET_DATA_TOOLS) | set(conventions.CALCULATOR_TOOLS)
+    assert families == {tool.name for tool in await client.list_tools()}
+    for name in families:
+        assert name in instructions, name

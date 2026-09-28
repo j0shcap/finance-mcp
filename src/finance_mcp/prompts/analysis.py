@@ -69,9 +69,11 @@ high-low spread as a disagreement/uncertainty signal, and the 4-period recommend
 catalysts weighted to the {horizon} horizon.
 
 ## Phase 7 - Synthesis
-- Earnings-quality flags, including the forward-P/E credibility check: a forward P/E below \
-trailing P/E (equivalently, forward_eps above trailing_eps) implies expected earnings growth - \
-verify the quarterly trajectory supports it, and treat an unsupported gap as a flag.
+- Earnings-quality flags, including the forward-P/E credibility check: forward_eps above \
+trailing_eps implies expected earnings growth - verify the quarterly trajectory supports it, and \
+treat an unsupported gap as a flag. When trailing_eps is positive, a forward P/E below the \
+trailing P/E says the same thing; when trailing_eps is zero or negative the trailing P/E is \
+meaningless, so compare the EPS figures directly instead.
 - Risk posture: consolidate beta (profile) + volatility + max drawdown into one read.
 - Dividend posture: yield + recent-dividend trend (forward income; do not double-count vs the \
 historical return).
