@@ -19,16 +19,18 @@ from finance_mcp.data.models import (
     SymbolSearchResult,
 )
 from finance_mcp.data.yfinance_client import YFinanceClient
+from finance_mcp.tools._annotations import market_data
 from finance_mcp.tools._dispatch import run_data
+from finance_mcp.tools._inputs import MAX_LINE_ITEMS, Ticker
 
 
 def register(mcp: FastMCP, client: YFinanceClient) -> None:
     """Register equities tools bound to a YFinanceClient."""
 
-    @mcp.tool
+    @mcp.tool(annotations=market_data("Stock Quotes"))
     async def get_quote(
         tickers: Annotated[
-            list[str],
+            list[Ticker],
             Field(
                 min_length=1,
                 max_length=25,
@@ -45,9 +47,9 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
         """
         return await run_data(lambda: client.get_quote(tickers))
 
-    @mcp.tool
+    @mcp.tool(annotations=market_data("Price History (OHLCV)"))
     async def get_price_history(
-        ticker: Annotated[str, Field(description="Ticker symbol, e.g. 'AAPL'.")],
+        ticker: Ticker,
         period: Annotated[HistoryPeriod, Field(description="Look-back window.")] = "1mo",
         interval: Annotated[
             HistoryInterval,
@@ -62,9 +64,9 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
         """Historical OHLCV bars plus a summary; long windows are truncated (summary is full)."""
         return await run_data(lambda: client.get_price_history(ticker, period, interval))
 
-    @mcp.tool
+    @mcp.tool(annotations=market_data("Financial Statements"))
     async def get_financials(
-        ticker: Annotated[str, Field(description="Ticker symbol, e.g. 'AAPL'.")],
+        ticker: Ticker,
         statement: Annotated[
             Statement, Field(description="Which statement: 'income', 'balance', or 'cashflow'.")
         ],
@@ -72,9 +74,10 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
             StatementPeriod, Field(description="Reporting period granularity.")
         ] = "annual",
         line_items: Annotated[
-            list[str] | None,
+            list[Annotated[str, Field(min_length=1, max_length=120)]] | None,
             Field(
                 min_length=1,
+                max_length=MAX_LINE_ITEMS,
                 description="Specific line-item labels to return (as they appear in the statement, "
                 "e.g. 'Total Revenue'; case and extra whitespace are ignored); omit for the full "
                 "statement.",
@@ -91,9 +94,9 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
         """
         return await run_data(lambda: client.get_financials(ticker, statement, period, line_items))
 
-    @mcp.tool
+    @mcp.tool(annotations=market_data("Company Profile"))
     async def get_company_profile(
-        ticker: Annotated[str, Field(description="Ticker symbol, e.g. 'AAPL'.")],
+        ticker: Ticker,
     ) -> CompanyProfile:
         """Company profile and key stats.
 
@@ -102,9 +105,9 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
         """
         return await run_data(lambda: client.get_company_profile(ticker))
 
-    @mcp.tool
+    @mcp.tool(annotations=market_data("Analyst Ratings & Price Targets"))
     async def get_analyst_data(
-        ticker: Annotated[str, Field(description="Ticker symbol, e.g. 'AAPL'.")],
+        ticker: Ticker,
     ) -> AnalystData:
         """Sell-side analyst consensus: price targets, the consensus recommendation, and the
         recent rating trend (analyst counts over the last four months).
@@ -115,9 +118,9 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
         """
         return await run_data(lambda: client.get_analyst_data(ticker))
 
-    @mcp.tool
+    @mcp.tool(annotations=market_data("Company News"))
     async def get_news(
-        ticker: Annotated[str, Field(description="Ticker symbol, e.g. 'AAPL'.")],
+        ticker: Ticker,
         count: Annotated[
             int, Field(ge=1, le=50, description="Maximum number of articles to return.")
         ] = 10,
@@ -130,10 +133,16 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
         """
         return await run_data(lambda: client.get_news(ticker, count))
 
-    @mcp.tool
+    @mcp.tool(annotations=market_data("Ticker Symbol Search"))
     async def search_symbols(
         query: Annotated[
-            str, Field(description="Company or instrument name to resolve, e.g. 'Apple'.")
+            str,
+            Field(
+                min_length=1,
+                max_length=128,
+                pattern=r"\S",
+                description="Company or instrument name to resolve, e.g. 'Apple'.",
+            ),
         ],
         max_results: Annotated[
             int, Field(ge=1, le=20, description="Maximum number of matches to return.")

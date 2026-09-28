@@ -57,6 +57,29 @@ them as slash commands; other clients surface them their own way).
 
 - `analyze_stock` (arguments: `ticker`, optional `horizon`, default `12mo`) — single-stock deep-dive: fundamentals, growth-adjusted peer valuation, performance, analyst view, and news catalysts → bull/bear cases and a fair-value range with a horizon-framed verdict, citing the data behind each claim.
 
+## Resources
+
+- `finance://conventions` — the units, sign, and rate conventions every result follows, in one
+  document: which Yahoo fields are fractions vs. already percents, which currency each absolute
+  amount is in, and the Excel sign convention (cash received positive, cash paid negative) the
+  cashflow and TVM tools use. The server also ships a condensed version as its MCP
+  `instructions`, so a client sees the essentials without reading the resource.
+
+Every tool is annotated read-only; the calculators are additionally marked idempotent and
+closed-world, the market-data tools open-world.
+
+## Configuration
+
+Optional, read from the environment only — there is no `.env` support, because an MCP client
+launches the server in whatever working directory it chooses.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `FINANCE_MCP_QUOTE_CACHE_TTL_SECONDS` | `30` | Quote cache lifetime. |
+| `FINANCE_MCP_HISTORY_CACHE_TTL_SECONDS` | `300` | Price-history cache lifetime. |
+| `FINANCE_MCP_FUNDAMENTALS_CACHE_TTL_SECONDS` | `3600` | Fundamentals/profile cache lifetime. |
+| `FINANCE_MCP_MAX_HISTORY_BARS` | `260` | Most bars `get_price_history` returns before truncating (the summary still covers the full window). |
+
 ## Install
 
 ```bash

@@ -2,6 +2,7 @@
 
 from fastmcp import Client
 
+from finance_mcp.conventions import CONVENTIONS_URI, UNITS_GLOSSARY
 from finance_mcp.server import create_server
 
 
@@ -47,7 +48,6 @@ async def test_analyze_stock_references_the_tools_it_orchestrates() -> None:
             "get_analyst_data",
             "get_news",
             "get_quote",
-            "time_value_of_money",
         ):
             assert tool in text
 
@@ -78,3 +78,35 @@ async def test_analyze_stock_ends_with_disclaimer() -> None:
             (await client.get_prompt("analyze_stock", {"ticker": "AAPL"})).messages[0].content.text
         )
         assert text.rstrip().endswith("not investment advice. Always do your own due diligence.")
+
+
+async def test_analyze_stock_embeds_the_shared_units_glossary() -> None:
+    """The glossary has one definition (conventions.UNITS_GLOSSARY); the prompt renders it."""
+    async with Client(create_server()) as client:
+        text = (
+            (await client.get_prompt("analyze_stock", {"ticker": "AAPL"})).messages[0].content.text
+        )
+        assert UNITS_GLOSSARY in text
+        assert CONVENTIONS_URI in text
+
+
+async def test_analyze_stock_states_the_forward_pe_check_correctly() -> None:
+    async with Client(create_server()) as client:
+        text = (
+            (await client.get_prompt("analyze_stock", {"ticker": "AAPL"})).messages[0].content.text
+        )
+        assert "forward P/E below trailing P/E" in text
+        assert "forward_eps above trailing_eps" in text
+        assert "expected earnings growth" in text
+        assert "forward P/E / forward_eps" not in text  # the garbled original
+
+
+async def test_analyze_stock_computes_implied_return_arithmetically() -> None:
+    """A 12-month implied return is target/price - 1; routing it through the TVM
+    calculator (nper=1) computes the same thing with more ways to get the signs wrong."""
+    async with Client(create_server()) as client:
+        text = (
+            (await client.get_prompt("analyze_stock", {"ticker": "AAPL"})).messages[0].content.text
+        )
+        assert "(mean target / current price) - 1" in text
+        assert "time_value_of_money" not in text

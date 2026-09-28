@@ -119,6 +119,21 @@ async def test_npv_tool_empty_errors(client: Client[FastMCPTransport]) -> None:
         await client.call_tool("npv", {"rate": 0.1, "cashflows": []})
 
 
+async def test_xnpv_tool(client: Client[FastMCPTransport]) -> None:
+    result = await client.call_tool(
+        "xnpv",
+        {
+            "rate": 0.10,
+            "cashflows": [
+                {"date": "2020-01-01", "amount": -1000.0},
+                {"date": "2021-01-01", "amount": 1100.0},
+            ],
+        },
+    )
+    # 366 days apart (2020 is a leap year): -1000 + 1100 / 1.1 ** (366 / 365)
+    assert result.data.npv == pytest.approx(-0.2609, abs=1e-3)
+
+
 async def test_xnpv_tool_empty_errors(client: Client[FastMCPTransport]) -> None:
     with pytest.raises(ToolError):
         await client.call_tool("xnpv", {"rate": 0.1, "cashflows": []})
