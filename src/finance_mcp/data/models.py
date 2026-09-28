@@ -436,11 +436,32 @@ class PerformanceStats(BaseModel):
     total_return_percent: float = Field(
         description="Total return over the window (e.g. 12.3 = 12.3%)."
     )
-    annualized_return_percent: float = Field(
-        description="Annualized return (CAGR) at 252 trading days/year, percent."
+    annualized_return_percent: float | None = Field(
+        default=None,
+        description=(
+            "Annualized return (CAGR) over the actual calendar span between start_date and "
+            "end_date, percent. Over a one-year window this equals total_return_percent. "
+            "Null when the span is under 90 days, because annualizing a sub-quarter move "
+            "extrapolates short-run noise into a yearly figure - use total_return_percent "
+            "for such windows and do not annualize it yourself."
+        ),
     )
-    annualized_volatility_percent: float = Field(
-        description="Annualized volatility of daily returns (252-day), percent."
+    annualized_volatility_percent: float | None = Field(
+        default=None,
+        description=(
+            "Annualized volatility of daily returns, percent, scaled by periods_per_year. "
+            "Null when the window is under 90 days, for the same reason as "
+            "annualized_return_percent."
+        ),
+    )
+    periods_per_year: float | None = Field(
+        default=None,
+        description=(
+            "Observations per year inferred from the data and used to scale "
+            "annualized_volatility_percent: roughly 252 for a weekday-traded equity and 365 "
+            "for a 24/7 instrument such as crypto, and lower for one that was halted or "
+            "thinly traded. Null when the window is under 90 days."
+        ),
     )
     max_drawdown_percent: float = Field(
         description="Largest peak-to-trough decline, as a negative percent (e.g. -23.4 = -23.4%)."

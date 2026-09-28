@@ -8,6 +8,7 @@ because we cannot enumerate every Yahoo failure mode.
 import math
 import time
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any, cast
 
 import yfinance as yf
@@ -39,6 +40,9 @@ from finance_mcp.data.models import (
 DEFAULT_MAX_BARS = 260
 SMA_SHORT_WINDOW = 50
 SMA_LONG_WINDOW = 200
+# Below roughly a quarter of calendar time, annualizing compounds short-run noise into a
+# yearly figure that reads as a forecast (a 4-day AAPL move once reported as +47.3%/yr).
+MIN_ANNUALIZATION_DAYS = 90
 
 _FINANCIALS_ATTR = {
     ("income", "annual"): "income_stmt",
@@ -155,6 +159,18 @@ class YFinanceClient:
             lambda: self._fetch_history(symbol, period, interval),
         )
 
+    def _all_bars(self, symbol: str, period: str, interval: str) -> list[PriceBar]:
+        """Parsed bars for one (symbol, period, interval), cached once for every consumer.
+
+        get_price_history and analyze_performance are two views of the same fetch; keying the
+        raw bars separately from the derived models keeps them on a single network round-trip.
+        """
+        return self._cached(
+            ("bars", symbol, period, interval),
+            self._history_ttl,
+            lambda: self._fetch_all_bars(symbol, period, interval),
+        )
+
     def _fetch_all_bars(self, symbol: str, period: str, interval: str) -> list[PriceBar]:
         """Fetch and parse the FULL (untruncated) OHLCV bars, dropping non-finite rows."""
         try:
@@ -193,7 +209,7 @@ class YFinanceClient:
             raise DataUnavailable(f"Failed to parse history for '{symbol}': {exc}") from exc
 
     def _fetch_history(self, symbol: str, period: str, interval: str) -> PriceHistory:
-        all_bars = self._fetch_all_bars(symbol, period, interval)
+        all_bars = self._all_bars(symbol, period, interval)
         start_close = all_bars[0].close
         total_return = ((all_bars[-1].close / start_close - 1.0) * 100.0) if start_close else 0.0
         summary = PriceSummary(
@@ -218,19 +234,29 @@ class YFinanceClient:
         )
 
     def analyze_performance(self, symbol: str, period: str) -> PerformanceStats:
-        return self._cached(
-            ("performance", symbol, period),
-            self._history_ttl,
-            lambda: self._compute_performance(symbol, period),
-        )
+        # No cache entry of its own: the underlying bars are cached by _all_bars, and the
+        # stats are cheap to recompute from them.
+        return self._compute_performance(symbol, period)
 
     def _compute_performance(self, symbol: str, period: str) -> PerformanceStats:
-        bars = self._fetch_all_bars(symbol, period, "1d")
+        bars = self._all_bars(symbol, period, "1d")
         if len(bars) < 2:
             raise DataUnavailable(
                 f"Not enough price history to compute performance for '{symbol}'."
             )
         closes = [b.close for b in bars]
+        # Annualize off wall-clock time, not the bar count: how many bars a year holds is a
+        # property of the instrument's trading calendar (~252 weekday, ~365 for crypto), so
+        # both the CAGR exponent and the volatility factor are read from the dates.
+        elapsed_days = _elapsed_days(bars[0].date, bars[-1].date)
+        annualized_return: float | None = None
+        annualized_volatility: float | None = None
+        periods_per_year: float | None = None
+        if elapsed_days >= MIN_ANNUALIZATION_DAYS:
+            years = elapsed_days / analytics.DAYS_PER_YEAR
+            periods_per_year = analytics.infer_periods_per_year(len(bars), years)
+            annualized_return = analytics.annualized_return(closes, years)
+            annualized_volatility = analytics.annualized_volatility(closes, periods_per_year)
         return PerformanceStats(
             symbol=symbol,
             period=period,
@@ -238,8 +264,9 @@ class YFinanceClient:
             start_date=bars[0].date,
             end_date=bars[-1].date,
             total_return_percent=analytics.total_return(closes),
-            annualized_return_percent=analytics.annualized_return(closes),
-            annualized_volatility_percent=analytics.annualized_volatility(closes),
+            annualized_return_percent=annualized_return,
+            annualized_volatility_percent=annualized_volatility,
+            periods_per_year=periods_per_year,
             max_drawdown_percent=analytics.max_drawdown(closes),
             sma_50=analytics.sma(closes, SMA_SHORT_WINDOW),
             sma_200=analytics.sma(closes, SMA_LONG_WINDOW),
@@ -448,6 +475,15 @@ class YFinanceClient:
             return SymbolSearchResult(query=query, matches=matches)
         except Exception as exc:  # surface any parsing failure verbatim
             raise DataUnavailable(f"Failed to parse search results for '{query}': {exc}") from exc
+
+
+def _elapsed_days(start: str, end: str) -> int:
+    """Calendar days between two PriceBar dates.
+
+    Parses via ``datetime.fromisoformat`` rather than ``date.fromisoformat`` so it accepts
+    both a bare date ("2024-01-01") and a full intraday timestamp with offset.
+    """
+    return (datetime.fromisoformat(end).date() - datetime.fromisoformat(start).date()).days
 
 
 def _no_data_msg(kind: str, symbol: str) -> str:
