@@ -63,6 +63,15 @@ async def test_analyze_stock_embeds_unit_guardrails() -> None:
         assert "auto-adjusted" in text  # no dividend double-count
 
 
+async def test_analyze_stock_warns_that_annualized_figures_can_be_null() -> None:
+    async with Client(create_server()) as client:
+        text = (
+            (await client.get_prompt("analyze_stock", {"ticker": "AAPL"})).messages[0].content.text
+        )
+        assert "periods_per_year" in text
+        assert "null" in text  # short windows do not report annualized figures
+
+
 async def test_analyze_stock_ends_with_disclaimer() -> None:
     async with Client(create_server()) as client:
         text = (

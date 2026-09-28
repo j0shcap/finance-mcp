@@ -36,6 +36,13 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
 
         Includes total and annualized return, annualized volatility, max drawdown
         (negative percent), and 50/200-day SMAs (null if insufficient history).
-        Annualized at 252 trading days/year.
+
+        Annualized figures use the actual calendar span between the first and last bar,
+        so over a one-year window the annualized return equals the total return for any
+        instrument. Volatility is scaled by an observations-per-year factor inferred from
+        the data and reported as periods_per_year (roughly 261 for a weekday-traded
+        equity, 365 for a 24/7 instrument such as crypto). Both annualized figures and
+        periods_per_year are null when the window spans under 90 days, because
+        annualizing a sub-quarter move extrapolates noise into a yearly rate.
         """
         return await run_data(lambda: client.analyze_performance(ticker, period))

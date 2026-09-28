@@ -32,6 +32,10 @@ EV, total debt/cash, FCF, EBITDA are absolute amounts in the reporting currency;
 value are per-share.
 - analyze_performance runs on auto-adjusted prices, so its returns already include reinvested \
 dividends (~ total return) - do not add the dividend yield on top.
+- analyze_performance annualizes over calendar time, so annualized_return_percent equals \
+total_return_percent on a one-year window. For windows under ~3 months it returns null for \
+annualized_return_percent, annualized_volatility_percent and periods_per_year - quote the total \
+return for that window and never annualize it yourself.
 - Use get_quote's price as the single headline price if sources disagree. If a tool returns no \
 data (e.g. an ETF has no analyst coverage) or a figure is unavailable (no historical valuation \
 range, no Sharpe), say so - never fabricate.
@@ -62,8 +66,10 @@ figures across currencies without noting it.
 
 ## Phase 5 - Performance & technical posture
 From analyze_performance: total & annualized return, annualized volatility, max drawdown, and the \
-50/200-day SMA cross -> trend posture. From get_quote: where the price sits in its 52-week range \
-(context, not a signal).
+50/200-day SMA cross -> trend posture. The volatility figure is scaled by periods_per_year, which \
+is inferred per instrument (~261 for a weekday-traded equity, ~365 for a 24/7 instrument such as \
+crypto) - state it when comparing volatility across asset classes. From get_quote: where the \
+price sits in its 52-week range (context, not a signal).
 
 ## Phase 6 - Analyst view & catalysts
 From get_analyst_data: consensus recommendation, implied upside % to the mean/median target, the \
