@@ -89,7 +89,14 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "--cov=finance_mcp --cov-report=term-missing --cov-report=xml --cov-fail-under=90"
+markers = [
+  "live: hits real Yahoo Finance endpoints; deselected by default, run with `make test-live`",
+]
+# `-m 'not live'` keeps the default run (and therefore `make check` and CI) offline and
+# deterministic; `make test-live` passes its own `-m live`, which wins because -m takes a
+# single value. --strict-markers turns a misspelled marker into an error rather than a
+# test that silently never runs. tests/test_live_marker.py pins both.
+addopts = "-m 'not live' --strict-markers --cov=finance_mcp --cov-report=term-missing --cov-report=xml --cov-fail-under=90"
 
 [tool.coverage.run]
 source = ["finance_mcp"]
