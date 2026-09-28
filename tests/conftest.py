@@ -1,5 +1,6 @@
 """Shared pytest fixtures."""
 
+import threading
 from collections.abc import AsyncIterator, Callable
 from types import SimpleNamespace
 from typing import Any
@@ -245,3 +246,39 @@ def make_intraday_df(
         },
         index=idx,
     )
+
+
+def fake_symbol_ticker_factory(
+    fast_info: dict[str, dict[str, Any]] | None = None,
+    errors: dict[str, Exception] | None = None,
+    calls: list[str] | None = None,
+    gate: threading.Barrier | None = None,
+) -> Callable[[str], Any]:
+    """A ticker factory whose behaviour varies BY SYMBOL, for partial-batch scenarios.
+
+    ``fast_info`` maps symbol -> that symbol's fast_info dict; ``errors`` maps symbol -> an
+    exception raised on ``.fast_info`` access. A symbol in neither raises KeyError, which is
+    what yfinance leaks for an unknown symbol. ``calls`` records the symbols fetched.
+    ``gate`` is waited on before each fast_info read, so a batch only completes if the
+    symbols are fetched concurrently (a sequential fetcher deadlocks the barrier).
+    """
+    quotes = fast_info or {}
+    failures = errors or {}
+
+    class _Ticker:
+        def __init__(self, symbol: str) -> None:
+            self._symbol = symbol
+
+        @property
+        def fast_info(self) -> Any:
+            if calls is not None:
+                calls.append(self._symbol)
+            if gate is not None:
+                gate.wait()
+            if self._symbol in failures:
+                raise failures[self._symbol]
+            if self._symbol not in quotes:
+                raise KeyError("exchangeTimezoneName")
+            return SimpleNamespace(**quotes[self._symbol])
+
+    return _Ticker

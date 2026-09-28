@@ -9,10 +9,14 @@ else, transport failures included, stays a plain DataUnavailable.
 
 import difflib
 import math
+import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable
 from datetime import datetime
+
+
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, cast
 
 import yfinance as yf
@@ -33,6 +37,8 @@ from finance_mcp.data.models import (
     PriceHistory,
     PriceSummary,
     Quote,
+    QuoteError,
+    QuoteResult,
     RecommendationPeriod,
     SplitEvent,
     Statement,
@@ -43,6 +49,9 @@ from finance_mcp.data.models import (
 
 DEFAULT_MAX_BARS = 260
 DEFAULT_CACHE_MAX_ENTRIES = 256
+# Quotes in a batch are independent single requests, so they are fetched in parallel; the
+# bound keeps a large batch from opening a connection per ticker at once.
+QUOTE_MAX_WORKERS = 8
 # Intervals whose bars are points in time rather than whole sessions. Kept in sync with
 # HistoryInterval (a test pins it): everything that is not a daily-or-longer interval.
 _INTRADAY_INTERVALS = frozenset({"1m", "5m", "15m", "30m", "1h"})
@@ -90,22 +99,27 @@ class YFinanceClient:
         # the per-entry ttl is stored so the purge pass can judge expiry without knowing
         # which caller wrote the entry.
         self._cache: OrderedDict[tuple[str, ...], tuple[float, float, Any]] = OrderedDict()
+        # get_quote fetches concurrently, so cache bookkeeping is guarded. Fetches run
+        # OUTSIDE the lock: two threads racing on one uncached key just fetch it twice.
+        self._cache_lock = threading.Lock()
 
     def _cached[T](self, key: tuple[str, ...], ttl: float, fetch: Callable[[], T]) -> T:
         now = self._now()
-        hit = self._cache.get(key)
-        if hit is not None:
-            if now - hit[0] < ttl:
-                self._cache.move_to_end(key)  # most recently used
-                # The cache is heterogeneous (Any value); the key space guarantees each key
-                # always maps to the same T, so this single cast is the only one needed.
-                return cast(T, hit[2])
-            del self._cache[key]  # stale: drop before refetching
+        with self._cache_lock:
+            hit = self._cache.get(key)
+            if hit is not None:
+                if now - hit[0] < ttl:
+                    self._cache.move_to_end(key)  # most recently used
+                    # The cache is heterogeneous (Any value); the key space guarantees each
+                    # key always maps to the same T, so this single cast is the only one needed.
+                    return cast(T, hit[2])
+                del self._cache[key]  # stale: drop before refetching
         value = fetch()
-        self._purge_expired(now)
-        self._cache[key] = (now, ttl, value)
-        while len(self._cache) > self._cache_max_entries:
-            self._cache.popitem(last=False)  # evict the least recently used entry
+        with self._cache_lock:
+            self._purge_expired(now)
+            self._cache[key] = (now, ttl, value)
+            while len(self._cache) > self._cache_max_entries:
+                self._cache.popitem(last=False)  # evict the least recently used entry
         return value
 
     def _purge_expired(self, now: float) -> None:
@@ -131,12 +145,37 @@ class YFinanceClient:
             raise SymbolNotFound(_no_data_msg(kind, symbol))
         return ticker, info
 
-    def get_quote(self, symbols: list[str]) -> list[Quote]:
-        def fetch(sym: str) -> Callable[[], Quote]:
-            return lambda: self._fetch_quote(sym)
+    def get_quote(self, symbols: list[str]) -> QuoteResult:
+        """Fetch quotes for a batch of symbols concurrently, with partial results.
 
-        norm = [_norm(s) for s in symbols]
-        return [self._cached(("quote", s), self._quote_ttl, fetch(s)) for s in norm]
+        A batch is a set of independent lookups, so one unknown or unreachable ticker
+        reports itself in ``errors`` instead of discarding the quotes that did work.
+        """
+        pending: list[str] = []  # normalized, de-duped, in request order
+        errors: list[QuoteError] = []
+        for raw in symbols:
+            try:
+                symbol = _norm(raw)
+            except DataUnavailable as exc:
+                errors.append(QuoteError(symbol=raw, error=str(exc)))
+                continue
+            if symbol not in pending:
+                pending.append(symbol)
+        if not pending:
+            return QuoteResult(quotes=[], errors=errors)
+        with ThreadPoolExecutor(max_workers=min(QUOTE_MAX_WORKERS, len(pending))) as pool:
+            fetched = list(pool.map(self._quote_or_error, pending))  # map keeps input order
+        errors.extend(r for r in fetched if isinstance(r, QuoteError))
+        return QuoteResult(quotes=[r for r in fetched if isinstance(r, Quote)], errors=errors)
+
+    def _quote_or_error(self, symbol: str) -> Quote | QuoteError:
+        """One symbol's cached quote, or the reason it could not be fetched."""
+        try:
+            return self._cached(
+                ("quote", symbol), self._quote_ttl, lambda: self._fetch_quote(symbol)
+            )
+        except DataUnavailable as exc:
+            return QuoteError(symbol=symbol, error=str(exc))
 
     def _fetch_quote(self, symbol: str) -> Quote:
         try:

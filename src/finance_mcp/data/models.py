@@ -143,6 +143,32 @@ class Quote(BaseModel):
     volume: float | None = Field(default=None, description="Last trade volume, in shares.")
 
 
+class QuoteError(BaseModel):
+    """Why one ticker in a get_quote batch could not be fetched."""
+
+    symbol: str = Field(
+        description="The ticker that failed, normalized (or exactly as given if it could not be)."
+    )
+    error: str = Field(
+        description="Why it failed: an invalid/delisted symbol, or a source/network failure. "
+        "Read it before retrying - retrying an invalid symbol will not help."
+    )
+
+
+class QuoteResult(BaseModel):
+    """Quotes for a batch of tickers: the ones that worked, plus per-ticker failures."""
+
+    quotes: list[Quote] = Field(
+        description="Successful quotes in the order their tickers were requested "
+        "(duplicate/equivalent spellings collapse to one entry)."
+    )
+    errors: list[QuoteError] = Field(
+        default_factory=list,
+        description="One entry per ticker that could not be fetched; empty when all succeeded. "
+        "A failed ticker does NOT invalidate the quotes that are present.",
+    )
+
+
 class PriceBar(BaseModel):
     """One OHLCV bar. Prices are auto-adjusted for splits and dividends."""
 

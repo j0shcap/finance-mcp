@@ -1,4 +1,5 @@
 import math
+import threading
 from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any, Literal, get_args
@@ -28,18 +29,21 @@ from finance_mcp.data.models import (
     PriceHistory,
     PriceSummary,
     Quote,
+    QuoteResult,
     SplitEvent,
     SymbolSearchResult,
 )
 from finance_mcp.data.yfinance_client import (
     _INTRADAY_INTERVALS,
     DEFAULT_CACHE_MAX_ENTRIES,
+    QUOTE_MAX_WORKERS,
     YFinanceClient,
     _recommendation_trend,
 )
 from tests.conftest import (
     FakeClock,
     fake_search_factory,
+    fake_symbol_ticker_factory,
     fake_ticker_factory,
     make_client,
     make_financials_df,
@@ -138,7 +142,7 @@ def _client(**kw: Any) -> YFinanceClient:
 
 
 def test_get_quote_parses_and_computes_change() -> None:
-    [q] = _client().get_quote(["AAPL"])
+    [q] = _client().get_quote(["AAPL"]).quotes
     assert q.symbol == "AAPL"
     assert q.price == 190.0
     assert q.change == pytest.approx(2.0)
@@ -185,7 +189,7 @@ def test_get_quote_cache_expires_exactly_at_ttl() -> None:
 def test_get_quote_missing_price_raises_symbol_not_found() -> None:
     client = _client(factory=fake_ticker_factory(fast_info={"last_price": None}))
     with pytest.raises(SymbolNotFound):
-        client.get_quote(["BADSYM"])
+        client._fetch_quote("BADSYM")
 
 
 def test_get_quote_surfaces_yfinance_error_message() -> None:
@@ -193,14 +197,14 @@ def test_get_quote_surfaces_yfinance_error_message() -> None:
         factory=fake_ticker_factory(fast_info_error=YFException("yahoo says: rate limited"))
     )
     with pytest.raises(DataUnavailable) as exc:
-        client.get_quote(["AAPL"])
+        client._fetch_quote("AAPL")
     assert "yahoo says: rate limited" in str(exc.value)
 
 
 def test_get_quote_invalid_symbol_returns_clean_symbol_not_found() -> None:
     client = _client(factory=fake_ticker_factory(fast_info_error=KeyError("exchangeTimezoneName")))
     with pytest.raises(SymbolNotFound) as exc:
-        client.get_quote(["BAD"])
+        client._fetch_quote("BAD")
     assert "No quote data for 'BAD'" in str(exc.value)
     assert "exchangeTimezoneName" not in str(exc.value)
 
@@ -208,7 +212,7 @@ def test_get_quote_invalid_symbol_returns_clean_symbol_not_found() -> None:
 def test_get_quote_none_price_is_symbol_not_found() -> None:
     client = _client(factory=fake_ticker_factory(fast_info={"last_price": None}))
     with pytest.raises(SymbolNotFound) as exc:
-        client.get_quote(["BAD"])
+        client._fetch_quote("BAD")
     assert "No quote data for" in str(exc.value)
 
 
@@ -229,7 +233,7 @@ def test_get_quote_no_second_network_call_on_failure() -> None:
 
     client = _client(factory=factory)
     with pytest.raises(SymbolNotFound):
-        client.get_quote(["BAD"])
+        client._fetch_quote("BAD")
     assert calls["history"] == 0
 
 
@@ -272,13 +276,13 @@ def test_get_quote_nan_price_raises_symbol_not_found() -> None:
         factory=fake_ticker_factory(fast_info={"last_price": float("nan"), "previous_close": 188.0})
     )
     with pytest.raises(SymbolNotFound):
-        client.get_quote(["AAPL"])
+        client._fetch_quote("AAPL")
 
 
 def test_get_quote_nan_previous_close_yields_none_change() -> None:
     fi = {**QUOTE_FI, "previous_close": float("nan")}
     client = _client(factory=fake_ticker_factory(fast_info=fi))
-    [q] = client.get_quote(["AAPL"])
+    [q] = client.get_quote(["AAPL"]).quotes
     assert q.price == 190.0
     assert q.change is None
     assert q.change_percent is None
@@ -313,7 +317,7 @@ def test_get_quote_inf_price_raises_symbol_not_found() -> None:
         factory=fake_ticker_factory(fast_info={"last_price": float("inf"), "previous_close": 188.0})
     )
     with pytest.raises(SymbolNotFound):
-        client.get_quote(["X"])
+        client._fetch_quote("X")
 
 
 def test_get_price_history_drops_inf_rows() -> None:
@@ -351,7 +355,7 @@ def test_get_quote_fast_info_attr_error_becomes_data_unavailable() -> None:
 
     client = _client(factory=factory)
     with pytest.raises(DataUnavailable) as exc:
-        client.get_quote(["X"])
+        client._fetch_quote("X")
     assert "boom" in str(exc.value)
 
 
@@ -373,7 +377,7 @@ def test_get_quote_distinct_symbols_cached_independently() -> None:
     client = YFinanceClient(
         ticker_factory=counting_factory, time_fn=FakeClock(), quote_ttl=30.0, history_ttl=300.0
     )
-    results = client.get_quote(["AAPL", "MSFT"])
+    results = client.get_quote(["AAPL", "MSFT"]).quotes
     assert [r.symbol for r in results] == ["AAPL", "MSFT"]
     assert calls["n"] == 2
 
@@ -658,7 +662,7 @@ def test_get_financials_all_statement_period_combos(
 
 def test_get_quote_zero_previous_close_change_pct_none() -> None:
     fi = {**QUOTE_FI, "previous_close": 0.0}
-    [q] = _client(factory=fake_ticker_factory(fast_info=fi)).get_quote(["AAPL"])
+    [q] = _client(factory=fake_ticker_factory(fast_info=fi)).get_quote(["AAPL"]).quotes
     assert q.change == pytest.approx(190.0) and q.change_percent is None and q.previous_close == 0.0
 
 
@@ -711,19 +715,15 @@ def test_get_company_profile_caches_within_ttl() -> None:
     assert calls["n"] == 2
 
 
-def test_get_quote_empty_list_returns_empty() -> None:
-    assert _client().get_quote([]) == []
-
-
-def test_get_quote_batch_fails_if_any_symbol_missing() -> None:
+def test_get_quote_batch_keeps_good_tickers_when_one_is_missing() -> None:
     def factory(symbol: str) -> object:
         if symbol == "AAPL":
             return fake_ticker_factory(fast_info=QUOTE_FI)(symbol)
         return fake_ticker_factory(fast_info_error=KeyError("exchangeTimezoneName"))(symbol)
 
-    with pytest.raises(SymbolNotFound) as exc:
-        _client(factory=factory).get_quote(["AAPL", "MSFT"])
-    assert "MSFT" in str(exc.value)
+    result = _client(factory=factory).get_quote(["AAPL", "MSFT"])
+    assert [q.symbol for q in result.quotes] == ["AAPL"]
+    assert [e.symbol for e in result.errors] == ["MSFT"]
 
 
 def test_get_price_history_single_bar() -> None:
@@ -735,7 +735,7 @@ def test_get_price_history_single_bar() -> None:
 
 def test_get_quote_non_price_nan_fields_nulled() -> None:
     fi = {**QUOTE_FI, "market_cap": float("nan"), "last_volume": float("nan")}
-    [q] = _client(factory=fake_ticker_factory(fast_info=fi)).get_quote(["AAPL"])
+    [q] = _client(factory=fake_ticker_factory(fast_info=fi)).get_quote(["AAPL"]).quotes
     assert q.price == 190.0 and q.market_cap is None and q.volume is None
 
 
@@ -1652,8 +1652,8 @@ def test_symbols_are_normalized_before_caching_and_echoed_normalized() -> None:
         return fake_ticker_factory(fast_info=QUOTE_FI)(symbol)
 
     client = _client(factory=counting_factory)
-    lower = client.get_quote(["aapl"])
-    padded = client.get_quote([" AAPL "])
+    lower = client.get_quote(["aapl"]).quotes
+    padded = client.get_quote([" AAPL "]).quotes
     assert calls == ["AAPL"]  # one fetch, with the normalized symbol
     assert [q.symbol for q in lower] == ["AAPL"]
     assert [q.symbol for q in padded] == ["AAPL"]
@@ -1801,7 +1801,7 @@ TRANSPORT_ERRORS = [
 def test_quote_transport_failure_is_data_unavailable_not_symbol_not_found(exc: Exception) -> None:
     client = _client(factory=fake_ticker_factory(fast_info_error=exc))
     with pytest.raises(DataUnavailable) as raised:
-        client.get_quote(["AAPL"])
+        client._fetch_quote("AAPL")
     assert not isinstance(raised.value, SymbolNotFound)
     assert str(exc) in str(raised.value)  # underlying message preserved
     assert "may be invalid or delisted" not in str(raised.value)
@@ -1830,7 +1830,7 @@ NO_DATA_ERRORS = [
 def test_quote_no_data_signals_are_symbol_not_found(exc: Exception) -> None:
     client = _client(factory=fake_ticker_factory(fast_info_error=exc))
     with pytest.raises(SymbolNotFound) as raised:
-        client.get_quote(["NOPE"])
+        client._fetch_quote("NOPE")
     assert str(raised.value) == "No quote data for 'NOPE'. The symbol may be invalid or delisted."
 
 
@@ -1845,7 +1845,7 @@ def test_info_no_data_signals_are_symbol_not_found(exc: Exception) -> None:
 def test_rate_limit_error_stays_data_unavailable() -> None:
     client = _client(factory=fake_ticker_factory(fast_info_error=YFRateLimitError()))
     with pytest.raises(DataUnavailable) as raised:
-        client.get_quote(["AAPL"])
+        client._fetch_quote("AAPL")
     assert not isinstance(raised.value, SymbolNotFound)
     assert "Rate limited" in str(raised.value)
 
@@ -2006,3 +2006,79 @@ def test_line_item_with_no_close_match_gets_no_suggestion() -> None:
 def test_unfiltered_statement_reports_no_misses() -> None:
     fs = _income_client().get_financials("AAPL", "income", "annual")
     assert fs.missing_line_items == [] and fs.available_line_items == []
+
+
+# --- get_quote: concurrent fetch with partial results (item 5) ---
+
+
+def test_get_quote_returns_partial_results_instead_of_failing_the_batch() -> None:
+    client = _client(
+        factory=fake_symbol_ticker_factory(fast_info={"AAPL": QUOTE_FI, "MSFT": QUOTE_FI})
+    )
+    result = client.get_quote(["AAPL", "BADSYM", "MSFT"])
+    assert [q.symbol for q in result.quotes] == ["AAPL", "MSFT"]  # request order preserved
+    assert [e.symbol for e in result.errors] == ["BADSYM"]
+    assert result.errors[0].error == (
+        "No quote data for 'BADSYM'. The symbol may be invalid or delisted."
+    )
+
+
+def test_get_quote_error_entry_carries_a_transport_failure_message() -> None:
+    client = _client(
+        factory=fake_symbol_ticker_factory(
+            fast_info={"AAPL": QUOTE_FI}, errors={"MSFT": ConnectionError("connection reset")}
+        )
+    )
+    result = client.get_quote(["AAPL", "MSFT"])
+    assert [q.symbol for q in result.quotes] == ["AAPL"]
+    assert "connection reset" in result.errors[0].error
+
+
+def test_get_quote_all_failing_returns_no_quotes_and_all_errors() -> None:
+    client = _client(factory=fake_symbol_ticker_factory())
+    result = client.get_quote(["NOPE1", "NOPE2"])
+    assert result.quotes == []
+    assert [e.symbol for e in result.errors] == ["NOPE1", "NOPE2"]
+
+
+def test_get_quote_deduplicates_equivalent_symbols() -> None:
+    calls: list[str] = []
+    client = _client(factory=fake_symbol_ticker_factory(fast_info={"AAPL": QUOTE_FI}, calls=calls))
+    result = client.get_quote(["AAPL", "aapl", " AAPL "])
+    assert [q.symbol for q in result.quotes] == ["AAPL"]
+    assert calls == ["AAPL"]
+
+
+def test_get_quote_blank_symbol_becomes_an_error_entry_not_an_exception() -> None:
+    client = _client(factory=fake_symbol_ticker_factory(fast_info={"AAPL": QUOTE_FI}))
+    result = client.get_quote(["AAPL", "  "])
+    assert [q.symbol for q in result.quotes] == ["AAPL"]
+    assert result.errors[0].symbol == "  "
+    assert "Empty ticker symbol" in result.errors[0].error
+
+
+def test_get_quote_empty_list_returns_empty_result() -> None:
+    assert _client(factory=fake_symbol_ticker_factory()).get_quote([]) == QuoteResult(
+        quotes=[], errors=[]
+    )
+
+
+def test_get_quote_fetches_tickers_concurrently() -> None:
+    # Every fetch waits on a 4-party barrier, so this only completes if all four symbols
+    # are in flight at once; a sequential fetcher would block until the timeout.
+    symbols = ["AAA", "BBB", "CCC", "DDD"]
+    gate = threading.Barrier(len(symbols), timeout=10)
+    client = _client(
+        factory=fake_symbol_ticker_factory(fast_info=dict.fromkeys(symbols, QUOTE_FI), gate=gate)
+    )
+    result = client.get_quote(symbols)
+    assert [q.symbol for q in result.quotes] == symbols
+    assert result.errors == []
+
+
+def test_get_quote_concurrency_is_bounded() -> None:
+    assert QUOTE_MAX_WORKERS > 1
+    symbols = [f"SYM{i}" for i in range(QUOTE_MAX_WORKERS + 5)]
+    client = _client(factory=fake_symbol_ticker_factory(fast_info=dict.fromkeys(symbols, QUOTE_FI)))
+    # More tickers than workers still completes: the pool queues the overflow.
+    assert len(client.get_quote(symbols).quotes) == len(symbols)
