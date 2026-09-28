@@ -76,9 +76,7 @@ PROFILE_FIELDS = (
 
 
 async def test_financials_income_annual_shape(layer: Layer) -> None:
-    statement = await layer.call(
-        "get_financials", ticker=AAPL, statement="income", period="annual"
-    )
+    statement = await layer.call("get_financials", ticker=AAPL, statement="income", period="annual")
 
     assert statement.symbol == AAPL
     assert statement.statement == "income"
@@ -232,9 +230,7 @@ async def test_company_profile_dividend_yield_is_a_percent(layer: Layer) -> None
 
     cutoff = datetime.date.today() - datetime.timedelta(days=370)
     trailing = sum(
-        d.amount
-        for d in profile.recent_dividends
-        if datetime.date.fromisoformat(d.date) >= cutoff
+        d.amount for d in profile.recent_dividends if datetime.date.fromisoformat(d.date) >= cutoff
     )
     assert trailing > 0, "expected at least one AAPL dividend in the trailing year"
     computed_percent = trailing / quote.price * 100.0

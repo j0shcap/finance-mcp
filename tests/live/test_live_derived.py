@@ -33,9 +33,7 @@ async def test_analyze_performance_equity_shape_and_units(layer: Layer) -> None:
     # Annualization runs off the calendar span, so on a one-year window the annualized
     # return equals the total return. This is the invariant the tool description states and
     # the prompt repeats; asserting it on live data is the point of this test.
-    assert stats.annualized_return_percent == pytest.approx(
-        stats.total_return_percent, rel=0.05
-    ), (
+    assert stats.annualized_return_percent == pytest.approx(stats.total_return_percent, rel=0.05), (
         f"over a 1y window annualized ({stats.annualized_return_percent}) must equal total "
         f"({stats.total_return_percent}); a bar-count-based factor would diverge here"
     )

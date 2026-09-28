@@ -110,3 +110,27 @@ cd finance-mcp
 uv sync
 make check   # ruff, mypy --strict, bandit, pytest (enforces the coverage gate)
 ```
+
+`make check` is fully offline: every test in it mocks yfinance, so it works on a plane and
+never depends on Yahoo being up.
+
+### Live contract tests
+
+`tests/live/` calls real Yahoo endpoints to catch what mocks cannot: a renamed `info` key, a
+restructured news payload, or a field switching between a fraction and a percent. Those
+changes are invisible to a mocked suite, which only pins our parsing of a shape we recorded
+once.
+
+```bash
+make test-live   # opt-in: hits the network, excluded from the coverage gate
+```
+
+These tests are marked `live` and deselected by default (`addopts` carries `-m "not live"`),
+so they never run in `make check` or on a PR. CI runs them nightly instead
+(`.github/workflows/live.yml`), and a failure opens or comments on a single rolling issue.
+
+They assert shape and unit plausibility rather than exact values — margins are fractions,
+`debt_to_equity` and `dividend_yield` are percents, `period_ends` descend, and so on — and
+each tool is exercised both through `YFinanceClient` and through an in-process MCP client.
+Yahoo rate-limiting is retried and then reported as a skip, so throttling never reads as a
+contract failure.

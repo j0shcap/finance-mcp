@@ -32,7 +32,7 @@ def _collect(*args: str) -> str:
 
     --collect-only, so this never executes a test and never reaches the network.
     """
-    result = subprocess.run(  # noqa: S603 - fixed argv, no shell, no user input
+    result = subprocess.run(  # fixed argv, no shell, no user input
         [sys.executable, "-m", "pytest", "--collect-only", "-q", "--no-cov", *args],
         cwd=REPO_ROOT,
         capture_output=True,

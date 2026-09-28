@@ -46,6 +46,7 @@ import asyncio
 import re
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
@@ -173,7 +174,7 @@ class Layer:
             last = attempt == MAX_ATTEMPTS - 1
             try:
                 result = await self._invoke(tool, kwargs)
-            except Exception as exc:  # noqa: BLE001 - re-raised below unless throttled
+            except Exception as exc:  # re-raised below unless it is Yahoo throttling us
                 if not _is_rate_limited(exc):
                     raise
                 if last:
@@ -183,8 +184,9 @@ class Layer:
                 if not throttled:
                     return result
                 if last:
-                    pytest.skip(f"Yahoo rate-limited {tool} after {MAX_ATTEMPTS} attempts: "
-                                f"{throttled[0]}")
+                    pytest.skip(
+                        f"Yahoo rate-limited {tool} after {MAX_ATTEMPTS} attempts: {throttled[0]}"
+                    )
             await asyncio.sleep(BACKOFF_SECONDS[attempt])
         raise AssertionError("unreachable: the final attempt either returns or skips")
 
@@ -247,4 +249,4 @@ def require_present(model: Any, fields: Sequence[str]) -> None:
 
 def iso_dates_descending(dates: Sequence[str]) -> bool:
     """True when ISO date strings are strictly newest-first (lexicographic == chronological)."""
-    return all(a > b for a, b in zip(dates, dates[1:], strict=False))
+    return all(newer > older for newer, older in pairwise(dates))
