@@ -39,16 +39,6 @@ dividends (~ total return) - do not add the dividend yield on top.
 total_return_percent on a one-year window. For windows under ~3 months it returns null for \
 annualized_return_percent, annualized_volatility_percent and periods_per_year - quote the total \
 return for that window and never annualize it yourself.
-- Use get_quote's price as the single headline price if sources disagree. If a tool returns no \
-data (e.g. an ETF has no analyst coverage) or a figure is unavailable (no historical valuation \
-range, no Sharpe), say so - never fabricate.
-
-
-- Use get_quote's quotes[0].price as the single headline price if sources disagree. A ticker \
-listed in get_quote's errors was not fetched at all - say so rather than substituting another \
-source's price. If a tool returns no data (e.g. an ETF has no analyst coverage) or a figure is \
-
-
 - Use get_quote's price as the single headline price if sources disagree - and take it from the \
 entry in quotes whose symbol matches the ticker you are pricing, never by position: a batched call \
 returns one entry per ticker and any that failed are in errors instead, so positions shift. A \
@@ -77,8 +67,8 @@ free cash flow.
 Name ~3 genuinely comparable competitors (same sector AND similar business model/size; state these \
 are your own selection, not from a tool). Call get_key_metrics on each and get_quote once for all \
 of them (it takes up to 25 tickers). Compare on a GROWTH-ADJUSTED basis (PEG / \
-growth-vs-multiple), not raw P/E. Flag \
-currency: non-US peers report figures in their own currency (get_key_metrics.financial_currency, \
+growth-vs-multiple), not raw P/E. Flag currency: non-US peers report figures in their own \
+currency (get_key_metrics.financial_currency, \
 get_financials' currency, get_analyst_data.currency, e.g. EUR/CAD) - never compare absolute \
 figures across currencies without noting it, and prefer ratios when they differ.
 

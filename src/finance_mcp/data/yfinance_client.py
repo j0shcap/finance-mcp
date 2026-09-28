@@ -13,10 +13,8 @@ import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable
-from datetime import datetime
-
-
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from typing import Any, cast
 
 import yfinance as yf

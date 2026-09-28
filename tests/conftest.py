@@ -35,15 +35,16 @@ class FakeClock:
 
 
 def make_history_df(
-    closes: list[float], *, start: str = "2024-01-01", freq: str = "D"
+    closes: list[float], *, start: str = "2024-01-01", freq: str = "D", tz: str | None = None
 ) -> pd.DataFrame:
     """Build a yfinance-shaped OHLCV frame.
 
     ``freq`` picks the trading calendar: "D" gives consecutive calendar days (a 24/7
     instrument such as crypto), "B" gives weekdays only (an equity). The defaults keep
-    every existing caller on the original 1-bar-per-calendar-day series.
+    every existing caller on the original 1-bar-per-calendar-day series. ``tz`` makes the
+    index tz-aware, as yfinance's really is; see ``make_intraday_df``.
     """
-    idx = pd.to_datetime(pd.date_range(start, periods=len(closes), freq=freq))
+    idx = pd.to_datetime(pd.date_range(start, periods=len(closes), freq=freq, tz=tz))
     return pd.DataFrame(
         {
             "Open": closes,
@@ -230,22 +231,13 @@ def make_client(**kw: Any) -> YFinanceClient:
 
 def make_intraday_df(
     closes: list[float],
+    *,
     start: str = "2026-09-25 09:30",
-    tz: str = "America/New_York",
     freq: str = "5min",
+    tz: str = "America/New_York",
 ) -> pd.DataFrame:
-    """An intraday OHLCV frame with a tz-aware index, as yfinance returns for 1m-1h bars."""
-    idx = pd.date_range(start, periods=len(closes), freq=freq, tz=tz)
-    return pd.DataFrame(
-        {
-            "Open": closes,
-            "High": [c + 1 for c in closes],
-            "Low": [c - 1 for c in closes],
-            "Close": closes,
-            "Volume": [1000 * (i + 1) for i in range(len(closes))],
-        },
-        index=idx,
-    )
+    """An intraday OHLCV frame: a tz-aware index at sub-daily bars, as yfinance returns."""
+    return make_history_df(closes, start=start, freq=freq, tz=tz)
 
 
 def fake_symbol_ticker_factory(

@@ -1879,7 +1879,7 @@ def test_every_intraday_interval_emits_distinct_timestamps(interval: str) -> Non
 def test_daily_and_longer_bars_stay_date_only(interval: str) -> None:
     # Yahoo's daily index is midnight in the EXCHANGE's timezone; emitting a timestamp (or
     # converting to UTC) would either lie about the time or shift the calendar date.
-    df = make_intraday_df([100.0, 101.0], start="2026-09-24 00:00", freq="1D")
+    df = make_history_df([100.0, 101.0], start="2026-09-24", tz="America/New_York")
     client = _client(factory=fake_ticker_factory(history_df=df))
     dates = [b.date for b in client.get_price_history("AAPL", "1mo", interval).bars]
     assert dates == ["2026-09-24", "2026-09-25"]
