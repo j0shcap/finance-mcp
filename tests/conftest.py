@@ -1,5 +1,6 @@
 """Shared pytest fixtures."""
 
+import threading
 from collections.abc import AsyncIterator, Callable
 from types import SimpleNamespace
 from typing import Any
@@ -34,15 +35,16 @@ class FakeClock:
 
 
 def make_history_df(
-    closes: list[float], *, start: str = "2024-01-01", freq: str = "D"
+    closes: list[float], *, start: str = "2024-01-01", freq: str = "D", tz: str | None = None
 ) -> pd.DataFrame:
     """Build a yfinance-shaped OHLCV frame.
 
     ``freq`` picks the trading calendar: "D" gives consecutive calendar days (a 24/7
     instrument such as crypto), "B" gives weekdays only (an equity). The defaults keep
-    every existing caller on the original 1-bar-per-calendar-day series.
+    every existing caller on the original 1-bar-per-calendar-day series. ``tz`` makes the
+    index tz-aware, as yfinance's really is; see ``make_intraday_df``.
     """
-    idx = pd.to_datetime(pd.date_range(start, periods=len(closes), freq=freq))
+    idx = pd.to_datetime(pd.date_range(start, periods=len(closes), freq=freq, tz=tz))
     return pd.DataFrame(
         {
             "Open": closes,
@@ -225,3 +227,50 @@ def make_client(**kw: Any) -> YFinanceClient:
     return YFinanceClient(
         ticker_factory=factory, time_fn=FakeClock(), quote_ttl=30.0, history_ttl=300.0, **extra
     )
+
+
+def make_intraday_df(
+    closes: list[float],
+    *,
+    start: str = "2026-09-25 09:30",
+    freq: str = "5min",
+    tz: str = "America/New_York",
+) -> pd.DataFrame:
+    """An intraday OHLCV frame: a tz-aware index at sub-daily bars, as yfinance returns."""
+    return make_history_df(closes, start=start, freq=freq, tz=tz)
+
+
+def fake_symbol_ticker_factory(
+    fast_info: dict[str, dict[str, Any]] | None = None,
+    errors: dict[str, Exception] | None = None,
+    calls: list[str] | None = None,
+    gate: threading.Barrier | None = None,
+) -> Callable[[str], Any]:
+    """A ticker factory whose behaviour varies BY SYMBOL, for partial-batch scenarios.
+
+    ``fast_info`` maps symbol -> that symbol's fast_info dict; ``errors`` maps symbol -> an
+    exception raised on ``.fast_info`` access. A symbol in neither raises KeyError, which is
+    what yfinance leaks for an unknown symbol. ``calls`` records the symbols fetched.
+    ``gate`` is waited on before each fast_info read, so a batch only completes if the
+    symbols are fetched concurrently (a sequential fetcher deadlocks the barrier).
+    """
+    quotes = fast_info or {}
+    failures = errors or {}
+
+    class _Ticker:
+        def __init__(self, symbol: str) -> None:
+            self._symbol = symbol
+
+        @property
+        def fast_info(self) -> Any:
+            if calls is not None:
+                calls.append(self._symbol)
+            if gate is not None:
+                gate.wait()
+            if self._symbol in failures:
+                raise failures[self._symbol]
+            if self._symbol not in quotes:
+                raise KeyError("exchangeTimezoneName")
+            return SimpleNamespace(**quotes[self._symbol])
+
+    return _Ticker

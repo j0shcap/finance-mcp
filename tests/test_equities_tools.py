@@ -10,6 +10,7 @@ from finance_mcp.data.errors import DataUnavailable
 from finance_mcp.server import create_server
 from tests.conftest import (
     fake_search_factory,
+    fake_symbol_ticker_factory,
     fake_ticker_factory,
     make_client,
     make_financials_df,
@@ -49,14 +50,15 @@ async def test_get_quote_tool() -> None:
         names = {t.name for t in await client.list_tools()}
         assert {"get_quote", "get_price_history"} <= names
         result = await client.call_tool("get_quote", {"tickers": ["AAPL"]})
-        assert result.data[0].price == 190.0
+        assert result.data.quotes[0].price == 190.0
+        assert result.data.errors == []
 
 
 async def test_get_quote_tool_multiple_tickers() -> None:
     server = create_server(yf_client=make_client(factory=fake_ticker_factory(fast_info=QUOTE_FI)))
     async with Client(server) as client:
         result = await client.call_tool("get_quote", {"tickers": ["AAPL", "MSFT"]})
-        assert [q.symbol for q in result.data] == ["AAPL", "MSFT"]
+        assert [q.symbol for q in result.data.quotes] == ["AAPL", "MSFT"]
 
 
 async def test_get_price_history_tool() -> None:
@@ -69,16 +71,19 @@ async def test_get_price_history_tool() -> None:
         assert result.data.summary.bars == 3
 
 
-async def test_get_quote_tool_surfaces_yfinance_message() -> None:
+async def test_get_quote_tool_surfaces_yfinance_message_per_ticker() -> None:
+    # A source failure is reported against the ticker it belongs to, not as a tool error:
+    # the rest of the batch is still worth returning.
     server = create_server(
         yf_client=make_client(
             factory=fake_ticker_factory(fast_info_error=YFException("yahoo: blocked"))
         )
     )
     async with Client(server) as client:
-        with pytest.raises(ToolError) as exc:
-            await client.call_tool("get_quote", {"tickers": ["AAPL"]})
-        assert "yahoo: blocked" in str(exc.value)
+        result = await client.call_tool("get_quote", {"tickers": ["AAPL"]})
+        assert result.data.quotes == []
+        assert result.data.errors[0].symbol == "AAPL"
+        assert "yahoo: blocked" in result.data.errors[0].error
 
 
 async def test_get_price_history_tool_surfaces_yfinance_message() -> None:
@@ -310,3 +315,48 @@ async def test_get_news_tool_surfaces_error() -> None:
         with pytest.raises(ToolError) as exc:
             await client.call_tool("get_news", {"ticker": "AAPL"})
         assert "yahoo: news down" in str(exc.value)
+
+
+async def test_get_quote_tool_returns_partial_results() -> None:
+    server = create_server(
+        yf_client=make_client(
+            factory=fake_symbol_ticker_factory(fast_info={"AAPL": QUOTE_FI, "MSFT": QUOTE_FI})
+        )
+    )
+    async with Client(server) as client:
+        result = await client.call_tool("get_quote", {"tickers": ["AAPL", "NOPE", "MSFT"]})
+        assert [q.symbol for q in result.data.quotes] == ["AAPL", "MSFT"]
+        assert [e.symbol for e in result.data.errors] == ["NOPE"]
+
+
+async def test_get_quote_tool_rejects_an_empty_ticker_list() -> None:
+    server = create_server(yf_client=make_client(factory=fake_ticker_factory(fast_info=QUOTE_FI)))
+    async with Client(server) as client:
+        with pytest.raises(ToolError):
+            await client.call_tool("get_quote", {"tickers": []})
+
+
+async def test_get_quote_tool_rejects_more_than_25_tickers() -> None:
+    server = create_server(yf_client=make_client(factory=fake_ticker_factory(fast_info=QUOTE_FI)))
+    async with Client(server) as client:
+        with pytest.raises(ToolError):
+            await client.call_tool("get_quote", {"tickers": [f"SYM{i}" for i in range(26)]})
+
+
+async def test_get_quote_tool_accepts_25_tickers() -> None:
+    server = create_server(yf_client=make_client(factory=fake_ticker_factory(fast_info=QUOTE_FI)))
+    async with Client(server) as client:
+        result = await client.call_tool("get_quote", {"tickers": [f"SYM{i}" for i in range(25)]})
+        assert len(result.data.quotes) == 25
+
+
+async def test_get_financials_tool_rejects_an_empty_line_items_filter() -> None:
+    df = make_financials_df(INCOME, ["2024-09-30", "2023-09-30"])
+    server = create_server(
+        yf_client=make_client(factory=fake_ticker_factory(financials={"income_stmt": df}))
+    )
+    async with Client(server) as client:
+        with pytest.raises(ToolError):
+            await client.call_tool(
+                "get_financials", {"ticker": "AAPL", "statement": "income", "line_items": []}
+            )

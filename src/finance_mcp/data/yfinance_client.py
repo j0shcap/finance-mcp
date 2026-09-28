@@ -2,17 +2,23 @@
 
 Network access is isolated here. yfinance errors and empty results become
 DataUnavailable/SymbolNotFound whose message is surfaced to the caller verbatim,
-because we cannot enumerate every Yahoo failure mode.
+because we cannot enumerate every Yahoo failure mode. SymbolNotFound is reserved for
+signals that really mean "no data for this symbol" (see _is_no_data_error): everything
+else, transport failures included, stays a plain DataUnavailable.
 """
 
+import difflib
 import math
+import threading
 import time
+from collections import OrderedDict
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any, cast
 
 import yfinance as yf
-from yfinance.exceptions import YFException
+from yfinance.exceptions import YFTickerMissingError
 
 from finance_mcp.data import analytics
 from finance_mcp.data.errors import DataUnavailable, SymbolNotFound
@@ -29,6 +35,8 @@ from finance_mcp.data.models import (
     PriceHistory,
     PriceSummary,
     Quote,
+    QuoteError,
+    QuoteResult,
     RecommendationPeriod,
     SplitEvent,
     Statement,
@@ -38,6 +46,13 @@ from finance_mcp.data.models import (
 )
 
 DEFAULT_MAX_BARS = 260
+DEFAULT_CACHE_MAX_ENTRIES = 256
+# Quotes in a batch are independent single requests, so they are fetched in parallel; the
+# bound keeps a large batch from opening a connection per ticker at once.
+QUOTE_MAX_WORKERS = 8
+# Intervals whose bars are points in time rather than whole sessions. Kept in sync with
+# HistoryInterval (a test pins it): everything that is not a daily-or-longer interval.
+_INTRADAY_INTERVALS = frozenset({"1m", "5m", "15m", "30m", "1h"})
 SMA_SHORT_WINDOW = 50
 SMA_LONG_WINDOW = 200
 # Below roughly a quarter of calendar time, annualizing compounds short-run noise into a
@@ -55,7 +70,7 @@ _FINANCIALS_ATTR = {
 
 
 class YFinanceClient:
-    """Thin yfinance facade with a per-key TTL cache."""
+    """Thin yfinance facade with a per-key TTL cache (bounded, least-recently-used)."""
 
     def __init__(
         self,
@@ -66,6 +81,7 @@ class YFinanceClient:
         history_ttl: float = 300.0,
         fundamentals_ttl: float = 3600.0,
         max_bars: int = DEFAULT_MAX_BARS,
+        cache_max_entries: int = DEFAULT_CACHE_MAX_ENTRIES,
     ) -> None:
         self._ticker = ticker_factory
         # yf.Search is called with keyword args (max_results/news_count/lists_count);
@@ -76,44 +92,92 @@ class YFinanceClient:
         self._history_ttl = history_ttl
         self._fundamentals_ttl = fundamentals_ttl
         self._max_bars = max_bars
-        self._cache: dict[tuple[str, ...], tuple[float, Any]] = {}
+        self._cache_max_entries = cache_max_entries
+        # key -> (stored_at, ttl, value). Insertion order is LRU order (oldest use first);
+        # the per-entry ttl is stored so the purge pass can judge expiry without knowing
+        # which caller wrote the entry.
+        self._cache: OrderedDict[tuple[str, ...], tuple[float, float, Any]] = OrderedDict()
+        # get_quote fetches concurrently, so cache bookkeeping is guarded. Fetches run
+        # OUTSIDE the lock: two threads racing on one uncached key just fetch it twice.
+        self._cache_lock = threading.Lock()
 
     def _cached[T](self, key: tuple[str, ...], ttl: float, fetch: Callable[[], T]) -> T:
-        hit = self._cache.get(key)
         now = self._now()
-        if hit is not None and now - hit[0] < ttl:
-            # The cache is heterogeneous (Any value); the key space guarantees each key
-            # always maps to the same T, so this single cast is the only one needed.
-            return cast(T, hit[1])
+        with self._cache_lock:
+            hit = self._cache.get(key)
+            if hit is not None:
+                if now - hit[0] < ttl:
+                    self._cache.move_to_end(key)  # most recently used
+                    # The cache is heterogeneous (Any value); the key space guarantees each
+                    # key always maps to the same T, so this single cast is the only one needed.
+                    return cast(T, hit[2])
+                del self._cache[key]  # stale: drop before refetching
         value = fetch()
-        self._cache[key] = (now, value)
+        stored_at = self._now()  # read AFTER the fetch: a slow fetch must not age its entry
+        with self._cache_lock:
+            self._purge_expired(stored_at)
+            self._cache[key] = (stored_at, ttl, value)
+            # Assigning a key that is still present (a concurrent fetch of the same key
+            # got there first) leaves it in its old position, so order it explicitly.
+            self._cache.move_to_end(key)
+            while len(self._cache) > self._cache_max_entries:
+                self._cache.popitem(last=False)  # evict the least recently used entry
         return value
+
+    def _purge_expired(self, now: float) -> None:
+        """Drop every entry past its own TTL, so stale keys cannot squat on the bound."""
+        for key in [k for k, (stored, ttl, _) in self._cache.items() if now - stored >= ttl]:
+            del self._cache[key]
 
     def _ticker_with_info(
         self, symbol: str, fetch_label: str, kind: str
     ) -> tuple[Any, dict[str, Any]]:
         """Fetch a ticker and its ``.info``, asserting the symbol names a real instrument.
 
-        Shared by the profile/metrics/analyst fetchers. A yfinance-typed error becomes
-        DataUnavailable; any other access error, or an ``info`` dict with no longName/
-        shortName (Yahoo's tell for an unknown symbol), becomes SymbolNotFound.
+        Shared by the profile/metrics/analyst fetchers. Access errors are classified by
+        _data_error; an ``info`` dict that is empty or has no longName/shortName (Yahoo's
+        tell for an unknown symbol) becomes SymbolNotFound.
         """
         ticker = self._ticker(symbol)
         try:
             info = ticker.info
-        except YFException as exc:
-            raise DataUnavailable(f"Failed to fetch {fetch_label} for '{symbol}': {exc}") from exc
-        except Exception as exc:  # raw leak for symbols with no data
-            raise SymbolNotFound(_no_data_msg(kind, symbol)) from exc
+        except Exception as exc:
+            raise _data_error(exc, fetch_label, kind, symbol) from exc
         if not info or not (info.get("longName") or info.get("shortName")):
             raise SymbolNotFound(_no_data_msg(kind, symbol))
         return ticker, info
 
-    def get_quote(self, symbols: list[str]) -> list[Quote]:
-        def fetch(sym: str) -> Callable[[], Quote]:
-            return lambda: self._fetch_quote(sym)
+    def get_quote(self, symbols: list[str]) -> QuoteResult:
+        """Fetch quotes for a batch of symbols concurrently, with partial results.
 
-        return [self._cached(("quote", s), self._quote_ttl, fetch(s)) for s in symbols]
+        A batch is a set of independent lookups, so one unknown or unreachable ticker
+        reports itself in ``errors`` instead of discarding the quotes that did work.
+        """
+        pending: list[str] = []  # normalized, de-duped, in request order
+        errors: list[QuoteError] = []
+        for raw in symbols:
+            try:
+                symbol = _norm(raw)
+            except DataUnavailable as exc:
+                errors.append(QuoteError(symbol=raw, error=str(exc)))
+                continue
+            if symbol not in pending:
+                pending.append(symbol)
+        if not pending:
+            return QuoteResult(quotes=[], errors=errors)
+        with ThreadPoolExecutor(max_workers=min(QUOTE_MAX_WORKERS, len(pending))) as pool:
+            fetched = list(pool.map(self._quote_or_error, pending))  # map keeps input order
+        errors.extend(r for r in fetched if isinstance(r, QuoteError))
+        return QuoteResult(quotes=[r for r in fetched if isinstance(r, Quote)], errors=errors)
+
+    def _quote_or_error(self, symbol: str) -> Quote | QuoteError:
+        """One symbol's cached quote, or the reason it could not be fetched."""
+        try:
+            return self._cached(
+                ("quote", symbol), self._quote_ttl, lambda: self._fetch_quote(symbol)
+            )
+        except DataUnavailable as exc:
+            return QuoteError(symbol=symbol, error=str(exc))
 
     def _fetch_quote(self, symbol: str) -> Quote:
         try:
@@ -127,12 +191,8 @@ class YFinanceClient:
             year_low = _opt(getattr(fi, "year_low", None))
             market_cap = _opt(getattr(fi, "market_cap", None))
             volume = _opt(getattr(fi, "last_volume", None))
-        except YFException as exc:
-            # yfinance's own typed errors (rate limit, etc.) — surface verbatim.
-            raise DataUnavailable(f"Failed to fetch quote for '{symbol}': {exc}") from exc
         except Exception as exc:
-            # fast_info leaks raw errors (e.g. KeyError) for symbols with no data.
-            raise SymbolNotFound(_no_data_msg("quote", symbol)) from exc
+            raise _data_error(exc, "quote", "quote", symbol) from exc
         if price is None:
             raise SymbolNotFound(_no_data_msg("quote", symbol))
         change = (price - prev) if prev is not None else None
@@ -153,6 +213,7 @@ class YFinanceClient:
         )
 
     def get_price_history(self, symbol: str, period: str, interval: str) -> PriceHistory:
+        symbol = _norm(symbol)
         return self._cached(
             ("history", symbol, period, interval),
             self._history_ttl,
@@ -173,6 +234,7 @@ class YFinanceClient:
 
     def _fetch_all_bars(self, symbol: str, period: str, interval: str) -> list[PriceBar]:
         """Fetch and parse the FULL (untruncated) OHLCV bars, dropping non-finite rows."""
+        intraday = interval in _INTRADAY_INTERVALS
         try:
             df = self._ticker(symbol).history(period=period, interval=interval, auto_adjust=True)
         except Exception as exc:  # surface any yfinance failure verbatim
@@ -195,7 +257,7 @@ class YFinanceClient:
                     continue
                 all_bars.append(
                     PriceBar(
-                        date=idx.date().isoformat(), open=o, high=h, low=low, close=c, volume=v
+                        date=_bar_date(idx, intraday), open=o, high=h, low=low, close=c, volume=v
                     )
                 )
             if not all_bars:
@@ -234,6 +296,7 @@ class YFinanceClient:
         )
 
     def analyze_performance(self, symbol: str, period: str) -> PerformanceStats:
+        symbol = _norm(symbol)
         # No cache entry of its own: the underlying bars are cached by _all_bars, and the
         # stats are cheap to recompute from them.
         return self._compute_performance(symbol, period)
@@ -279,15 +342,15 @@ class YFinanceClient:
         period: StatementPeriod,
         line_items: list[str] | None = None,
     ) -> FinancialStatement:
+        symbol = _norm(symbol)
         full = self._cached(
             ("financials", symbol, statement, period),
             self._fundamentals_ttl,
             lambda: self._fetch_financials(symbol, statement, period),
         )
-        if line_items is None:
+        if not line_items:  # None or [] - an empty filter means the whole statement
             return full
-        wanted = {li: full.line_items[li] for li in line_items if li in full.line_items}
-        return full.model_copy(update={"line_items": wanted})
+        return _filter_line_items(full, line_items)
 
     def _fetch_financials(
         self,
@@ -296,8 +359,9 @@ class YFinanceClient:
         period: StatementPeriod,
     ) -> FinancialStatement:
         attr = _FINANCIALS_ATTR[(statement, period)]
+        ticker = self._ticker(symbol)
         try:
-            df = getattr(self._ticker(symbol), attr)
+            df = getattr(ticker, attr)
         except Exception as exc:  # surface any yfinance failure verbatim
             raise DataUnavailable(
                 f"Failed to fetch {statement} statement for '{symbol}': {exc}"
@@ -316,6 +380,7 @@ class YFinanceClient:
                 symbol=symbol,
                 statement=statement,
                 period=period,
+                currency=self._statement_currency(symbol, ticker),
                 period_ends=period_ends,
                 line_items=line_items,
             )
@@ -324,7 +389,26 @@ class YFinanceClient:
                 f"Failed to parse {statement} statement for '{symbol}': {exc}"
             ) from exc
 
+    def _statement_currency(self, symbol: str, ticker: Any) -> str | None:
+        """The currency a statement is reported in, cached per symbol.
+
+        It comes from ``.info``, a different Yahoo endpoint than the statement itself, and
+        is the same for all six statement/period combinations — so it is cached under its
+        own key rather than re-requested per statement against a rate-limited source.
+        Best-effort: a failed read leaves the statement unlabelled instead of failing it,
+        and is NOT cached, because a rate limit says nothing about the reporting currency.
+        """
+        try:
+            return self._cached(
+                ("statement_currency", symbol),
+                self._fundamentals_ttl,
+                lambda: _read_statement_currency(ticker),
+            )
+        except Exception:  # labelling is best-effort, never fatal
+            return None
+
     def get_company_profile(self, symbol: str) -> CompanyProfile:
+        symbol = _norm(symbol)
         return self._cached(
             ("profile", symbol), self._fundamentals_ttl, lambda: self._fetch_profile(symbol)
         )
@@ -354,6 +438,7 @@ class YFinanceClient:
             raise DataUnavailable(f"Failed to parse profile for '{symbol}': {exc}") from exc
 
     def get_key_metrics(self, symbol: str) -> KeyMetrics:
+        symbol = _norm(symbol)
         return self._cached(
             ("metrics", symbol), self._fundamentals_ttl, lambda: self._fetch_metrics(symbol)
         )
@@ -363,6 +448,8 @@ class YFinanceClient:
         try:
             return KeyMetrics(
                 symbol=symbol,
+                currency=info.get("currency"),
+                financial_currency=info.get("financialCurrency"),
                 trailing_pe=_opt(info.get("trailingPE")),
                 forward_pe=_opt(info.get("forwardPE")),
                 price_to_book=_opt(info.get("priceToBook")),
@@ -393,6 +480,7 @@ class YFinanceClient:
             raise DataUnavailable(f"Failed to parse metrics for '{symbol}': {exc}") from exc
 
     def get_analyst_data(self, symbol: str) -> AnalystData:
+        symbol = _norm(symbol)
         return self._cached(
             ("analyst", symbol),
             self._fundamentals_ttl,
@@ -434,6 +522,7 @@ class YFinanceClient:
             raise DataUnavailable(f"Failed to parse analyst data for '{symbol}': {exc}") from exc
 
     def get_news(self, symbol: str, count: int = 10) -> NewsResult:
+        symbol = _norm(symbol)
         return self._cached(
             ("news", symbol, str(count)),
             self._history_ttl,
@@ -443,8 +532,6 @@ class YFinanceClient:
     def _fetch_news(self, symbol: str, count: int) -> NewsResult:
         try:
             items = self._ticker(symbol).get_news(count=count, tab="news")
-        except YFException as exc:
-            raise DataUnavailable(f"Failed to fetch news for '{symbol}': {exc}") from exc
         except Exception as exc:  # a failed news fetch is a data issue, not a missing symbol
             raise DataUnavailable(f"Failed to fetch news for '{symbol}': {exc}") from exc
         if not items:
@@ -484,6 +571,105 @@ def _elapsed_days(start: str, end: str) -> int:
     both a bare date ("2024-01-01") and a full intraday timestamp with offset.
     """
     return (datetime.fromisoformat(end).date() - datetime.fromisoformat(start).date()).days
+
+
+def _label_key(label: str) -> str:
+    """Comparison key for a line-item label: case- and whitespace-insensitive."""
+    return " ".join(label.split()).casefold()
+
+
+def _filter_line_items(full: FinancialStatement, requested: list[str]) -> FinancialStatement:
+    """Narrow a statement to the requested labels, reporting whatever did not match.
+
+    Labels are matched on _label_key, so 'total revenue' finds 'Total Revenue' (the exact
+    Yahoo spelling is easy to get almost right). Anything still unmatched is reported in
+    missing_line_items with close-match suggestions and the full label list, instead of
+    being dropped silently and leaving the caller to wonder why the statement is short.
+    """
+    available = list(full.line_items)
+    by_key = {_label_key(label): label for label in available}
+    wanted: dict[str, list[float | None]] = {}
+    missing: list[str] = []
+    for label in requested:
+        match = by_key.get(_label_key(label))
+        if match is None:
+            if label not in missing:
+                missing.append(label)
+        else:
+            wanted.setdefault(match, full.line_items[match])
+    suggestions = {}
+    for label in missing:
+        close = difflib.get_close_matches(_label_key(label), list(by_key), n=3, cutoff=0.6)
+        if close:
+            suggestions[label] = [by_key[key] for key in close]
+    return full.model_copy(
+        update={
+            "line_items": wanted,
+            "missing_line_items": missing,
+            "available_line_items": available if missing else [],
+            "line_item_suggestions": suggestions,
+        }
+    )
+
+
+def _read_statement_currency(ticker: Any) -> str | None:
+    """financialCurrency, else the quote currency; None when Yahoo reports neither."""
+    info = ticker.info or {}
+    currency = info.get("financialCurrency") or info.get("currency")
+    return str(currency) if currency else None
+
+
+def _bar_date(idx: Any, intraday: bool) -> str:
+    """Format a bar's index value.
+
+    Intraday bars are moments, so they keep the clock time and the exchange's UTC offset
+    (2026-09-25T09:35:00-04:00). Daily and longer bars are whole sessions indexed at
+    midnight in the exchange's timezone, so they stay date-only — emitting the timestamp
+    would imply a trade time, and normalizing it to UTC would shift the calendar date.
+    """
+    return str(idx.isoformat() if intraday else idx.date().isoformat())
+
+
+def _norm(symbol: str) -> str:
+    """Normalize a ticker so equivalent spellings share one cache entry and one fetch.
+
+    Yahoo symbols are upper-case; callers routinely pass 'aapl' or 'AAPL '. Normalizing
+    here (before the cache key is built) is also what makes the echoed symbol canonical.
+    """
+    normalized = symbol.strip().upper()
+    if not normalized:
+        raise SymbolNotFound("Empty ticker symbol.")
+    return normalized
+
+
+# Signals that genuinely mean "Yahoo has no data for this symbol". KeyError is what
+# fast_info leaks for an unknown symbol; YFTickerMissingError covers yfinance's own
+# missing-ticker/timezone/prices errors (YFTzMissingError and YFPricesMissingError
+# subclass it). Anything outside this set is treated as a source/transport failure.
+_NO_DATA_ERRORS = (KeyError, YFTickerMissingError)
+
+
+def _is_no_data_error(exc: Exception) -> bool:
+    """True only for "this symbol has no data" signals — never for transport failures."""
+    if isinstance(exc, _NO_DATA_ERRORS):
+        return True
+    # yfinance calls response.raise_for_status(), so Yahoo's 404 for an unknown symbol
+    # escapes as a raw HTTP error from its HTTP client rather than a YFException.
+    if getattr(getattr(exc, "response", None), "status_code", None) == 404:
+        return True
+    return "quote not found" in str(exc).lower()
+
+
+def _data_error(exc: Exception, fetch_label: str, kind: str, symbol: str) -> DataUnavailable:
+    """Classify a raw fetch failure as a missing symbol or an unavailable source.
+
+    A connection reset, DNS failure, timeout, HTTP 5xx, rate limit or malformed payload
+    says nothing about the symbol, so it stays a DataUnavailable carrying the underlying
+    message; only the no-data signals become SymbolNotFound.
+    """
+    if _is_no_data_error(exc):
+        return SymbolNotFound(_no_data_msg(kind, symbol))
+    return DataUnavailable(f"Failed to fetch {fetch_label} for '{symbol}': {exc}")
 
 
 def _no_data_msg(kind: str, symbol: str) -> str:

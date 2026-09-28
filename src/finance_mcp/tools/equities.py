@@ -13,7 +13,7 @@ from finance_mcp.data.models import (
     HistoryPeriod,
     NewsResult,
     PriceHistory,
-    Quote,
+    QuoteResult,
     Statement,
     StatementPeriod,
     SymbolSearchResult,
@@ -28,13 +28,20 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
     @mcp.tool
     async def get_quote(
         tickers: Annotated[
-            list[str], Field(description="One or more ticker symbols, e.g. ['AAPL', 'MSFT'].")
+            list[str],
+            Field(
+                min_length=1,
+                max_length=25,
+                description="1-25 ticker symbols, e.g. ['AAPL', 'MSFT'].",
+            ),
         ],
-    ) -> list[Quote]:
-        """Current price snapshot for one or more tickers (price, change, ranges, market cap).
+    ) -> QuoteResult:
+        """Current price snapshots for up to 25 tickers (price, change, ranges, market cap).
 
-        Fails (with a message naming the offending ticker) if ANY ticker has no data; on
-        failure the caller should retry without the offending symbol.
+        Tickers are fetched in parallel and results are partial: successful quotes come back
+        in `quotes`, and any ticker that could not be fetched is named in `errors` with the
+        reason (invalid/delisted symbol vs. a source failure). One bad ticker does not
+        invalidate the rest, so there is no need to retry the whole batch.
         """
         return await run_data(lambda: client.get_quote(tickers))
 
@@ -67,15 +74,20 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
         line_items: Annotated[
             list[str] | None,
             Field(
-                description="Specific line-item labels to return (exactly as they appear in the "
-                "statement, e.g. 'Total Revenue'); omit for the full statement."
+                min_length=1,
+                description="Specific line-item labels to return (as they appear in the statement, "
+                "e.g. 'Total Revenue'; case and extra whitespace are ignored); omit for the full "
+                "statement.",
             ),
         ] = None,
     ) -> FinancialStatement:
         """Income statement, balance sheet, or cash flow.
 
-        Returns line items by period (most recent first); values are in the company's reporting
-        currency in absolute units (e.g. 416161000000 = 416.161 billion), null where not reported.
+        Returns line items by period (most recent first); values are in the currency named by
+        `currency` (the company's reporting currency, which can differ from the currency its
+        shares trade in) in absolute units (e.g. 416161000000 = 416.161 billion), null where not
+        reported. Filtered labels that do not exist are reported in `missing_line_items`, with
+        `available_line_items` and `line_item_suggestions` to retry from.
         """
         return await run_data(lambda: client.get_financials(ticker, statement, period, line_items))
 

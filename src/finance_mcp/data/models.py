@@ -143,10 +143,40 @@ class Quote(BaseModel):
     volume: float | None = Field(default=None, description="Last trade volume, in shares.")
 
 
+class QuoteError(BaseModel):
+    """Why one ticker in a get_quote batch could not be fetched."""
+
+    symbol: str = Field(
+        description="The ticker that failed, normalized (or exactly as given if it could not be)."
+    )
+    error: str = Field(
+        description="Why it failed: an invalid/delisted symbol, or a source/network failure. "
+        "Read it before retrying - retrying an invalid symbol will not help."
+    )
+
+
+class QuoteResult(BaseModel):
+    """Quotes for a batch of tickers: the ones that worked, plus per-ticker failures."""
+
+    quotes: list[Quote] = Field(
+        description="Successful quotes in the order their tickers were requested "
+        "(duplicate/equivalent spellings collapse to one entry)."
+    )
+    errors: list[QuoteError] = Field(
+        default_factory=list,
+        description="One entry per ticker that could not be fetched; empty when all succeeded. "
+        "A failed ticker does NOT invalidate the quotes that are present.",
+    )
+
+
 class PriceBar(BaseModel):
     """One OHLCV bar. Prices are auto-adjusted for splits and dividends."""
 
-    date: str = Field(description="Bar date (ISO 8601).")
+    date: str = Field(
+        description="Bar timestamp (ISO 8601). Date-only ('2026-09-25') for the daily and "
+        "longer intervals (1d/1wk/1mo), which cover whole sessions; a full timestamp with the "
+        "exchange's UTC offset ('2026-09-25T09:35:00-04:00') for intraday intervals (1m-1h)."
+    )
     open: float = Field(description="Adjusted open, in quote currency.")
     high: float = Field(description="Adjusted high, in quote currency.")
     low: float = Field(description="Adjusted low, in quote currency.")
@@ -157,8 +187,8 @@ class PriceBar(BaseModel):
 class PriceSummary(BaseModel):
     """Compact summary over the requested history window."""
 
-    start_date: str = Field(description="First bar date.")
-    end_date: str = Field(description="Last bar date.")
+    start_date: str = Field(description="First bar date/timestamp (see PriceBar.date).")
+    end_date: str = Field(description="Last bar date/timestamp (see PriceBar.date).")
     start_close: float = Field(description="Adjusted close of the first bar, in quote currency.")
     end_close: float = Field(description="Adjusted close of the last bar, in quote currency.")
     total_return_percent: float = Field(
@@ -188,12 +218,35 @@ class FinancialStatement(BaseModel):
     symbol: str = Field(description="Ticker symbol.")
     statement: Statement = Field(description="Which statement.")
     period: StatementPeriod = Field(description="Reporting period granularity.")
+    currency: str | None = Field(
+        default=None,
+        description="Currency (ISO 4217) the values are reported in: Yahoo's financialCurrency, "
+        "falling back to the quote currency. This can differ from the currency the shares trade "
+        "in (SAP reports in EUR while its US listing quotes in USD), so never compare absolute "
+        "figures across companies without checking it. Null if Yahoo does not report it.",
+    )
     period_ends: list[str] = Field(
         description="Period-end dates (ISO 8601), most recent first; values align to this order."
     )
     line_items: dict[str, list[float | None]] = Field(
         description="Line item label -> values aligned to period_ends, in the company's reporting "
         "currency in absolute units (e.g. 416161000000 = 416.161B); null if not reported."
+    )
+    missing_line_items: list[str] = Field(
+        default_factory=list,
+        description="Requested line-item labels that this statement does not contain. Labels are "
+        "matched ignoring case and extra whitespace, so anything listed here is genuinely a "
+        "different label - check line_item_suggestions and available_line_items and retry.",
+    )
+    available_line_items: list[str] = Field(
+        default_factory=list,
+        description="Every line-item label the statement contains. Populated only when some "
+        "requested label was missing (otherwise it would just repeat line_items' keys).",
+    )
+    line_item_suggestions: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description="For each missing label, the closest actual labels (e.g. 'Revenue' -> "
+        "'Total Revenue'). Omits labels with no close match.",
     )
 
 
@@ -253,16 +306,38 @@ class CompanyProfile(BaseModel):
 
 
 class KeyMetrics(BaseModel):
-    """Valuation / profitability / leverage ratios as reported by Yahoo. Units vary by field."""
+    """Valuation / profitability / leverage ratios as reported by Yahoo. Units vary by field.
+
+    Absolute amounts are NOT all in one currency: the financialData figures (total debt/cash,
+    free cash flow, EBITDA) are in ``financial_currency``, while the market-derived enterprise
+    value is in ``currency``. When the two differ (ADRs and other cross-listings) Yahoo's
+    derived per-share figures can also be internally inconsistent, so compare such companies
+    on the ratios rather than on absolute amounts.
+    """
 
     symbol: str = Field(description="Ticker symbol.")
+    currency: str | None = Field(
+        default=None,
+        description="Quote currency (ISO 4217, e.g. 'USD') the shares trade in; the unit for "
+        "enterprise_value and the EPS fields.",
+    )
+    financial_currency: str | None = Field(
+        default=None,
+        description="Currency (ISO 4217) the company reports its financials in (Yahoo's "
+        "financialCurrency); the unit for total_debt, total_cash, free_cashflow, ebitda, "
+        "revenue_per_share and book_value. May differ from `currency`, e.g. SAP reports in EUR "
+        "while its US listing quotes in USD.",
+    )
     trailing_pe: float | None = Field(default=None, description="Trailing P/E ratio.")
     forward_pe: float | None = Field(default=None, description="Forward P/E ratio.")
     price_to_book: float | None = Field(default=None, description="Price/book ratio.")
     price_to_sales: float | None = Field(default=None, description="Price/sales (TTM) ratio.")
     peg_ratio: float | None = Field(default=None, description="P/E-to-growth ratio.")
     enterprise_value: float | None = Field(
-        default=None, description="Enterprise value, in the reporting currency (absolute units)."
+        default=None,
+        description="Enterprise value in `currency` (absolute units). Yahoo derives it from "
+        "market cap, so for cross-listings whose share count and quote currency disagree it can "
+        "be badly wrong - sanity-check it against market_cap + total_debt - total_cash.",
     )
     ev_to_ebitda: float | None = Field(default=None, description="Enterprise value / EBITDA ratio.")
     ev_to_revenue: float | None = Field(
@@ -288,21 +363,29 @@ class KeyMetrics(BaseModel):
     current_ratio: float | None = Field(default=None, description="Current ratio.")
     quick_ratio: float | None = Field(default=None, description="Quick ratio.")
     total_debt: float | None = Field(
-        default=None, description="Total debt, in the reporting currency (absolute units)."
+        default=None, description="Total debt in `financial_currency` (absolute units)."
     )
     total_cash: float | None = Field(
-        default=None, description="Total cash, in the reporting currency (absolute units)."
+        default=None, description="Total cash in `financial_currency` (absolute units)."
     )
     free_cashflow: float | None = Field(
-        default=None, description="Free cash flow, in the reporting currency (absolute units)."
+        default=None, description="Free cash flow in `financial_currency` (absolute units)."
     )
     ebitda: float | None = Field(
-        default=None, description="EBITDA, in the reporting currency (absolute units)."
+        default=None, description="EBITDA in `financial_currency` (absolute units)."
     )
-    trailing_eps: float | None = Field(default=None, description="Trailing EPS, per share.")
-    forward_eps: float | None = Field(default=None, description="Forward EPS, per share.")
-    revenue_per_share: float | None = Field(default=None, description="Revenue per share.")
-    book_value: float | None = Field(default=None, description="Book value per share.")
+    trailing_eps: float | None = Field(
+        default=None, description="Trailing EPS, per share in `currency` (matches trailing_pe)."
+    )
+    forward_eps: float | None = Field(
+        default=None, description="Forward EPS, per share in `currency` (matches forward_pe)."
+    )
+    revenue_per_share: float | None = Field(
+        default=None, description="Revenue per share, in `financial_currency`."
+    )
+    book_value: float | None = Field(
+        default=None, description="Book value per share, in `financial_currency`."
+    )
 
 
 class RecommendationPeriod(BaseModel):
