@@ -33,8 +33,16 @@ class FakeClock:
         self.now += seconds
 
 
-def make_history_df(closes: list[float]) -> pd.DataFrame:
-    idx = pd.to_datetime(pd.date_range("2024-01-01", periods=len(closes), freq="D"))
+def make_history_df(
+    closes: list[float], *, start: str = "2024-01-01", freq: str = "D"
+) -> pd.DataFrame:
+    """Build a yfinance-shaped OHLCV frame.
+
+    ``freq`` picks the trading calendar: "D" gives consecutive calendar days (a 24/7
+    instrument such as crypto), "B" gives weekdays only (an equity). The defaults keep
+    every existing caller on the original 1-bar-per-calendar-day series.
+    """
+    idx = pd.to_datetime(pd.date_range(start, periods=len(closes), freq=freq))
     return pd.DataFrame(
         {
             "Open": closes,
