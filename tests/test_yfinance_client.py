@@ -2064,9 +2064,10 @@ def test_get_quote_empty_list_returns_empty_result() -> None:
 
 
 def test_get_quote_fetches_tickers_concurrently() -> None:
-    # Every fetch waits on a 4-party barrier, so this only completes if all four symbols
-    # are in flight at once; a sequential fetcher would block until the timeout.
-    symbols = ["AAA", "BBB", "CCC", "DDD"]
+    # Every fetch waits on the barrier, so this only completes if all the symbols are in
+    # flight at once; a sequential fetcher would block until the timeout. The party count
+    # tracks the worker bound so lowering QUOTE_MAX_WORKERS cannot deadlock the test.
+    symbols = [f"SYM{i}" for i in range(min(QUOTE_MAX_WORKERS, 4))]
     gate = threading.Barrier(len(symbols), timeout=10)
     client = _client(
         factory=fake_symbol_ticker_factory(fast_info=dict.fromkeys(symbols, QUOTE_FI), gate=gate)
