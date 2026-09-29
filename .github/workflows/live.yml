@@ -1,0 +1,79 @@
+name: Live contract tests
+
+# Separate from ci.yml and scheduled, because this one depends on a third party: Yahoo being
+# slow, throttling us or changing a payload must not block a PR, but does need noticing
+# within a day.
+on:
+  schedule:
+    # After the US close, so the previous session has settled. Off the hour because GitHub
+    # queues on-the-hour jobs behind everyone else's.
+    - cron: "17 7 * * *"
+  workflow_dispatch:
+
+# A scheduled run has no newer commit superseding it, and a half-finished one tells us
+# nothing, so never cancel in progress.
+concurrency:
+  group: live-contract-tests
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write # the failure step opens or comments on a tracking issue
+
+jobs:
+  live:
+    name: live contract tests (real Yahoo)
+    runs-on: ubuntu-latest
+    # Long enough for the retry backoff, short enough that a hung request frees the runner.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install uv
+        # Same exact pin as ci.yml; see the comment there about setup-uv's floating tags.
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+          python-version: "3.13"
+      - name: Install dependencies
+        run: uv sync
+      - name: Run the live contract suite
+        # 3.13 only: this tests our agreement with Yahoo, which does not vary by interpreter.
+        # pipefail so tee cannot mask a failing exit code.
+        run: |
+          set -o pipefail
+          make test-live 2>&1 | tee live-output.txt
+      - name: Summarize the run
+        if: always()
+        # A fully throttled run skips everything and still exits 0, so the counts go in the
+        # summary where that cannot read as a clean pass.
+        run: |
+          {
+            echo "## Live contract suite"
+            echo
+            echo '```'
+            tail -n 20 live-output.txt || echo "no output captured"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Report a contract failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        # One rolling issue: a week of red runs should be one thread, not seven duplicates.
+        run: |
+          set -euo pipefail
+          label=live-contract-failure
+          gh label create "$label" \
+            --description "The nightly live Yahoo contract suite is failing" \
+            --color B60205 2>/dev/null || true
+          body=$(printf 'The live contract suite failed.\n\nRun: %s\n\nLast lines:\n\n```\n%s\n```\n' \
+            "$RUN_URL" "$(tail -n 30 live-output.txt || true)")
+          existing=$(gh issue list --label "$label" --state open --limit 1 --json number \
+            --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "Live Yahoo contract suite is failing" \
+              --label "$label" --body "$body"
+          fi

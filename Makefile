@@ -1,10 +1,18 @@
-.PHONY: install test lint format typecheck security check build run clean
+.PHONY: install test test-live lint format typecheck security check build run clean
 
 install:
 	uv sync
 
 test:
 	uv run pytest
+
+# The opt-in contract suite against real Yahoo endpoints (tests/live/). `-m live` overrides
+# the `-m 'not live'` in addopts, and --no-cov drops the coverage gate: these tests exercise
+# the source's agreement with a live third party, not its line coverage, so counting them
+# would inflate the same percentage `make test` already gates. Not part of `make check`,
+# which stays offline; CI runs this nightly (.github/workflows/live.yml).
+test-live:
+	uv run pytest -m live --no-cov
 
 lint:
 	uv run ruff check .
