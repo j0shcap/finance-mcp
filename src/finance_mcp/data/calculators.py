@@ -8,6 +8,8 @@ is negative):
     PV + PMT*n + FV = 0                            (r == 0)
 """
 
+import calendar
+import datetime
 import math
 from collections.abc import Callable, Iterable
 from typing import Literal
@@ -629,6 +631,94 @@ def convert_rate(
         compounding=compounding,
         converted_rate=converted,
     )
+
+
+#: Longest settlement-to-maturity span the dated bond calculators will price. Mirrors
+#: ``tools/_inputs.MAX_BOND_YEARS``, which bounds the on-coupon tools' ``years_to_maturity``
+#: field; the dated span cannot be a static Field bound because it spans two arguments.
+#: ``tests/test_bond_dated_logic.py`` pins the two to the same value so they cannot drift.
+MAX_BOND_SPAN_YEARS = 100
+
+#: Average calendar year, used only to turn a settlement-to-maturity span into years for
+#: the bound above. Nothing priced depends on it; the day counts use exact dates.
+_DAYS_PER_YEAR = 365.25
+
+
+def _is_month_end(d: datetime.date) -> bool:
+    return d.day == calendar.monthrange(d.year, d.month)[1]
+
+
+def _add_months(d: datetime.date, months: int) -> datetime.date:
+    """Shift ``d`` by whole ``months``, preserving month-end and clamping short months.
+
+    Bond schedules roll by month, not by day, so the arithmetic has to answer two
+    questions the calendar leaves open. A month-end date stays at month-end (a 31 March
+    maturity pays on 30 September, which is what the Treasury schedules do), and a day
+    number the target month does not have is clamped to its last day (31 January + 1
+    month is 28 or 29 February, never 3 March).
+    """
+    total = d.year * 12 + (d.month - 1) + months
+    year, month = divmod(total, 12)
+    month += 1
+    last = calendar.monthrange(year, month)[1]
+    day = last if _is_month_end(d) else min(d.day, last)
+    return datetime.date(year, month, day)
+
+
+def _days_30_360_us(start: datetime.date, end: datetime.date) -> int:
+    """Days between two dates on the US (NASD) 30/360 day count -- Excel's ``basis=0``.
+
+    Every month counts as 30 days and every year as 360, after four adjustments applied
+    in this order (the order matters: the February rules feed the day-31 rules):
+
+    1. both dates are the last day of February -> the end day becomes 30;
+    2. the start date is the last day of February -> the start day becomes 30;
+    3. the end day is 31 and the start day is 30 or 31 -> the end day becomes 30;
+    4. the start day is 31 -> the start day becomes 30.
+    """
+    start_day, end_day = start.day, end.day
+    if start.month == 2 and _is_month_end(start):
+        if end.month == 2 and _is_month_end(end):
+            end_day = 30
+        start_day = 30
+    if end_day == 31 and start_day >= 30:
+        end_day = 30
+    if start_day == 31:
+        start_day = 30
+    return 360 * (end.year - start.year) + 30 * (end.month - start.month) + (end_day - start_day)
+
+
+def _coupon_schedule(
+    settlement: datetime.date, maturity: datetime.date, frequency: int
+) -> tuple[datetime.date, datetime.date, int]:
+    """Resolve the coupon period containing ``settlement``, working back from maturity.
+
+    Returns ``(previous_coupon, next_coupon, periods_remaining)``. Coupon dates are
+    generated backward from ``maturity`` in steps of ``12 // frequency`` months, so the
+    schedule is anchored on the maturity day-of-month -- the market convention, and the
+    only end that is always a real payment date. ``periods_remaining`` counts the coupons
+    still to be paid, ``next_coupon`` through ``maturity`` inclusive.
+
+    Settlement exactly on a coupon date yields that date as ``previous_coupon``: a fresh
+    period has just begun, so nothing has accrued yet.
+
+    Each date is recomputed from ``maturity`` rather than from the previous step, so the
+    month-end rule cannot ratchet a schedule off its anchor day (stepping 31 March back
+    one month at a time would reach 28 February and stay there).
+
+    Assumes a regular schedule: every period is a whole ``12 // frequency`` months. Odd
+    (long or short) first or last coupon periods are out of scope. Requires
+    ``settlement < maturity``; callers validate that first.
+    """
+    step = 12 // frequency
+    periods = 1
+    next_coupon = maturity
+    previous = _add_months(maturity, -step)
+    while previous > settlement:
+        periods += 1
+        next_coupon = previous
+        previous = _add_months(maturity, -step * periods)
+    return previous, next_coupon, periods
 
 
 def bond_price(
