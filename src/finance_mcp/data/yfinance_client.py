@@ -21,10 +21,12 @@ import yfinance as yf
 from yfinance.exceptions import YFTickerMissingError
 
 from finance_mcp.data import analytics
-from finance_mcp.data.errors import DataUnavailable, SymbolNotFound
+from finance_mcp.data.errors import DataUnavailable, InvalidInput, SymbolNotFound
 from finance_mcp.data.models import (
     AnalystData,
+    BenchmarkComparison,
     CompanyProfile,
+    ComparisonError,
     DividendEvent,
     FinancialStatement,
     KeyMetrics,
@@ -43,6 +45,8 @@ from finance_mcp.data.models import (
     StatementPeriod,
     SymbolMatch,
     SymbolSearchResult,
+    TickerComparison,
+    TickerComparisonRow,
 )
 
 DEFAULT_MAX_BARS = 260
@@ -55,6 +59,14 @@ MAX_CACHEABLE_BARS = 2000
 # Quotes in a batch are independent single requests, so they are fetched in parallel; the
 # bound keeps a large batch from opening a connection per ticker at once.
 QUOTE_MAX_WORKERS = 8
+# A benchmark comparison is two independent history fetches; both go through
+# _fetch_concurrently under this bound.
+BENCHMARK_MAX_WORKERS = 2
+# The fewest shared closes that yield a single return to compare.
+MIN_OVERLAP_OBSERVATIONS = 2
+# Each comparison row costs two Yahoo calls (history + info), so the worker bound is lower
+# than the quote bound for the same ceiling on concurrent connections.
+COMPARE_MAX_WORKERS = 5
 # Intervals whose bars are points in time rather than whole sessions. Kept in sync with
 # HistoryInterval (a test pins it): everything that is not a daily-or-longer interval.
 _INTRADAY_INTERVALS = frozenset({"1m", "5m", "15m", "30m", "1h"})
@@ -169,26 +181,37 @@ class YFinanceClient:
             raise SymbolNotFound(_no_data_msg(kind, symbol))
         return ticker, info
 
+    def _normalize_batch(self, symbols: list[str]) -> tuple[list[str], list[tuple[str, str]]]:
+        """Normalize, de-duplicate and order a batch; returns (pending, (raw, reason) pairs).
+
+        Shared by get_quote and compare_tickers, which wrap the failures in their own error
+        models. A symbol that cannot even be normalized never reaches the network.
+        """
+        pending: list[str] = []  # normalized, de-duped, in request order
+        failures: list[tuple[str, str]] = []
+        for raw in symbols:
+            try:
+                symbol = _norm(raw)
+            except DataUnavailable as exc:
+                failures.append((raw, str(exc)))
+                continue
+            if symbol not in pending:
+                pending.append(symbol)
+        return pending, failures
+
     def get_quote(self, symbols: list[str]) -> QuoteResult:
         """Fetch quotes for a batch of symbols concurrently, with partial results.
 
         A batch is a set of independent lookups, so one unknown or unreachable ticker
         reports itself in ``errors`` instead of discarding the quotes that did work.
         """
-        pending: list[str] = []  # normalized, de-duped, in request order
-        errors: list[QuoteError] = []
-        for raw in symbols:
-            try:
-                symbol = _norm(raw)
-            except DataUnavailable as exc:
-                errors.append(QuoteError(symbol=raw, error=str(exc)))
-                continue
-            if symbol not in pending:
-                pending.append(symbol)
+        pending, failures = self._normalize_batch(symbols)
+        errors: list[QuoteError] = [
+            QuoteError(symbol=raw, error=reason) for raw, reason in failures
+        ]
         if not pending:
             return QuoteResult(quotes=[], errors=errors)
-        with ThreadPoolExecutor(max_workers=min(QUOTE_MAX_WORKERS, len(pending))) as pool:
-            fetched = list(pool.map(self._quote_or_error, pending))  # map keeps input order
+        fetched = _fetch_concurrently(pending, self._quote_or_error, QUOTE_MAX_WORKERS)
         errors.extend(r for r in fetched if isinstance(r, QuoteError))
         return QuoteResult(quotes=[r for r in fetched if isinstance(r, Quote)], errors=errors)
 
@@ -322,18 +345,25 @@ class YFinanceClient:
             truncated=truncated,
         )
 
-    def analyze_performance(self, symbol: str, period: str) -> PerformanceStats:
+    def analyze_performance(
+        self, symbol: str, period: str, risk_free_rate: float = 0.0
+    ) -> PerformanceStats:
         symbol = _norm(symbol)
         # The bars this reads are usually cached by _all_bars, but a history past
         # MAX_CACHEABLE_BARS is not retained -- without an entry here every call to a long
         # window would go back to the network. PerformanceStats is a few hundred bytes.
+        # risk_free_rate is part of the key because the Sharpe, Sortino and downside figures
+        # are computed from it: keying on (symbol, period) alone would serve the first
+        # caller's rate to every later one.
         return self._cached(
-            ("performance", symbol, period),
+            ("performance", symbol, period, str(risk_free_rate)),
             self._history_ttl,
-            lambda: self._compute_performance(symbol, period),
+            lambda: self._compute_performance(symbol, period, risk_free_rate),
         )
 
-    def _compute_performance(self, symbol: str, period: str) -> PerformanceStats:
+    def _compute_performance(
+        self, symbol: str, period: str, risk_free_rate: float = 0.0
+    ) -> PerformanceStats:
         bars = self._all_bars(symbol, period, "1d")
         if len(bars) < 2:
             raise DataUnavailable(
@@ -347,11 +377,22 @@ class YFinanceClient:
         annualized_return: float | None = None
         annualized_volatility: float | None = None
         periods_per_year: float | None = None
+        # Every risk-adjusted figure is scaled by periods_per_year (Calmar needs the CAGR),
+        # so they all sit behind the same gate rather than falling back on a fixed 252.
+        sharpe: float | None = None
+        sortino: float | None = None
+        downside: float | None = None
+        calmar: float | None = None
+        max_drawdown = analytics.max_drawdown(closes)
         if elapsed_days >= MIN_ANNUALIZATION_DAYS:
             years = elapsed_days / analytics.DAYS_PER_YEAR
             periods_per_year = analytics.infer_periods_per_year(len(bars), years)
             annualized_return = analytics.annualized_return(closes, years)
             annualized_volatility = analytics.annualized_volatility(closes, periods_per_year)
+            sharpe = analytics.sharpe_ratio(closes, periods_per_year, risk_free_rate)
+            sortino = analytics.sortino_ratio(closes, periods_per_year, risk_free_rate)
+            downside = analytics.downside_deviation(closes, periods_per_year, risk_free_rate)
+            calmar = analytics.calmar_ratio(annualized_return, max_drawdown)
         return PerformanceStats(
             symbol=symbol,
             period=period,
@@ -362,9 +403,163 @@ class YFinanceClient:
             annualized_return_percent=annualized_return,
             annualized_volatility_percent=annualized_volatility,
             periods_per_year=periods_per_year,
-            max_drawdown_percent=analytics.max_drawdown(closes),
+            max_drawdown_percent=max_drawdown,
+            risk_free_rate=risk_free_rate,
+            sharpe_ratio=sharpe,
+            sortino_ratio=sortino,
+            downside_deviation_percent=downside,
+            calmar_ratio=calmar,
             sma_50=analytics.sma(closes, SMA_SHORT_WINDOW),
             sma_200=analytics.sma(closes, SMA_LONG_WINDOW),
+        )
+
+    def compare_to_benchmark(
+        self, symbol: str, benchmark: str, period: str, risk_free_rate: float = 0.0
+    ) -> BenchmarkComparison:
+        """Benchmark-relative statistics over the dates the two instruments share.
+
+        The two histories are independent fetches, so they run in parallel; both are the
+        same cached ``_all_bars`` entries the other analytics tools use.
+        """
+        symbol, bench = _norm(symbol), _norm(benchmark)
+        if symbol == bench:
+            raise InvalidInput(
+                f"A benchmark comparison needs two different symbols; '{symbol}' was given "
+                "for both. Use analyze_performance for a single instrument."
+            )
+        asset_bars, bench_bars = _fetch_concurrently(
+            [symbol, bench],
+            lambda s: self._all_bars(s, period, "1d"),
+            BENCHMARK_MAX_WORKERS,
+        )
+        dates, asset_closes, bench_closes = analytics.align_closes(
+            [(b.date, b.close) for b in asset_bars], [(b.date, b.close) for b in bench_bars]
+        )
+        if len(dates) < MIN_OVERLAP_OBSERVATIONS:
+            raise DataUnavailable(
+                f"'{symbol}' and '{bench}' have only {len(dates)} overlapping daily close(s) "
+                f"over '{period}', so there is nothing to compare. Try a longer period, or "
+                "check that both symbols traded over this window."
+            )
+        elapsed_days = _elapsed_days(dates[0], dates[-1])
+        periods_per_year: float | None = None
+        asset_cagr: float | None = None
+        bench_cagr: float | None = None
+        tracking: float | None = None
+        info_ratio: float | None = None
+        # Beta and correlation are unit-free and need no calendar, so they are computed
+        # unconditionally; everything annualized sits behind the same 90-day gate
+        # analyze_performance uses.
+        asset_beta = analytics.beta(asset_closes, bench_closes)
+        if elapsed_days >= MIN_ANNUALIZATION_DAYS:
+            years = elapsed_days / analytics.DAYS_PER_YEAR
+            periods_per_year = analytics.infer_periods_per_year(len(dates), years)
+            asset_cagr = analytics.annualized_return(asset_closes, years)
+            bench_cagr = analytics.annualized_return(bench_closes, years)
+            tracking = analytics.tracking_error(asset_closes, bench_closes, periods_per_year)
+            info_ratio = analytics.information_ratio(asset_closes, bench_closes, periods_per_year)
+        alpha: float | None = None
+        if asset_beta is not None and asset_cagr is not None and bench_cagr is not None:
+            alpha = analytics.jensen_alpha(asset_cagr, bench_cagr, asset_beta, risk_free_rate)
+        asset_total = analytics.total_return(asset_closes)
+        bench_total = analytics.total_return(bench_closes)
+        return BenchmarkComparison(
+            symbol=symbol,
+            benchmark=bench,
+            period=period,
+            overlapping_observations=len(dates),
+            start_date=dates[0],
+            end_date=dates[-1],
+            periods_per_year=periods_per_year,
+            risk_free_rate=risk_free_rate,
+            total_return_percent=asset_total,
+            benchmark_total_return_percent=bench_total,
+            excess_return_percent=asset_total - bench_total,
+            annualized_return_percent=asset_cagr,
+            benchmark_annualized_return_percent=bench_cagr,
+            beta=asset_beta,
+            correlation=analytics.correlation(asset_closes, bench_closes),
+            alpha_percent=alpha,
+            tracking_error_percent=tracking,
+            information_ratio=info_ratio,
+        )
+
+    def compare_tickers(
+        self, symbols: list[str], period: str, risk_free_rate: float = 0.0
+    ) -> TickerComparison:
+        """Side-by-side performance and valuation for a small batch, fetched concurrently.
+
+        Each row is two independent lookups over the cached fetchers the single-ticker tools
+        already use, so a batch costs no more than calling them one at a time -- and one
+        ticker's failure reports itself instead of discarding the rows that worked.
+        """
+        pending, failures = self._normalize_batch(symbols)
+        errors = [ComparisonError(symbol=raw, error=reason) for raw, reason in failures]
+        built = _fetch_concurrently(
+            pending,
+            lambda s: self._comparison_row(s, period, risk_free_rate),
+            COMPARE_MAX_WORKERS,
+        )
+        rows = [r for r in built if isinstance(r, TickerComparisonRow)]
+        errors.extend(r for r in built if isinstance(r, ComparisonError))
+        base_currency = next((row.currency for row in rows if row.currency), None)
+        for row in rows:
+            row.currency_differs = row.currency is not None and row.currency != base_currency
+        return TickerComparison(
+            period=period,
+            risk_free_rate=risk_free_rate,
+            base_currency=base_currency,
+            mixed_currencies=any(row.currency_differs for row in rows),
+            rows=rows,
+            errors=errors,
+        )
+
+    def _comparison_row(
+        self, symbol: str, period: str, risk_free_rate: float
+    ) -> TickerComparisonRow | ComparisonError:
+        """One ticker's row, or the reason it has none.
+
+        Performance is the row's backbone: without it there is nothing to compare, so a
+        history failure becomes a ComparisonError. Valuation metrics are supplementary, so a
+        metrics failure leaves the row in place with those fields null and the reason in
+        metrics_error -- dropping a whole row because Yahoo's ``info`` blipped would lose the
+        return figures that did arrive.
+        """
+        try:
+            perf = self._compute_performance(symbol, period, risk_free_rate)
+        except DataUnavailable as exc:
+            return ComparisonError(symbol=symbol, error=str(exc))
+        metrics: KeyMetrics | None = None
+        metrics_error: str | None = None
+        try:
+            metrics = self.get_key_metrics(symbol)
+        except DataUnavailable as exc:
+            metrics_error = str(exc)
+        return TickerComparisonRow(
+            symbol=symbol,
+            currency=metrics.currency if metrics else None,
+            financial_currency=metrics.financial_currency if metrics else None,
+            bars=perf.bars,
+            start_date=perf.start_date,
+            end_date=perf.end_date,
+            total_return_percent=perf.total_return_percent,
+            annualized_return_percent=perf.annualized_return_percent,
+            annualized_volatility_percent=perf.annualized_volatility_percent,
+            max_drawdown_percent=perf.max_drawdown_percent,
+            sharpe_ratio=perf.sharpe_ratio,
+            sortino_ratio=perf.sortino_ratio,
+            calmar_ratio=perf.calmar_ratio,
+            periods_per_year=perf.periods_per_year,
+            trailing_pe=metrics.trailing_pe if metrics else None,
+            forward_pe=metrics.forward_pe if metrics else None,
+            price_to_book=metrics.price_to_book if metrics else None,
+            price_to_sales=metrics.price_to_sales if metrics else None,
+            peg_ratio=metrics.peg_ratio if metrics else None,
+            ev_to_ebitda=metrics.ev_to_ebitda if metrics else None,
+            profit_margins=metrics.profit_margins if metrics else None,
+            return_on_equity=metrics.return_on_equity if metrics else None,
+            debt_to_equity=metrics.debt_to_equity if metrics else None,
+            metrics_error=metrics_error,
         )
 
     def get_financials(
@@ -594,6 +789,20 @@ class YFinanceClient:
             return SymbolSearchResult(query=query, matches=matches)
         except Exception as exc:  # surface any parsing failure verbatim
             raise DataUnavailable(f"Failed to parse search results for '{query}': {exc}") from exc
+
+
+def _fetch_concurrently[T](
+    items: list[str], fetch: Callable[[str], T], max_workers: int
+) -> list[T]:
+    """Run ``fetch`` over ``items`` in parallel, preserving input order.
+
+    Independent single-symbol lookups have no reason to serialize. ``pool.map`` keeps the
+    results in request order so callers can pair them back up positionally.
+    """
+    if not items:
+        return []
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(items))) as pool:
+        return list(pool.map(fetch, items))
 
 
 def _elapsed_days(start: str, end: str) -> int:

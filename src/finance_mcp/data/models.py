@@ -550,9 +550,281 @@ class PerformanceStats(BaseModel):
     max_drawdown_percent: float = Field(
         description="Largest peak-to-trough decline, as a negative percent (e.g. -23.4 = -23.4%)."
     )
+    risk_free_rate: float = Field(
+        default=0.0,
+        description=(
+            "Annual risk-free rate used for the risk-adjusted figures, as a decimal "
+            "(0.045 = 4.5%). Defaults to 0, which makes sharpe_ratio and sortino_ratio RAW "
+            "return per unit of risk rather than excess-return figures - pass a T-bill yield "
+            "to compare against cash. Echoed even when the window is too short to use it."
+        ),
+    )
+    sharpe_ratio: float | None = Field(
+        default=None,
+        description=(
+            "Annualized Sharpe ratio: mean return in excess of risk_free_rate divided by the "
+            "standard deviation of those excess returns, scaled by periods_per_year. "
+            "Dimensionless, so it is comparable across instruments. Null when the window is "
+            "under 85 days (no periods_per_year to scale by) or the returns never varied."
+        ),
+    )
+    sortino_ratio: float | None = Field(
+        default=None,
+        description=(
+            "Annualized Sortino ratio: the same numerator as sharpe_ratio, but divided by "
+            "downside_deviation instead of total volatility, so upside swings are not "
+            "penalized. When the numerator is POSITIVE it sits above the Sharpe if the "
+            "dispersion was mostly upside; when the numerator is negative the comparison "
+            "inverts, so only read the gap between the two on a positive Sharpe. Null "
+            "when the window is under 85 days or nothing fell below the risk-free target - "
+            "null there means 'no downside observed', not 'bad'."
+        ),
+    )
+    downside_deviation_percent: float | None = Field(
+        default=None,
+        description=(
+            "Annualized dispersion of returns BELOW risk_free_rate, percent - the "
+            "denominator of sortino_ratio. Measured as a root-mean-square shortfall below "
+            "the target rather than a spread around the mean, so it can EXCEED "
+            "annualized_volatility_percent when most returns fell short. Null when the "
+            "window is under 85 days; 0.0 means no return fell below the target."
+        ),
+    )
+    calmar_ratio: float | None = Field(
+        default=None,
+        description=(
+            "annualized_return_percent divided by the magnitude of max_drawdown_percent: "
+            "compound return per unit of worst peak-to-trough pain. Dimensionless. Null when "
+            "the window is under 85 days or the series never drew down."
+        ),
+    )
     sma_50: float | None = Field(
         default=None, description="50-day simple moving average; null if < 50 bars."
     )
     sma_200: float | None = Field(
         default=None, description="200-day simple moving average; null if < 200 bars."
+    )
+
+
+class BenchmarkComparison(BaseModel):
+    """How one instrument performed relative to a benchmark over the dates they share.
+
+    Both series are daily auto-adjusted closes, INNER-JOINED on date: a 24/7 instrument's
+    weekend closes are dropped because the benchmark has none, so the asset's weekend move
+    lands in the following session's return. ``overlapping_observations`` is the number of
+    shared dates actually used - read it before trusting any figure here, since a thin
+    overlap (a recent listing, a long halt) makes every statistic noisy.
+
+    Returns are in each instrument's own quote currency. Comparing a non-USD listing against
+    a USD benchmark therefore mixes an FX move into beta, alpha and excess return; compare
+    like-for-like listings, or treat a cross-currency figure as indicative only.
+    """
+
+    symbol: str = Field(description="Ticker symbol analyzed.")
+    benchmark: str = Field(description="Benchmark ticker compared against.")
+    period: str = Field(description="Look-back window requested, e.g. '1y'.")
+    overlapping_observations: int = Field(
+        description="Daily closes the two instruments share over the window, after the "
+        "inner join on date. Fewer than the asset's own bar count whenever the calendars "
+        "differ (a 7-day crypto series against a 5-day equity benchmark)."
+    )
+    start_date: str = Field(description="First shared close date (ISO 8601).")
+    end_date: str = Field(description="Last shared close date (ISO 8601).")
+    periods_per_year: float | None = Field(
+        default=None,
+        description="Observations per year inferred from the OVERLAPPING dates - roughly "
+        "252 when either leg trades weekdays only, even if the other trades every day. "
+        "Null when the overlap spans under 90 days.",
+    )
+    risk_free_rate: float = Field(
+        default=0.0,
+        description="Annual risk-free rate used for alpha, as a decimal (0.045 = 4.5%). "
+        "Defaults to 0; with a beta of exactly 1 it cancels out of alpha entirely.",
+    )
+    total_return_percent: float = Field(
+        description="The asset's total return over the shared dates (e.g. 12.3 = 12.3%)."
+    )
+    benchmark_total_return_percent: float = Field(
+        description="The benchmark's total return over the same shared dates."
+    )
+    excess_return_percent: float = Field(
+        description="total_return_percent minus benchmark_total_return_percent, in "
+        "percentage POINTS. A simple difference, not a ratio and not beta-adjusted - for "
+        "the beta-adjusted version read alpha_percent."
+    )
+    annualized_return_percent: float | None = Field(
+        default=None,
+        description="The asset's CAGR over the shared dates, percent. Null when the "
+        "overlap spans under 90 days.",
+    )
+    benchmark_annualized_return_percent: float | None = Field(
+        default=None,
+        description="The benchmark's CAGR over the same shared dates, percent. Null when "
+        "the overlap spans under 90 days.",
+    )
+    beta: float | None = Field(
+        default=None,
+        description="Sensitivity to the benchmark: 1.0 moves with it, above 1 amplifies "
+        "it, negative moves against it. Null when the overlap has under two returns or "
+        "the benchmark never moved.",
+    )
+    correlation: float | None = Field(
+        default=None,
+        description="Pearson correlation of the daily returns, -1 to 1. Read it alongside "
+        "beta: a large beta at a low correlation means the moves are big but unrelated, so "
+        "the beta explains little. Null when either series never moved.",
+    )
+    alpha_percent: float | None = Field(
+        default=None,
+        description="Annualized Jensen's alpha in percentage POINTS: (Ra - Rf) - beta * "
+        "(Rb - Rf), the return earned beyond what the beta exposure predicted. Null when "
+        "beta or either annualized return is null.",
+    )
+    tracking_error_percent: float | None = Field(
+        default=None,
+        description="Annualized standard deviation of the daily active return (asset minus "
+        "benchmark), percent. 0 for a perfect tracker. Null when the overlap spans under "
+        "90 days.",
+    )
+    information_ratio: float | None = Field(
+        default=None,
+        description="Mean active return per unit of tracking error, annualized and "
+        "dimensionless: how reliably the asset out- or under-performed rather than by how "
+        "much. Null when the overlap spans under 90 days or tracking error is zero.",
+    )
+
+
+class ComparisonError(BaseModel):
+    """Why one ticker in a compare_tickers batch has no row."""
+
+    symbol: str = Field(
+        description="The ticker that failed, normalized (or exactly as given if it could not be)."
+    )
+    error: str = Field(
+        description="Why no row could be built: an invalid/delisted symbol, too little price "
+        "history, or a source failure. Read it before retrying - retrying an invalid symbol "
+        "will not help."
+    )
+
+
+class TickerComparisonRow(BaseModel):
+    """One ticker's row in a side-by-side comparison: performance plus key valuation.
+
+    Performance figures come from daily auto-adjusted closes over the requested window
+    (returns therefore already include reinvested dividends); valuation figures are Yahoo's
+    as-reported ratios, with the units the get_key_metrics glossary describes. A row is
+    present whenever its price history was fetched, so the valuation fields can be null with
+    ``metrics_error`` explaining why.
+    """
+
+    symbol: str = Field(description="Ticker symbol.")
+    currency: str | None = Field(
+        default=None,
+        description="Quote currency (ISO 4217) this row's returns are denominated in.",
+    )
+    financial_currency: str | None = Field(
+        default=None,
+        description="Currency the company reports financials in. Differs from `currency` for "
+        "ADRs and other cross-listings, which makes its absolute amounts and `currency` "
+        "figures inconsistent - prefer ratios for such a row.",
+    )
+    currency_differs: bool = Field(
+        default=False,
+        description="True when this row's `currency` is known and differs from the table's "
+        "base_currency: its returns include an FX component the other rows do not, so do not "
+        "rank absolute amounts against them. False when the currency is unknown - a null "
+        "currency is unlabelled, not proven different.",
+    )
+    bars: int = Field(description="Daily closes used for this row's performance figures.")
+    start_date: str = Field(description="First close date (ISO 8601).")
+    end_date: str = Field(description="Last close date (ISO 8601).")
+    total_return_percent: float = Field(
+        description="Total return over the window (e.g. 12.3 = 12.3%)."
+    )
+    annualized_return_percent: float | None = Field(
+        default=None, description="CAGR over the window, percent; null under 90 days."
+    )
+    annualized_volatility_percent: float | None = Field(
+        default=None, description="Annualized volatility, percent; null under 90 days."
+    )
+    max_drawdown_percent: float = Field(
+        description="Largest peak-to-trough decline, as a negative percent."
+    )
+    sharpe_ratio: float | None = Field(
+        default=None,
+        description="Annualized Sharpe against the table's risk_free_rate; null under 90 days "
+        "or when returns never varied.",
+    )
+    sortino_ratio: float | None = Field(
+        default=None,
+        description="Annualized Sortino; null under 90 days or with no downside.",
+    )
+    calmar_ratio: float | None = Field(
+        default=None,
+        description="CAGR per unit of max drawdown; null under 90 days or with no drawdown.",
+    )
+    periods_per_year: float | None = Field(
+        default=None,
+        description="Trading periods per year inferred for THIS row (~252 for a weekday-traded "
+        "equity, ~365 for a 24/7 instrument), which scales its annualized and risk-adjusted "
+        "figures. Rows with different values were annualized on different calendars - say so "
+        "before ranking their volatility or Sharpe against each other. Null under 90 days.",
+    )
+    trailing_pe: float | None = Field(default=None, description="Trailing P/E ratio.")
+    forward_pe: float | None = Field(default=None, description="Forward P/E ratio.")
+    price_to_book: float | None = Field(default=None, description="Price/book ratio.")
+    price_to_sales: float | None = Field(default=None, description="Price/sales (TTM) ratio.")
+    peg_ratio: float | None = Field(
+        default=None,
+        description="P/E-to-growth ratio - the growth-adjusted multiple to rank on, rather "
+        "than raw P/E.",
+    )
+    ev_to_ebitda: float | None = Field(default=None, description="Enterprise value / EBITDA.")
+    profit_margins: float | None = Field(
+        default=None, description="Net profit margin as a FRACTION (0.27 = 27%)."
+    )
+    return_on_equity: float | None = Field(
+        default=None, description="Return on equity as a FRACTION (0.27 = 27%)."
+    )
+    debt_to_equity: float | None = Field(
+        default=None, description="Debt-to-equity as a PERCENT (79.5 = 79.5%), not a multiple."
+    )
+    metrics_error: str | None = Field(
+        default=None,
+        description="Set when the valuation metrics could not be fetched for this ticker, "
+        "leaving every valuation field above null. The performance figures are unaffected.",
+    )
+
+
+class TickerComparison(BaseModel):
+    """Side-by-side performance and valuation for a small set of tickers.
+
+    Results are partial, like get_quote: a ticker whose price history could not be fetched
+    appears in ``errors`` with no row, and one row's failure never discards the others. Rows
+    follow the order the tickers were requested (duplicate spellings collapse).
+    """
+
+    period: str = Field(description="Look-back window used for every row, e.g. '1y'.")
+    risk_free_rate: float = Field(
+        default=0.0,
+        description="Annual risk-free rate applied to every row's Sharpe and Sortino, as a "
+        "decimal (0.045 = 4.5%). Defaults to 0, making those raw rather than excess figures.",
+    )
+    base_currency: str | None = Field(
+        default=None,
+        description="The `currency` of the first row that reported one; the reference for each "
+        "row's currency_differs flag. Null when no row reported a currency.",
+    )
+    mixed_currencies: bool = Field(
+        default=False,
+        description="True when at least one row's currency differs from base_currency. The "
+        "returns in this table are then not in one unit: an FX move is mixed into the rows "
+        "that differ, so compare them on ratios and say so.",
+    )
+    rows: list[TickerComparisonRow] = Field(
+        description="One row per ticker whose price history was fetched, in request order."
+    )
+    errors: list[ComparisonError] = Field(
+        default_factory=list,
+        description="One entry per ticker that produced no row; empty when all succeeded.",
     )

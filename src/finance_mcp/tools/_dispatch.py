@@ -17,12 +17,14 @@ from finance_mcp.data.errors import DataUnavailable, InvalidInput
 async def run_data[T](call: Callable[[], T]) -> T:
     """Run a blocking yfinance-backed ``call`` off the event loop.
 
-    Translates DataUnavailable (and its SymbolNotFound subclass) into a ToolError whose
-    message is surfaced to the model.
+    Translates DataUnavailable (and its SymbolNotFound subclass) and InvalidInput into a
+    ToolError whose message is surfaced to the model. InvalidInput reaches here when a
+    data-layer precondition spans more than one argument -- comparing a symbol against
+    itself -- which no static Field bound can express.
     """
     try:
         return await asyncio.to_thread(call)
-    except DataUnavailable as exc:
+    except (DataUnavailable, InvalidInput) as exc:
         raise ToolError(str(exc)) from exc
 
 

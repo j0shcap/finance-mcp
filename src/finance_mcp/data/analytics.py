@@ -7,6 +7,10 @@ compounding, ``periods_per_year`` for scaling dispersion. Nothing here infers a 
 calendar from the bar count: how much wall-clock time a series spans is a property of the
 data source, not of this module, and baking in a constant (252) silently misstates any
 instrument that does not trade on the US equity calendar.
+
+The risk-adjusted and benchmark-relative statistics return None when a figure is not
+computable (too few returns, or a zero denominator) rather than 0.0, which would assert a
+result they have not measured.
 """
 
 import math
@@ -65,7 +69,7 @@ def annualized_volatility(closes: list[float], periods_per_year: float) -> float
     ``periods_per_year`` scales the per-observation dispersion up to a yearly figure; derive
     it from the data with :func:`infer_periods_per_year` rather than assuming 252.
     """
-    returns = [closes[t] / closes[t - 1] - 1 for t in range(1, len(closes))]
+    returns = simple_returns(closes)
     if len(returns) < 2:
         return 0.0
     return statistics.stdev(returns) * math.sqrt(periods_per_year) * 100
@@ -93,3 +97,229 @@ def sma(closes: list[float], window: int) -> float | None:
     if len(closes) < window:
         return None
     return statistics.fmean(closes[-window:])
+
+
+# --- risk-adjusted statistics ---------------------------------------------------------
+#
+# These return None when a statistic is not computable (fewer than two returns, or a zero
+# denominator) rather than 0.0: a Sharpe of 0.0 asserts "no excess return per unit of
+# risk", which is a different claim from "there is not enough data to say".
+
+
+def simple_returns(closes: list[float]) -> list[float]:
+    """Period-over-period simple returns as decimals (0.01 = +1%); [] for a single close."""
+    return [closes[t] / closes[t - 1] - 1 for t in range(1, len(closes))]
+
+
+def periodic_risk_free(annual_rate: float, periods_per_year: float) -> float:
+    """De-annualize an annual risk-free rate to one observation period, geometrically.
+
+    Compounding, not dividing: at 252 observations a year, dividing overstates the
+    per-period rate and so understates every excess return computed against it.
+    """
+    if annual_rate <= -1.0:
+        raise InvalidInput("risk_free_rate must be greater than -1 (i.e. above -100%).")
+    if periods_per_year <= 0:
+        raise InvalidInput("periods_per_year must be positive")
+    # Annotated intermediate: float ** float is typed Any (it can yield a complex).
+    growth: float = (1.0 + annual_rate) ** (1.0 / periods_per_year)
+    return growth - 1.0
+
+
+def _excess_returns(
+    closes: list[float], periods_per_year: float, risk_free_rate: float
+) -> list[float]:
+    """Per-observation returns net of the de-annualized risk-free rate."""
+    per_period = periodic_risk_free(risk_free_rate, periods_per_year)
+    return [r - per_period for r in simple_returns(closes)]
+
+
+def sharpe_ratio(
+    closes: list[float], periods_per_year: float, risk_free_rate: float = 0.0
+) -> float | None:
+    """Annualized Sharpe ratio: mean excess return over its standard deviation.
+
+    ``risk_free_rate`` is an annual decimal (0.045 = 4.5%); with the default 0.0 this is
+    raw return per unit of risk, not an excess-return figure. None when there are fewer
+    than two returns or the returns never vary.
+    """
+    excess = _excess_returns(closes, periods_per_year, risk_free_rate)
+    if len(excess) < 2:
+        return None
+    dispersion = statistics.stdev(excess)
+    if dispersion == 0.0:
+        return None
+    return statistics.fmean(excess) / dispersion * math.sqrt(periods_per_year)
+
+
+def _downside_dispersion(excess: list[float]) -> float:
+    """Root-mean-square SHORTFALL below the target, over every observation.
+
+    Averaging over all observations (not only the negative ones) is the standard downside
+    deviation: an instrument that rarely falls should score as low downside risk, which
+    averaging over the few negatives alone would hide.
+    """
+    return math.sqrt(statistics.fmean([min(0.0, e) ** 2 for e in excess]))
+
+
+def downside_deviation(
+    closes: list[float], periods_per_year: float, risk_free_rate: float = 0.0
+) -> float | None:
+    """Annualized downside deviation in percent; 0.0 when nothing fell below the target.
+
+    None with fewer than two returns, matching :func:`sharpe_ratio`.
+    """
+    excess = _excess_returns(closes, periods_per_year, risk_free_rate)
+    if len(excess) < 2:
+        return None
+    return _downside_dispersion(excess) * math.sqrt(periods_per_year) * 100
+
+
+def sortino_ratio(
+    closes: list[float], periods_per_year: float, risk_free_rate: float = 0.0
+) -> float | None:
+    """Annualized Sortino ratio: mean excess return over DOWNSIDE deviation only.
+
+    None with fewer than two returns, or when nothing fell below the risk-free target
+    (zero downside risk makes the ratio undefined rather than infinitely good).
+    """
+    excess = _excess_returns(closes, periods_per_year, risk_free_rate)
+    if len(excess) < 2:
+        return None
+    dispersion = _downside_dispersion(excess)
+    if dispersion == 0.0:
+        return None
+    return statistics.fmean(excess) / dispersion * math.sqrt(periods_per_year)
+
+
+def calmar_ratio(annualized_return_percent: float, max_drawdown_percent: float) -> float | None:
+    """CAGR per unit of worst peak-to-trough decline; None when there was no drawdown.
+
+    Both arguments are percents and the ratio is dimensionless. The drawdown is taken by
+    magnitude, so the caller may pass it with either sign.
+    """
+    if max_drawdown_percent == 0.0:
+        return None
+    return annualized_return_percent / abs(max_drawdown_percent)
+
+
+# --- benchmark-relative statistics -----------------------------------------------------
+
+
+def align_closes(
+    asset: list[tuple[str, float]], benchmark: list[tuple[str, float]]
+) -> tuple[list[str], list[float], list[float]]:
+    """Inner-join two dated close series on their dates; returns (dates, asset, benchmark).
+
+    An inner join is the only alignment that compares like with like. A 24/7 instrument
+    prints Saturday and Sunday closes an equity benchmark does not have, so the overlap is
+    the weekdays: the alternative -- carrying the Friday equity close across the weekend --
+    would feed the statistics two flat "sessions" that never traded, deflating the
+    benchmark's volatility and with it every beta computed against it. The cost is that
+    the asset's weekend moves are folded into the Monday return, which is what an investor
+    who could only trade the benchmark on weekdays actually experienced.
+
+    Dates are compared as the strings the data layer produced (ISO 8601, so lexical order
+    is chronological order) and returned oldest-first.
+    """
+    asset_by_date = dict(asset)
+    benchmark_by_date = dict(benchmark)
+    dates = sorted(asset_by_date.keys() & benchmark_by_date.keys())
+    return dates, [asset_by_date[d] for d in dates], [benchmark_by_date[d] for d in dates]
+
+
+def _paired_returns(
+    asset_closes: list[float], benchmark_closes: list[float]
+) -> tuple[list[float], list[float]]:
+    """Simple returns for two already-aligned close series, asserting they line up.
+
+    A length mismatch means the caller skipped :func:`align_closes`; silently zipping to
+    the shorter one would pair each asset return with the wrong day's benchmark return and
+    report a plausible, wrong beta.
+    """
+    if len(asset_closes) != len(benchmark_closes):
+        raise InvalidInput(
+            "asset and benchmark series must cover the same dates; align them first."
+        )
+    return simple_returns(asset_closes), simple_returns(benchmark_closes)
+
+
+def _active_returns(asset_closes: list[float], benchmark_closes: list[float]) -> list[float]:
+    """Per-observation return of the asset net of the benchmark's."""
+    a, b = _paired_returns(asset_closes, benchmark_closes)
+    return [x - y for x, y in zip(a, b, strict=True)]
+
+
+def beta(asset_closes: list[float], benchmark_closes: list[float]) -> float | None:
+    """Sensitivity of the asset's returns to the benchmark's: cov(a, b) / var(b).
+
+    None with fewer than two paired returns, or when the benchmark never moved.
+    """
+    a, b = _paired_returns(asset_closes, benchmark_closes)
+    if len(a) < 2:
+        return None
+    benchmark_variance = statistics.variance(b)
+    if benchmark_variance == 0.0:
+        return None
+    return statistics.covariance(a, b) / benchmark_variance
+
+
+def correlation(asset_closes: list[float], benchmark_closes: list[float]) -> float | None:
+    """Pearson correlation of the two return series, in [-1, 1].
+
+    None with fewer than two paired returns, or when either series never moved (a constant
+    series has no correlation with anything).
+    """
+    a, b = _paired_returns(asset_closes, benchmark_closes)
+    if len(a) < 2:
+        return None
+    if statistics.stdev(a) == 0.0 or statistics.stdev(b) == 0.0:
+        return None
+    return statistics.correlation(a, b)
+
+
+def jensen_alpha(
+    asset_annualized_return_percent: float,
+    benchmark_annualized_return_percent: float,
+    beta_value: float,
+    risk_free_rate: float,
+) -> float:
+    """Annualized Jensen's alpha in percent: return earned beyond what beta predicted.
+
+    (Ra - Rf) - beta * (Rb - Rf), with the returns in percent and ``risk_free_rate`` an
+    annual decimal (0.045 = 4.5%), converted here.
+    """
+    risk_free_percent = risk_free_rate * 100
+    return (asset_annualized_return_percent - risk_free_percent) - beta_value * (
+        benchmark_annualized_return_percent - risk_free_percent
+    )
+
+
+def tracking_error(
+    asset_closes: list[float], benchmark_closes: list[float], periods_per_year: float
+) -> float | None:
+    """Annualized standard deviation of the active (asset minus benchmark) return, percent.
+
+    None with fewer than two paired returns.
+    """
+    active = _active_returns(asset_closes, benchmark_closes)
+    if len(active) < 2:
+        return None
+    return statistics.stdev(active) * math.sqrt(periods_per_year) * 100
+
+
+def information_ratio(
+    asset_closes: list[float], benchmark_closes: list[float], periods_per_year: float
+) -> float | None:
+    """Annualized mean active return per unit of tracking error.
+
+    None with fewer than two paired returns, or when the asset tracked the benchmark
+    exactly (zero active risk makes the ratio undefined).
+    """
+    active = _active_returns(asset_closes, benchmark_closes)
+    if len(active) < 2:
+        return None
+    dispersion = statistics.stdev(active)
+    if dispersion == 0.0:
+        return None
+    return statistics.fmean(active) / dispersion * math.sqrt(periods_per_year)

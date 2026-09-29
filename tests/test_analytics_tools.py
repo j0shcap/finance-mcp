@@ -4,10 +4,16 @@ from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
 from finance_mcp.server import create_server
-from tests.conftest import fake_ticker_factory, make_client, make_history_df
+from tests.conftest import (
+    fake_multi_ticker_factory,
+    fake_ticker_factory,
+    make_client,
+    make_history_df,
+)
 
 METRICS_INFO = {
     "longName": "Apple Inc.",
+    "currency": "USD",
     "trailingPE": 37.73,
     "profitMargins": 0.271,
     "returnOnEquity": 1.41,
@@ -21,7 +27,7 @@ async def test_analytics_tools_registered() -> None:
     async with Client(server) as client:
         names = {t.name for t in await client.list_tools()}
         assert {"get_key_metrics", "analyze_performance"} <= names
-        assert len(names) == 19  # 18 prior + get_news
+        assert len(names) == 21  # 19 prior + compare_to_benchmark + compare_tickers
 
 
 async def test_get_key_metrics_tool() -> None:
@@ -89,3 +95,114 @@ async def test_analyze_performance_tool_invalid_errors() -> None:
     async with Client(server) as client:
         with pytest.raises(ToolError):
             await client.call_tool("analyze_performance", {"ticker": "BAD", "period": "1y"})
+
+
+async def test_analyze_performance_tool_reports_risk_adjusted_stats() -> None:
+    df = make_history_df([100.0 + (i % 5) + i * 0.3 for i in range(120)])
+    server = create_server(yf_client=make_client(factory=fake_ticker_factory(history_df=df)))
+    async with Client(server) as client:
+        result = await client.call_tool(
+            "analyze_performance", {"ticker": "AAPL", "period": "6mo", "risk_free_rate": 0.04}
+        )
+        assert result.data.risk_free_rate == 0.04
+        assert result.data.sharpe_ratio is not None
+        assert result.data.downside_deviation_percent is not None
+
+
+async def test_analyze_performance_tool_defaults_the_risk_free_rate_to_zero() -> None:
+    df = make_history_df([100.0 + (i % 5) + i * 0.3 for i in range(120)])
+    server = create_server(yf_client=make_client(factory=fake_ticker_factory(history_df=df)))
+    async with Client(server) as client:
+        result = await client.call_tool("analyze_performance", {"ticker": "AAPL", "period": "6mo"})
+        assert result.data.risk_free_rate == 0.0
+
+
+async def test_analyze_performance_schema_states_the_risk_free_default_in_the_output() -> None:
+    """The default must be legible from the RESULT, not just the input schema, so a model
+    reading a Sharpe knows whether it is an excess figure."""
+    server = create_server(yf_client=make_client(factory=fake_ticker_factory()))
+    async with Client(server) as client:
+        [tool] = [t for t in await client.list_tools() if t.name == "analyze_performance"]
+        properties = (tool.outputSchema or {})["properties"]
+        assert "Defaults to 0" in properties["risk_free_rate"]["description"]
+        assert "RAW" in properties["risk_free_rate"]["description"]
+        assert "downside_deviation" in properties["sortino_ratio"]["description"]
+        assert tool.description is not None and "Sharpe" in tool.description
+
+
+async def test_compare_to_benchmark_tool() -> None:
+    closes = [100.0 + i * 0.3 for i in range(200)]
+    bench = [400.0 + i * 0.8 for i in range(200)]
+    factory = fake_multi_ticker_factory(
+        {
+            "AAPL": {"history_df": make_history_df(closes)},
+            "SPY": {"history_df": make_history_df(bench)},
+        }
+    )
+    server = create_server(yf_client=make_client(factory=factory))
+    async with Client(server) as client:
+        result = await client.call_tool("compare_to_benchmark", {"ticker": "AAPL"})
+        assert result.data.benchmark == "SPY"  # the default
+        assert result.data.period == "1y"  # the default
+        assert result.data.overlapping_observations == 200
+        assert result.data.beta is not None
+
+
+async def test_compare_to_benchmark_tool_rejects_a_self_comparison_as_a_tool_error() -> None:
+    factory = fake_multi_ticker_factory(
+        {"SPY": {"history_df": make_history_df([400.0 + i for i in range(200)])}}
+    )
+    server = create_server(yf_client=make_client(factory=factory))
+    async with Client(server) as client:
+        with pytest.raises(ToolError, match="two different"):
+            await client.call_tool("compare_to_benchmark", {"ticker": "SPY", "benchmark": "SPY"})
+
+
+async def test_compare_to_benchmark_schema_explains_the_inner_join() -> None:
+    server = create_server(yf_client=make_client(factory=fake_ticker_factory()))
+    async with Client(server) as client:
+        [tool] = [t for t in await client.list_tools() if t.name == "compare_to_benchmark"]
+        properties = (tool.outputSchema or {})["properties"]
+        assert "inner join" in properties["overlapping_observations"]["description"]
+        assert tool.description is not None
+        assert "inner-joined" in tool.description
+        assert "quote currency" in tool.description
+
+
+async def test_compare_tickers_tool() -> None:
+    factory = fake_multi_ticker_factory(
+        {
+            "AAPL": {
+                "history_df": make_history_df([100.0 + i * 0.3 for i in range(200)]),
+                "info": METRICS_INFO,
+            },
+            "MSFT": {
+                "history_df": make_history_df([200.0 + i * 0.5 for i in range(200)]),
+                "info": METRICS_INFO,
+            },
+        }
+    )
+    server = create_server(yf_client=make_client(factory=factory))
+    async with Client(server) as client:
+        result = await client.call_tool("compare_tickers", {"tickers": ["AAPL", "MSFT"]})
+        assert [row.symbol for row in result.data.rows] == ["AAPL", "MSFT"]
+        assert result.data.period == "1y"
+        assert result.data.errors == []
+        assert result.data.base_currency == "USD"
+        assert result.data.mixed_currencies is False
+
+
+async def test_compare_tickers_tool_returns_partial_results() -> None:
+    factory = fake_multi_ticker_factory(
+        {
+            "AAPL": {
+                "history_df": make_history_df([100.0 + i * 0.3 for i in range(200)]),
+                "info": METRICS_INFO,
+            }
+        }
+    )
+    server = create_server(yf_client=make_client(factory=factory))
+    async with Client(server) as client:
+        result = await client.call_tool("compare_tickers", {"tickers": ["AAPL", "NOPE"]})
+        assert [row.symbol for row in result.data.rows] == ["AAPL"]
+        assert [err.symbol for err in result.data.errors] == ["NOPE"]

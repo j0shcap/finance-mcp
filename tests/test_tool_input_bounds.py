@@ -13,7 +13,7 @@ from fastmcp.client.transports import FastMCPTransport
 from fastmcp.exceptions import ToolError
 
 from finance_mcp.server import create_server
-from finance_mcp.tools._inputs import MAX_CASHFLOWS, TICKER_PATTERN
+from finance_mcp.tools._inputs import MAX_CASHFLOWS, MAX_COMPARE_TICKERS, TICKER_PATTERN
 from tests.conftest import fake_search_factory, fake_ticker_factory, make_client
 
 
@@ -194,3 +194,41 @@ async def test_ticker_pattern_is_visible_in_the_tool_schema(
     assert by_name["get_company_profile"].inputSchema["properties"]["ticker"]["pattern"] == (
         TICKER_PATTERN
     )
+
+
+@pytest.mark.parametrize("rate", [-0.51, 1.01, 5.0])
+async def test_out_of_range_risk_free_rate_is_rejected_without_a_fetch(
+    fetches: tuple[Client[FastMCPTransport], list[str]], rate: float
+) -> None:
+    client, calls = fetches
+    with pytest.raises(ToolError):
+        await client.call_tool("analyze_performance", {"ticker": "AAPL", "risk_free_rate": rate})
+    assert calls == []
+
+
+@pytest.mark.parametrize("rate", [-0.5, 0.0, 0.0425, 1.0])
+async def test_plausible_risk_free_rates_pass_validation(
+    fetches: tuple[Client[FastMCPTransport], list[str]], rate: float
+) -> None:
+    client, _ = fetches
+    # The stub has no history, so the fetch itself fails - the point is that validation let
+    # the call through rather than rejecting the rate.
+    with pytest.raises(ToolError, match="price history"):
+        await client.call_tool("analyze_performance", {"ticker": "AAPL", "risk_free_rate": rate})
+
+
+@pytest.mark.parametrize(
+    "tickers",
+    [
+        ["AAPL"],  # one ticker is analyze_performance's job
+        [f"SYM{i}" for i in range(MAX_COMPARE_TICKERS + 1)],  # over the bound
+        ["AAPL", "A B"],  # a malformed member
+    ],
+)
+async def test_bad_compare_tickers_list_is_rejected_without_a_fetch(
+    fetches: tuple[Client[FastMCPTransport], list[str]], tickers: list[str]
+) -> None:
+    client, calls = fetches
+    with pytest.raises(ToolError):
+        await client.call_tool("compare_tickers", {"tickers": tickers})
+    assert calls == []
