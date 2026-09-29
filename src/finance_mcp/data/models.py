@@ -550,6 +550,50 @@ class PerformanceStats(BaseModel):
     max_drawdown_percent: float = Field(
         description="Largest peak-to-trough decline, as a negative percent (e.g. -23.4 = -23.4%)."
     )
+    risk_free_rate: float = Field(
+        default=0.0,
+        description=(
+            "Annual risk-free rate used for the risk-adjusted figures, as a decimal "
+            "(0.045 = 4.5%). Defaults to 0, which makes sharpe_ratio and sortino_ratio RAW "
+            "return per unit of risk rather than excess-return figures - pass a T-bill yield "
+            "to compare against cash. Echoed even when the window is too short to use it."
+        ),
+    )
+    sharpe_ratio: float | None = Field(
+        default=None,
+        description=(
+            "Annualized Sharpe ratio: mean return in excess of risk_free_rate divided by the "
+            "standard deviation of those excess returns, scaled by periods_per_year. "
+            "Dimensionless, so it is comparable across instruments. Null when the window is "
+            "under 85 days (no periods_per_year to scale by) or the returns never varied."
+        ),
+    )
+    sortino_ratio: float | None = Field(
+        default=None,
+        description=(
+            "Annualized Sortino ratio: the same numerator as sharpe_ratio, but divided by "
+            "downside_deviation instead of total volatility, so upside swings are not "
+            "penalized. Higher than the Sharpe when the dispersion is mostly upside. Null "
+            "when the window is under 85 days or nothing fell below the risk-free target - "
+            "null there means 'no downside observed', not 'bad'."
+        ),
+    )
+    downside_deviation_percent: float | None = Field(
+        default=None,
+        description=(
+            "Annualized dispersion of returns BELOW risk_free_rate, percent - the "
+            "denominator of sortino_ratio. Always <= annualized_volatility_percent. Null "
+            "when the window is under 85 days; 0.0 means no return fell below the target."
+        ),
+    )
+    calmar_ratio: float | None = Field(
+        default=None,
+        description=(
+            "annualized_return_percent divided by the magnitude of max_drawdown_percent: "
+            "compound return per unit of worst peak-to-trough pain. Dimensionless. Null when "
+            "the window is under 85 days or the series never drew down."
+        ),
+    )
     sma_50: float | None = Field(
         default=None, description="50-day simple moving average; null if < 50 bars."
     )

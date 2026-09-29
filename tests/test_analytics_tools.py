@@ -89,3 +89,36 @@ async def test_analyze_performance_tool_invalid_errors() -> None:
     async with Client(server) as client:
         with pytest.raises(ToolError):
             await client.call_tool("analyze_performance", {"ticker": "BAD", "period": "1y"})
+
+
+async def test_analyze_performance_tool_reports_risk_adjusted_stats() -> None:
+    df = make_history_df([100.0 + (i % 5) + i * 0.3 for i in range(120)])
+    server = create_server(yf_client=make_client(factory=fake_ticker_factory(history_df=df)))
+    async with Client(server) as client:
+        result = await client.call_tool(
+            "analyze_performance", {"ticker": "AAPL", "period": "6mo", "risk_free_rate": 0.04}
+        )
+        assert result.data.risk_free_rate == 0.04
+        assert result.data.sharpe_ratio is not None
+        assert result.data.downside_deviation_percent is not None
+
+
+async def test_analyze_performance_tool_defaults_the_risk_free_rate_to_zero() -> None:
+    df = make_history_df([100.0 + (i % 5) + i * 0.3 for i in range(120)])
+    server = create_server(yf_client=make_client(factory=fake_ticker_factory(history_df=df)))
+    async with Client(server) as client:
+        result = await client.call_tool("analyze_performance", {"ticker": "AAPL", "period": "6mo"})
+        assert result.data.risk_free_rate == 0.0
+
+
+async def test_analyze_performance_schema_states_the_risk_free_default_in_the_output() -> None:
+    """The default must be legible from the RESULT, not just the input schema, so a model
+    reading a Sharpe knows whether it is an excess figure."""
+    server = create_server(yf_client=make_client(factory=fake_ticker_factory()))
+    async with Client(server) as client:
+        [tool] = [t for t in await client.list_tools() if t.name == "analyze_performance"]
+        properties = (tool.outputSchema or {})["properties"]
+        assert "Defaults to 0" in properties["risk_free_rate"]["description"]
+        assert "RAW" in properties["risk_free_rate"]["description"]
+        assert "downside_deviation" in properties["sortino_ratio"]["description"]
+        assert tool.description is not None and "Sharpe" in tool.description

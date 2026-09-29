@@ -15,7 +15,7 @@ from yfinance.exceptions import (
 )
 
 from finance_mcp.data import analytics
-from finance_mcp.data.errors import DataUnavailable, SymbolNotFound
+from finance_mcp.data.errors import DataUnavailable, InvalidInput, SymbolNotFound
 from finance_mcp.data.models import (
     AnalystData,
     CompanyProfile,
@@ -912,6 +912,67 @@ def test_analyze_performance_computes_stats() -> None:
     assert p.sma_50 == pytest.approx(analytics.sma(closes, 50))
     assert p.sma_200 is None  # < 200 bars
     assert p.start_date == "2024-01-01" and p.end_date == "2024-04-29"
+
+
+def test_analyze_performance_reports_risk_adjusted_stats() -> None:
+    closes = [100.0 + i for i in range(120)]  # 120 calendar days: past the annualization gate
+    p = _perf_client(
+        factory=fake_ticker_factory(history_df=make_history_df(closes))
+    ).analyze_performance("AAPL", "6mo")
+    assert p.periods_per_year is not None
+    assert p.risk_free_rate == 0.0
+    assert p.sharpe_ratio == pytest.approx(analytics.sharpe_ratio(closes, p.periods_per_year, 0.0))
+    assert p.sortino_ratio is None  # a monotonic rise never fell below the target
+    assert p.downside_deviation_percent == pytest.approx(0.0)
+    assert p.calmar_ratio is None  # ... and never drew down, so Calmar is undefined
+
+
+def test_analyze_performance_risk_free_rate_is_echoed_and_applied() -> None:
+    closes = [100.0 + (i % 7) - (i % 3) + i * 0.2 for i in range(120)]
+    client = _perf_client(factory=fake_ticker_factory(history_df=make_history_df(closes)))
+    raw = client.analyze_performance("AAPL", "6mo")
+    excess = client.analyze_performance("AAPL", "6mo", risk_free_rate=0.05)
+    assert excess.risk_free_rate == 0.05
+    assert raw.sharpe_ratio is not None and excess.sharpe_ratio is not None
+    assert excess.sharpe_ratio < raw.sharpe_ratio  # a positive hurdle lowers the ratio
+
+
+def test_analyze_performance_computes_calmar_from_its_own_figures() -> None:
+    closes = [100.0, 130.0, 90.0] + [100.0 + i for i in range(117)]
+    p = _perf_client(
+        factory=fake_ticker_factory(history_df=make_history_df(closes))
+    ).analyze_performance("AAPL", "6mo")
+    assert p.annualized_return_percent is not None
+    assert p.calmar_ratio == pytest.approx(
+        p.annualized_return_percent / abs(p.max_drawdown_percent)
+    )
+
+
+def test_analyze_performance_nulls_risk_adjusted_stats_on_a_short_window() -> None:
+    """A risk_free_rate on a sub-90-day window must not conjure a Sharpe.
+
+    Every risk-adjusted figure here is scaled by periods_per_year, which the 90-day gate
+    withholds; computing one anyway would silently re-introduce the fixed 252 convention
+    the calendar-annualization work removed.
+    """
+    p = _perf_client(
+        factory=fake_ticker_factory(history_df=make_history_df([100.0, 101.0, 99.0, 103.0]))
+    ).analyze_performance("AAPL", "5d", risk_free_rate=0.05)
+    assert p.risk_free_rate == 0.05  # echoed even when unused, so the caller can see it
+    assert p.sharpe_ratio is None
+    assert p.sortino_ratio is None
+    assert p.downside_deviation_percent is None
+    assert p.calmar_ratio is None
+    assert p.total_return_percent == pytest.approx(3.0)
+
+
+def test_analyze_performance_rejects_a_risk_free_rate_of_minus_one() -> None:
+    """The tool bounds this, but the data layer is reachable directly."""
+    client = _perf_client(
+        factory=fake_ticker_factory(history_df=make_history_df([100.0 + i for i in range(120)]))
+    )
+    with pytest.raises(InvalidInput):
+        client.analyze_performance("AAPL", "6mo", risk_free_rate=-1.0)
 
 
 def _perf_stats(closes: list[float], **df_kw: Any) -> PerformanceStats:

@@ -194,3 +194,24 @@ async def test_ticker_pattern_is_visible_in_the_tool_schema(
     assert by_name["get_company_profile"].inputSchema["properties"]["ticker"]["pattern"] == (
         TICKER_PATTERN
     )
+
+
+@pytest.mark.parametrize("rate", [-0.51, 1.01, 5.0])
+async def test_out_of_range_risk_free_rate_is_rejected_without_a_fetch(
+    fetches: tuple[Client[FastMCPTransport], list[str]], rate: float
+) -> None:
+    client, calls = fetches
+    with pytest.raises(ToolError):
+        await client.call_tool("analyze_performance", {"ticker": "AAPL", "risk_free_rate": rate})
+    assert calls == []
+
+
+@pytest.mark.parametrize("rate", [-0.5, 0.0, 0.0425, 1.0])
+async def test_plausible_risk_free_rates_pass_validation(
+    fetches: tuple[Client[FastMCPTransport], list[str]], rate: float
+) -> None:
+    client, _ = fetches
+    # The stub has no history, so the fetch itself fails - the point is that validation let
+    # the call through rather than rejecting the rate.
+    with pytest.raises(ToolError, match="price history"):
+        await client.call_tool("analyze_performance", {"ticker": "AAPL", "risk_free_rate": rate})

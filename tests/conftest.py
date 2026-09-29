@@ -162,6 +162,33 @@ def fake_ticker_factory(
     return factory
 
 
+def fake_multi_ticker_factory(
+    per_symbol: dict[str, dict[str, Any]],
+    calls: list[str] | None = None,
+    gate: threading.Barrier | None = None,
+) -> Callable[[str], Any]:
+    """A ticker factory whose stub differs BY SYMBOL, for multi-symbol scenarios.
+
+    ``per_symbol`` maps a symbol to the keyword arguments ``fake_ticker_factory`` would take
+    for it (``history_df``, ``info``, ``history_error``, ...), so each leg of a comparison
+    can succeed or fail independently. A symbol that is absent raises KeyError on every
+    access, which is what yfinance leaks for an unknown symbol. ``calls`` records each
+    symbol constructed; ``gate`` is waited on at construction, so a batch only completes
+    when the symbols are fetched concurrently.
+    """
+    stubs = {symbol: fake_ticker_factory(**kwargs) for symbol, kwargs in per_symbol.items()}
+    missing = fake_ticker_factory(error=KeyError("exchangeTimezoneName"))
+
+    def factory(symbol: str) -> Any:
+        if calls is not None:
+            calls.append(symbol)
+        if gate is not None:
+            gate.wait()
+        return stubs.get(symbol, missing)(symbol)
+
+    return factory
+
+
 def make_recommendations_df(
     rows: list[tuple[str, int, int, int, int, int]],
 ) -> pd.DataFrame:

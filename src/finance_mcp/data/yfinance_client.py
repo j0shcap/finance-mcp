@@ -322,18 +322,25 @@ class YFinanceClient:
             truncated=truncated,
         )
 
-    def analyze_performance(self, symbol: str, period: str) -> PerformanceStats:
+    def analyze_performance(
+        self, symbol: str, period: str, risk_free_rate: float = 0.0
+    ) -> PerformanceStats:
         symbol = _norm(symbol)
         # The bars this reads are usually cached by _all_bars, but a history past
         # MAX_CACHEABLE_BARS is not retained -- without an entry here every call to a long
         # window would go back to the network. PerformanceStats is a few hundred bytes.
+        # risk_free_rate is part of the key because the Sharpe, Sortino and downside figures
+        # are computed from it: keying on (symbol, period) alone would serve the first
+        # caller's rate to every later one.
         return self._cached(
-            ("performance", symbol, period),
+            ("performance", symbol, period, str(risk_free_rate)),
             self._history_ttl,
-            lambda: self._compute_performance(symbol, period),
+            lambda: self._compute_performance(symbol, period, risk_free_rate),
         )
 
-    def _compute_performance(self, symbol: str, period: str) -> PerformanceStats:
+    def _compute_performance(
+        self, symbol: str, period: str, risk_free_rate: float = 0.0
+    ) -> PerformanceStats:
         bars = self._all_bars(symbol, period, "1d")
         if len(bars) < 2:
             raise DataUnavailable(
@@ -347,11 +354,22 @@ class YFinanceClient:
         annualized_return: float | None = None
         annualized_volatility: float | None = None
         periods_per_year: float | None = None
+        # Every risk-adjusted figure is scaled by periods_per_year (Calmar needs the CAGR),
+        # so they all sit behind the same gate rather than falling back on a fixed 252.
+        sharpe: float | None = None
+        sortino: float | None = None
+        downside: float | None = None
+        calmar: float | None = None
+        max_drawdown = analytics.max_drawdown(closes)
         if elapsed_days >= MIN_ANNUALIZATION_DAYS:
             years = elapsed_days / analytics.DAYS_PER_YEAR
             periods_per_year = analytics.infer_periods_per_year(len(bars), years)
             annualized_return = analytics.annualized_return(closes, years)
             annualized_volatility = analytics.annualized_volatility(closes, periods_per_year)
+            sharpe = analytics.sharpe_ratio(closes, periods_per_year, risk_free_rate)
+            sortino = analytics.sortino_ratio(closes, periods_per_year, risk_free_rate)
+            downside = analytics.downside_deviation(closes, periods_per_year, risk_free_rate)
+            calmar = analytics.calmar_ratio(annualized_return, max_drawdown)
         return PerformanceStats(
             symbol=symbol,
             period=period,
@@ -362,7 +380,12 @@ class YFinanceClient:
             annualized_return_percent=annualized_return,
             annualized_volatility_percent=annualized_volatility,
             periods_per_year=periods_per_year,
-            max_drawdown_percent=analytics.max_drawdown(closes),
+            max_drawdown_percent=max_drawdown,
+            risk_free_rate=risk_free_rate,
+            sharpe_ratio=sharpe,
+            sortino_ratio=sortino,
+            downside_deviation_percent=downside,
+            calmar_ratio=calmar,
             sma_50=analytics.sma(closes, SMA_SHORT_WINDOW),
             sma_200=analytics.sma(closes, SMA_LONG_WINDOW),
         )

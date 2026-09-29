@@ -9,7 +9,7 @@ from finance_mcp.data.models import HistoryPeriod, KeyMetrics, PerformanceStats
 from finance_mcp.data.yfinance_client import YFinanceClient
 from finance_mcp.tools._annotations import market_data
 from finance_mcp.tools._dispatch import run_data
-from finance_mcp.tools._inputs import Ticker
+from finance_mcp.tools._inputs import RiskFreeRate, Ticker
 
 
 def register(mcp: FastMCP, client: YFinanceClient) -> None:
@@ -36,19 +36,26 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
         period: Annotated[
             HistoryPeriod, Field(description="Look-back window for the statistics.")
         ] = "1y",
+        risk_free_rate: RiskFreeRate = 0.0,
     ) -> PerformanceStats:
         """Return and risk stats from daily auto-adjusted closes over the window.
 
         Includes total and annualized return, annualized volatility, max drawdown
-        (negative percent), and 50/200-day SMAs (null if insufficient history).
+        (negative percent), 50/200-day SMAs (null if insufficient history), and the
+        risk-adjusted set: Sharpe, Sortino, downside deviation and Calmar (CAGR per unit
+        of max drawdown).
 
         Annualized figures use the actual calendar span between the first and last bar,
         so over a one-year window the annualized return equals the total return for any
         instrument. Volatility is scaled by an observations-per-year factor inferred from
         the data and reported as periods_per_year (roughly 252 for a weekday-traded
-        equity, 365 for a 24/7 instrument such as crypto). Both annualized figures and
-        periods_per_year are null when the window spans under 85 days (just under three
-        months), because annualizing a sub-quarter move extrapolates noise into a yearly
-        rate.
+        equity, 365 for a 24/7 instrument such as crypto). The annualized figures,
+        periods_per_year and every risk-adjusted ratio are null when the window spans
+        under 85 days (just under three months), because annualizing a sub-quarter move
+        extrapolates noise into a yearly rate.
+
+        risk_free_rate defaults to 0, so the Sharpe and Sortino ratios are raw return per
+        unit of risk unless you pass a rate; the value used is echoed in the result. For
+        beta, alpha or a comparison against an index, use compare_to_benchmark.
         """
-        return await run_data(lambda: client.analyze_performance(ticker, period))
+        return await run_data(lambda: client.analyze_performance(ticker, period, risk_free_rate))

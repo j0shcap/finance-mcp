@@ -53,3 +53,22 @@ MAX_PERIODS_PER_YEAR = 365
 
 #: Enough to name every line item on any statement Yahoo returns, several times over.
 MAX_LINE_ITEMS = 100
+
+#: Most tickers one compare_tickers call may take. Each row costs two Yahoo calls, so the
+#: bound is what keeps a single tool call from opening dozens of connections.
+MAX_COMPARE_TICKERS = 10
+
+#: An annual risk-free rate for the risk-adjusted statistics. Bounded well outside any real
+#: policy rate but away from -100%, where de-annualizing the rate is undefined.
+RiskFreeRate = Annotated[
+    float,
+    Field(
+        ge=-0.5,
+        le=1.0,
+        description=(
+            "Annual risk-free rate as a DECIMAL, not a percent: 0.045 means 4.5%. Defaults "
+            "to 0, which makes the Sharpe and Sortino ratios raw return per unit of risk "
+            "rather than excess return over cash."
+        ),
+    ),
+]
