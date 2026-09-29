@@ -47,6 +47,11 @@ from finance_mcp.data.models import (
 
 DEFAULT_MAX_BARS = 260
 DEFAULT_CACHE_MAX_ENTRIES = 256
+# The LRU bounds how many entries are held, not how large they are. A period="max" daily
+# history is ~11.5k PriceBar models (~9 MB), so 256 of those would retain gigabytes. Bar
+# lists longer than this are still returned in full; they are just not kept. ~2000 daily
+# bars is about eight years, so every ordinary window stays cached.
+MAX_CACHEABLE_BARS = 2000
 # Quotes in a batch are independent single requests, so they are fetched in parallel; the
 # bound keeps a large batch from opening a connection per ticker at once.
 QUOTE_MAX_WORKERS = 8
@@ -104,7 +109,19 @@ class YFinanceClient:
         # OUTSIDE the lock: two threads racing on one uncached key just fetch it twice.
         self._cache_lock = threading.Lock()
 
-    def _cached[T](self, key: tuple[str, ...], ttl: float, fetch: Callable[[], T]) -> T:
+    def _cached[T](
+        self,
+        key: tuple[str, ...],
+        ttl: float,
+        fetch: Callable[[], T],
+        cacheable: Callable[[T], bool] | None = None,
+    ) -> T:
+        """Return ``fetch()``, reusing a live entry and storing the result under ``key``.
+
+        ``cacheable`` is consulted after the fetch to decide whether the value is worth
+        keeping; ``None`` means always keep it. It bounds an entry by size, which the
+        entry-count LRU cannot do.
+        """
         now = self._now()
         with self._cache_lock:
             hit = self._cache.get(key)
@@ -116,6 +133,8 @@ class YFinanceClient:
                     return cast(T, hit[2])
                 del self._cache[key]  # stale: drop before refetching
         value = fetch()
+        if cacheable is not None and not cacheable(value):
+            return value
         stored_at = self._now()  # read AFTER the fetch: a slow fetch must not age its entry
         with self._cache_lock:
             self._purge_expired(stored_at)
@@ -229,11 +248,15 @@ class YFinanceClient:
         get_price_history and analyze_performance are two views of the same fetch; keying the
         raw bars separately from the derived models keeps them on a single network round-trip.
 
+        Histories longer than MAX_CACHEABLE_BARS are not retained, so a very long window
+        costs one fetch per view instead of retaining megabytes of bars. Both views cache
+        their own small derived result, so repeat calls still avoid the network.
         """
         return self._cached(
             ("bars", symbol, period, interval),
             self._history_ttl,
             lambda: self._fetch_all_bars(symbol, period, interval),
+            cacheable=lambda bars: len(bars) <= MAX_CACHEABLE_BARS,
         )
 
     def _fetch_all_bars(self, symbol: str, period: str, interval: str) -> list[PriceBar]:
@@ -301,9 +324,14 @@ class YFinanceClient:
 
     def analyze_performance(self, symbol: str, period: str) -> PerformanceStats:
         symbol = _norm(symbol)
-        # No cache entry of its own: the underlying bars are cached by _all_bars, and the
-        # stats are cheap to recompute from them.
-        return self._compute_performance(symbol, period)
+        # The bars this reads are usually cached by _all_bars, but a history past
+        # MAX_CACHEABLE_BARS is not retained -- without an entry here every call to a long
+        # window would go back to the network. PerformanceStats is a few hundred bytes.
+        return self._cached(
+            ("performance", symbol, period),
+            self._history_ttl,
+            lambda: self._compute_performance(symbol, period),
+        )
 
     def _compute_performance(self, symbol: str, period: str) -> PerformanceStats:
         bars = self._all_bars(symbol, period, "1d")
