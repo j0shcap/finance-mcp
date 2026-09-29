@@ -15,7 +15,9 @@ from finance_mcp.data.calculators import (
     _coupon_schedule,
     _days_30_360_us,
     bond_price,
+    bond_price_dated,
 )
+from finance_mcp.data.models import BondDatedAnalytics, BondDayCount
 
 
 def d(iso: str) -> datetime.date:
@@ -206,3 +208,231 @@ def test_bond_metrics_on_a_coupon_date_reproduces_bond_price_exactly(
     assert macaulay == expected.macaulay_duration
     assert modified == expected.modified_duration
     assert convexity == expected.convexity
+
+
+# --------------------------------------------------------------------------------------
+# bond_price_dated: settlement between coupon dates, against published references
+# --------------------------------------------------------------------------------------
+
+
+def test_price_matches_the_excel_price_documentation_example() -> None:
+    """Microsoft's PRICE example: settlement 2008-02-15, maturity 2017-11-15, coupon
+    5.75%, yield 6.50%, redemption 100, frequency 2, basis 0 (US 30/360). The docs display
+    the rounded $94.63; Excel's unrounded result is 94.634362.
+
+    Settlement sits mid-period, so this is the case the on-coupon calculator rejects:
+    90 of the 180 day-count days have elapsed, accruing exactly half a coupon.
+
+    https://support.microsoft.com/en-us/office/price-function-3ea9deac-8dfa-436f-a7c8-17ea02c21b0a
+    """
+    result = bond_price_dated(
+        settlement=d("2008-02-15"),
+        maturity=d("2017-11-15"),
+        coupon_rate=0.0575,
+        ytm=0.065,
+        face=100.0,
+        frequency=2,
+        day_count="30/360",
+    )
+    assert result.clean_price == pytest.approx(94.634362, abs=1e-6)
+    assert round(result.clean_price, 2) == 94.63  # the figure the docs print
+    assert result.accrued_interest == pytest.approx(1.4375, abs=1e-9)
+    assert result.dirty_price == pytest.approx(96.071862, abs=1e-6)
+    assert (result.accrued_days, result.period_days) == (90.0, 180.0)
+    assert result.accrued_fraction == pytest.approx(0.5, abs=1e-12)
+    assert result.periods_remaining == 20
+    assert result.previous_coupon_date == d("2007-11-15")
+    assert result.next_coupon_date == d("2008-05-15")
+    assert result.day_count == "30/360"
+
+
+def test_price_matches_the_excel_yield_documentation_example_price() -> None:
+    """Microsoft's YIELD example prices the same 5.75% bond, maturing 2016-11-15, at
+    pr = 95.04287 for a yield of exactly 6.5%. Pricing it at 6.5% must return that price,
+    which is the other half of the YIELD round trip asserted below.
+
+    https://support.microsoft.com/en-us/office/yield-function-f5f5ca43-c4bd-434f-8bd2-ed3c9727a4fe
+    """
+    result = bond_price_dated(
+        settlement=d("2008-02-15"),
+        maturity=d("2016-11-15"),
+        coupon_rate=0.0575,
+        ytm=0.065,
+        day_count="30/360",
+    )
+    assert round(result.clean_price, 5) == 95.04287
+    assert result.clean_price == pytest.approx(95.0428744, abs=1e-6)
+    assert result.periods_remaining == 18
+
+
+def test_price_matches_the_libreoffice_price_documentation_example() -> None:
+    """LibreOffice's PRICE help documents PRICE(1999-02-15; 2007-11-15; 0.0575; 0.065;
+    100; 2; 0) = 95.04287 -- an independent implementation of the same basis-0 street
+    formula, on a different pair of dates than the Microsoft examples.
+    """
+    result = bond_price_dated(
+        settlement=d("1999-02-15"),
+        maturity=d("2007-11-15"),
+        coupon_rate=0.0575,
+        ytm=0.065,
+        day_count="30/360",
+    )
+    assert round(result.clean_price, 5) == 95.04287
+
+
+def test_price_matches_the_treasury_appendix_b_example() -> None:
+    """31 CFR 356 appendix B, example I.A: a 10-3/4%-era long bond with C = 8.75,
+    i = 0.0884, r = s = 184 and n = 59 prices at P = 99.057893 per 100.
+
+    r == s means settlement falls exactly on a coupon date, one full period before the
+    next payment, with 60 coupons left to run. That is the convention-neutral case: with
+    no part period, the Treasury's simple-interest stub factor and the street compound
+    factor are the same number, so this reference pins the dated path regardless of which
+    first-period convention is in force. It also has to agree with the on-coupon
+    calculator, since they are pricing the same cashflows.
+
+    https://www.govinfo.gov/content/pkg/CFR-2025-title31-vol2/pdf/CFR-2025-title31-vol2-part356-appB.pdf
+    """
+    result = bond_price_dated(
+        settlement=d("1985-11-15"),
+        maturity=d("2015-11-15"),
+        coupon_rate=0.0875,
+        ytm=0.0884,
+        face=100.0,
+        frequency=2,
+    )
+    assert result.periods_remaining == 60
+    assert result.clean_price == pytest.approx(99.057893, abs=1e-6)
+    assert result.accrued_interest == 0.0
+    assert result.dirty_price == result.clean_price
+    assert result.accrued_fraction == 0.0
+    on_coupon = bond_price(
+        face=100.0, coupon_rate=0.0875, years_to_maturity=30.0, ytm=0.0884, frequency=2
+    )
+    assert result.clean_price == pytest.approx(on_coupon.price, rel=1e-12)
+
+
+@pytest.mark.parametrize("day_count", ["actual/actual", "30/360"])
+def test_settlement_on_a_coupon_date_equals_the_on_coupon_calculator(
+    day_count: BondDayCount,
+) -> None:
+    """With nothing accrued there is no part period, so both day counts must reproduce the
+    existing on-coupon tool exactly -- including its duration and convexity."""
+    result = bond_price_dated(
+        settlement=d("2007-11-15"),
+        maturity=d("2017-11-15"),
+        coupon_rate=0.05,
+        ytm=0.06,
+        face=1000.0,
+        frequency=2,
+        day_count=day_count,
+    )
+    expected = bond_price(
+        face=1000.0, coupon_rate=0.05, years_to_maturity=10.0, ytm=0.06, frequency=2
+    )
+    assert result.accrued_interest == 0.0
+    assert result.clean_price == expected.price
+    assert result.dirty_price == expected.price
+    assert result.macaulay_duration == expected.macaulay_duration
+    assert result.modified_duration == expected.modified_duration
+    assert result.convexity == expected.convexity
+    assert result.current_yield == expected.current_yield
+
+
+def test_actual_actual_icma_uses_the_real_days_in_the_coupon_period() -> None:
+    """Actual/Actual (ICMA) counts real days on both sides of the ratio, so the accrual
+    denominator is the length of *this* coupon period (182 days from 2007-11-15 to
+    2008-05-15), not a nominal 180. The 30/360 count of the same span is 90/180, so the
+    two conventions must disagree -- that difference is the reason day_count exists.
+    """
+
+    def price(day_count: BondDayCount) -> BondDatedAnalytics:
+        return bond_price_dated(
+            settlement=d("2008-02-15"),
+            maturity=d("2017-11-15"),
+            coupon_rate=0.0575,
+            ytm=0.065,
+            face=100.0,
+            frequency=2,
+            day_count=day_count,
+        )
+
+    icma = price("actual/actual")
+    assert (icma.accrued_days, icma.period_days) == (92.0, 182.0)
+    assert icma.accrued_interest == pytest.approx(2.875 * 92.0 / 182.0, abs=1e-12)
+    assert icma.clean_price == pytest.approx(94.635449, abs=1e-6)
+    assert icma.clean_price != price("30/360").clean_price
+
+
+def test_dirty_price_is_clean_plus_accrued() -> None:
+    result = bond_price_dated(
+        settlement=d("2024-03-07"),
+        maturity=d("2031-09-30"),
+        coupon_rate=0.0425,
+        ytm=0.0391,
+        face=1000.0,
+    )
+    assert result.dirty_price == pytest.approx(result.clean_price + result.accrued_interest, 1e-12)
+    assert result.accrued_fraction == pytest.approx(
+        result.accrued_days / result.period_days, abs=1e-15
+    )
+
+
+def test_prices_scale_with_face_and_the_per_100_fields_are_the_quote() -> None:
+    """Per-face and per-100 are the same number rescaled: the market quotes per 100, but a
+    caller pricing 1,000,000 of face wants the cash amount."""
+    per_100 = bond_price_dated(
+        settlement=d("2008-02-15"),
+        maturity=d("2017-11-15"),
+        coupon_rate=0.0575,
+        ytm=0.065,
+        face=100.0,
+        day_count="30/360",
+    )
+    per_million = bond_price_dated(
+        settlement=d("2008-02-15"),
+        maturity=d("2017-11-15"),
+        coupon_rate=0.0575,
+        ytm=0.065,
+        face=1_000_000.0,
+        day_count="30/360",
+    )
+    assert per_million.clean_price == pytest.approx(per_100.clean_price * 10_000.0, rel=1e-12)
+    assert per_million.clean_price_per_100 == pytest.approx(per_100.clean_price, rel=1e-12)
+    assert per_million.dirty_price_per_100 == pytest.approx(per_100.dirty_price, rel=1e-12)
+    assert per_million.accrued_interest_per_100 == pytest.approx(
+        per_100.accrued_interest, rel=1e-12
+    )
+    # The rate-risk metrics are per-unit, so they do not scale with face at all (only
+    # the last bit moves, from summing present values at a different magnitude).
+    assert per_million.macaulay_duration == pytest.approx(per_100.macaulay_duration, rel=1e-12)
+    assert per_million.convexity == pytest.approx(per_100.convexity, rel=1e-12)
+
+
+def test_zero_coupon_bond_accrues_nothing_and_prices_as_one_discounted_redemption() -> None:
+    result = bond_price_dated(
+        settlement=d("2024-03-07"),
+        maturity=d("2029-05-15"),
+        coupon_rate=0.0,
+        ytm=0.05,
+        face=100.0,
+        frequency=2,
+    )
+    assert result.accrued_interest == 0.0
+    assert result.current_yield == 0.0
+    assert result.clean_price == result.dirty_price
+    # Eleven periods remain; the part period runs from 2023-11-15 to 2024-05-15.
+    periods = 10.0 + (1.0 - result.accrued_fraction)
+    assert result.clean_price == pytest.approx(100.0 / 1.025**periods, rel=1e-12)
+
+
+def test_current_yield_is_the_coupon_over_the_clean_price() -> None:
+    result = bond_price_dated(
+        settlement=d("2008-02-15"),
+        maturity=d("2017-11-15"),
+        coupon_rate=0.0575,
+        ytm=0.065,
+        face=100.0,
+        day_count="30/360",
+    )
+    assert result.current_yield == pytest.approx(5.75 / result.clean_price, rel=1e-12)

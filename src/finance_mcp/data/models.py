@@ -13,6 +13,7 @@ HistoryPeriod = Literal["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y"
 HistoryInterval = Literal["1m", "5m", "15m", "30m", "1h", "1d", "1wk", "1mo"]
 RateDirection = Literal["nominal_to_effective", "effective_to_nominal"]
 Compounding = Literal["discrete", "continuous"]
+BondDayCount = Literal["actual/actual", "30/360"]
 
 
 class TVMResult(BaseModel):
@@ -117,6 +118,107 @@ class BondYTM(BaseModel):
     """Yield to maturity solved from a bond's market price."""
 
     yield_to_maturity: float = Field(description="Annual yield to maturity, as a decimal.")
+
+
+class BondDatedAnalytics(BaseModel):
+    """A bond priced for a settlement date, which may fall between two coupon dates.
+
+    Prices come in two flavours and both are reported, because confusing them misstates
+    the cash by up to one coupon: the CLEAN price is what the market quotes, the DIRTY
+    price is what a buyer actually pays. Each is given per ``face`` and per 100 of face
+    (the quoting convention). Duration and convexity follow the street convention and are
+    measured against the dirty price.
+    """
+
+    settlement: datetime.date = Field(description="Settlement date the bond was priced for.")
+    maturity: datetime.date = Field(description="Maturity (redemption) date.")
+    previous_coupon_date: datetime.date = Field(
+        description="Coupon date at or immediately before settlement; interest accrues from here. "
+        "Equals settlement when settlement is itself a coupon date."
+    )
+    next_coupon_date: datetime.date = Field(
+        description="Next coupon date after settlement; the first cashflow the buyer receives."
+    )
+    periods_remaining: int = Field(
+        description="Coupons still to be paid, counting next_coupon_date through maturity."
+    )
+    frequency: int = Field(description="Coupon payments per year used (2 = semiannual).")
+    day_count: BondDayCount = Field(
+        description="Day-count convention used to measure the accrued part of the coupon period."
+    )
+    accrued_days: float = Field(
+        description="Days from previous_coupon_date to settlement, on this day count "
+        "('A' in the market formulas). Zero on a coupon date."
+    )
+    period_days: float = Field(
+        description="Days in the current coupon period, on this day count ('E'): the actual "
+        "days between the surrounding coupon dates for actual/actual, or a nominal "
+        "360/frequency for 30/360."
+    )
+    accrued_fraction: float = Field(
+        description="Elapsed fraction of the current coupon period, accrued_days / period_days. "
+        "0.0 on a coupon date; the remaining 1 - this is the fractional first period the "
+        "cashflows are discounted over."
+    )
+    accrued_interest: float = Field(
+        description="Interest accrued since previous_coupon_date, in currency per 'face'. The "
+        "buyer pays this to the seller on top of the quoted (clean) price."
+    )
+    accrued_interest_per_100: float = Field(
+        description="Accrued interest per 100 of face -- the market convention, and what Excel's "
+        "ACCRINT reports."
+    )
+    clean_price: float = Field(
+        description="CLEAN price per 'face': present value of the remaining cashflows EXCLUDING "
+        "accrued interest. This is the quoted/traded price, and what a yield is solved from."
+    )
+    dirty_price: float = Field(
+        description="DIRTY price per 'face' (also 'full' or 'invoice' price): clean_price + "
+        "accrued_interest, i.e. the present value of every remaining cashflow. This is the cash "
+        "the buyer actually pays at settlement."
+    )
+    clean_price_per_100: float = Field(
+        description="Clean price per 100 of face, the market quoting convention. Equals Excel's "
+        "PRICE when day_count='30/360'."
+    )
+    dirty_price_per_100: float = Field(
+        description="Dirty price per 100 of face: clean_price_per_100 + accrued_interest_per_100."
+    )
+    current_yield: float = Field(
+        description="Annual coupon divided by the CLEAN price (a simple income measure; it "
+        "ignores the pull to par, so it is not a yield to maturity)."
+    )
+    macaulay_duration: float = Field(
+        description="Macaulay duration in years: the cashflow-weighted average time to payment, "
+        "weighted by present value against the DIRTY price (street convention)."
+    )
+    modified_duration: float = Field(
+        description="Modified duration in years: the approximate percentage fall in the DIRTY "
+        "price per 1.00 (100 percentage points) rise in annual yield -- so a 1 basis point move "
+        "is this figure times 0.0001."
+    )
+    convexity: float = Field(
+        description="Convexity in years^2, against the DIRTY price: the second-order correction "
+        "to the duration estimate of a price change."
+    )
+
+
+class BondDatedYTM(BaseModel):
+    """Yield to maturity solved from a bond's clean price for a given settlement date."""
+
+    yield_to_maturity: float = Field(
+        description="Annual yield to maturity as a decimal (0.065 = 6.5%), compounded at "
+        "'frequency' per year."
+    )
+    clean_price: float = Field(
+        description="The CLEAN price that was solved from, per 'face' (echoed back as given)."
+    )
+    accrued_interest: float = Field(
+        description="Interest accrued to settlement, per 'face', implied by the coupon schedule."
+    )
+    dirty_price: float = Field(
+        description="clean_price + accrued_interest per 'face': the cash the buyer pays."
+    )
 
 
 class Quote(BaseModel):

@@ -18,6 +18,8 @@ from finance_mcp.data.errors import InvalidInput
 from finance_mcp.data.models import (
     AmortizationRow,
     BondAnalytics,
+    BondDatedAnalytics,
+    BondDayCount,
     BondYTM,
     Compounding,
     DatedCashflow,
@@ -814,6 +816,140 @@ def bond_price(
     return BondAnalytics(
         price=price,
         current_yield=face * coupon_rate / price,
+        macaulay_duration=macaulay,
+        modified_duration=modified,
+        convexity=convexity,
+    )
+
+
+def _accrual(
+    day_count: BondDayCount,
+    previous: datetime.date,
+    settlement: datetime.date,
+    next_coupon: datetime.date,
+    frequency: int,
+) -> tuple[float, float]:
+    """Days accrued and days in the coupon period, on ``day_count``: market ``(A, E)``.
+
+    * ``"30/360"`` -- the US (NASD) count Excel calls ``basis=0``. ``E`` is the NOMINAL
+      ``360/frequency``, not a measured span: that is what Excel's PRICE uses for the
+      30/360 bases, and it is what makes accrued interest exactly half a coupon at the
+      mid-point of a semiannual period.
+    * ``"actual/actual"`` -- ICMA (the convention for US Treasuries and most sovereigns).
+      Both sides are real elapsed days, so ``E`` is the true length of THIS coupon period
+      and a coupon always accrues to exactly its full amount by the next coupon date.
+    """
+    if day_count == "30/360":
+        return float(_days_30_360_us(previous, settlement)), 360.0 / frequency
+    return float((settlement - previous).days), float((next_coupon - previous).days)
+
+
+def _dated_terms(
+    settlement: datetime.date,
+    maturity: datetime.date,
+    face: float,
+    frequency: int,
+    day_count: BondDayCount,
+) -> tuple[datetime.date, datetime.date, int, float, float]:
+    """Validate dated-bond inputs and resolve the schedule; shared by price and yield.
+
+    Returns ``(previous_coupon, next_coupon, periods_remaining, accrued_days, period_days)``.
+    """
+    if face <= 0.0:
+        raise InvalidInput("face must be positive.")
+    if frequency < 1 or 12 % frequency != 0:
+        raise InvalidInput(
+            "frequency must divide 12 evenly (1, 2, 3, 4, 6 or 12) so that coupon dates fall a "
+            f"whole number of months apart; got {frequency}."
+        )
+    if settlement >= maturity:
+        raise InvalidInput(
+            f"settlement ({settlement}) must be strictly before maturity ({maturity})."
+        )
+    if (maturity - settlement).days / _DAYS_PER_YEAR > MAX_BOND_SPAN_YEARS:
+        raise InvalidInput(
+            f"settlement to maturity must span at most {MAX_BOND_SPAN_YEARS} years "
+            f"(got {settlement} to {maturity})."
+        )
+    previous, next_coupon, periods = _coupon_schedule(settlement, maturity, frequency)
+    accrued_days, period_days = _accrual(day_count, previous, settlement, next_coupon, frequency)
+    return previous, next_coupon, periods, accrued_days, period_days
+
+
+def _require_bond_yield(ytm: float, frequency: int) -> float:
+    """Reject yields the periodic discount base cannot express (same rule as bond_price)."""
+    if 1.0 + ytm / frequency <= 0.0:
+        raise InvalidInput(
+            "ytm must be greater than -frequency so that 1 + ytm/frequency is positive "
+            f"(got ytm={ytm} with frequency={frequency})."
+        )
+    return ytm
+
+
+def bond_price_dated(
+    settlement: datetime.date,
+    maturity: datetime.date,
+    coupon_rate: float,
+    ytm: float,
+    face: float = 100.0,
+    frequency: int = 2,
+    day_count: BondDayCount = "actual/actual",
+) -> BondDatedAnalytics:
+    """Price a fixed-coupon bond for a settlement date, which may fall between coupons.
+
+    The dated counterpart to ``bond_price``, which prices on a coupon date only. Coupon
+    dates are generated backward from ``maturity`` every ``12 / frequency`` months, so the
+    schedule is anchored on the maturity day-of-month and month-ends are preserved (a 31
+    March maturity pays on 30 September).
+
+    ``coupon_rate`` and ``ytm`` are annual decimals. ``day_count`` measures the elapsed
+    part of the current coupon period and defaults to Actual/Actual ICMA -- the convention
+    for US Treasuries and most sovereigns. Pass ``"30/360"`` for the US corporate/municipal
+    convention, which is also Excel's default (``basis=0``) and reproduces its PRICE.
+
+    Returns the clean and dirty prices (per ``face`` and per 100), the accrued interest,
+    and duration/convexity computed with the fractional first period under the standard
+    street convention -- the part period is compounded, ``(1+y)**(DSC/E)``.
+
+    Assumes a regular schedule: every coupon period is a whole ``12 / frequency`` months.
+    Bonds with an odd (long or short) first or last coupon period are out of scope, and
+    pricing one here would silently use the wrong first period.
+    """
+    previous, next_coupon, periods, accrued_days, period_days = _dated_terms(
+        settlement, maturity, face, frequency, day_count
+    )
+    _require_bond_yield(ytm, frequency)
+
+    fraction = accrued_days / period_days
+    dirty, macaulay, modified, convexity = _bond_metrics(
+        face=face,
+        coupon_rate=coupon_rate,
+        frequency=frequency,
+        y=ytm / frequency,
+        n=periods,
+        first_fraction=1.0 - fraction,
+    )
+    accrued = face * coupon_rate / frequency * fraction
+    clean = dirty - accrued
+    per_100 = 100.0 / face
+    return BondDatedAnalytics(
+        settlement=settlement,
+        maturity=maturity,
+        previous_coupon_date=previous,
+        next_coupon_date=next_coupon,
+        periods_remaining=periods,
+        frequency=frequency,
+        day_count=day_count,
+        accrued_days=accrued_days,
+        period_days=period_days,
+        accrued_fraction=fraction,
+        accrued_interest=accrued,
+        accrued_interest_per_100=accrued * per_100,
+        clean_price=clean,
+        dirty_price=dirty,
+        clean_price_per_100=clean * per_100,
+        dirty_price_per_100=dirty * per_100,
+        current_yield=face * coupon_rate / clean,
         macaulay_duration=macaulay,
         modified_duration=modified,
         convexity=convexity,
