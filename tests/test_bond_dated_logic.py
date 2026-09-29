@@ -436,3 +436,106 @@ def test_current_yield_is_the_coupon_over_the_clean_price() -> None:
         day_count="30/360",
     )
     assert result.current_yield == pytest.approx(5.75 / result.clean_price, rel=1e-12)
+
+
+# --------------------------------------------------------------------------------------
+# Risk metrics over a fractional first period. No published reference quotes these to 1e-6,
+# so they are checked against central finite differences of the price function actually
+# returned -- which is the property that matters: the analytic derivatives must be the
+# derivatives of THIS price, and the on-coupon case alone would not exercise w_k = k - 1 + f.
+# --------------------------------------------------------------------------------------
+
+DERIVATIVE_CASES = [
+    # (settlement, maturity, coupon_rate, ytm, frequency, day_count)
+    ("2008-02-15", "2017-11-15", 0.0575, 0.065, 2, "30/360"),
+    ("2008-02-15", "2017-11-15", 0.0575, 0.065, 2, "actual/actual"),
+    ("2024-03-07", "2031-09-30", 0.0425, 0.0391, 2, "actual/actual"),
+    ("2024-03-07", "2054-05-15", 0.0475, 0.0450, 2, "actual/actual"),  # 30-year
+    ("2024-03-07", "2029-05-15", 0.0, 0.05, 2, "actual/actual"),  # zero coupon
+    ("2024-07-01", "2034-01-01", 0.03, 0.02, 1, "30/360"),  # annual
+    ("2024-02-20", "2027-11-15", 0.06, 0.055, 4, "actual/actual"),  # quarterly
+    ("2024-02-20", "2026-11-15", 0.06, 0.055, 12, "30/360"),  # monthly
+    ("2024-03-07", "2031-09-30", 0.0425, -0.004, 2, "actual/actual"),  # negative yield
+]
+
+
+@pytest.mark.parametrize(
+    ("settlement", "maturity", "coupon_rate", "ytm", "frequency", "day_count"),
+    DERIVATIVE_CASES,
+)
+def test_duration_and_convexity_are_the_derivatives_of_the_dirty_price(
+    settlement: str,
+    maturity: str,
+    coupon_rate: float,
+    ytm: float,
+    frequency: int,
+    day_count: BondDayCount,
+) -> None:
+    """modified duration = -(1/P) dP/dY and convexity = (1/P) d2P/dY2, on the DIRTY price
+    P and the ANNUAL yield Y. Macaulay is modified times (1 + Y/frequency)."""
+
+    def dirty(rate: float) -> float:
+        return bond_price_dated(
+            settlement=d(settlement),
+            maturity=d(maturity),
+            coupon_rate=coupon_rate,
+            ytm=rate,
+            face=100.0,
+            frequency=frequency,
+            day_count=day_count,
+        ).dirty_price
+
+    result = bond_price_dated(
+        settlement=d(settlement),
+        maturity=d(maturity),
+        coupon_rate=coupon_rate,
+        ytm=ytm,
+        face=100.0,
+        frequency=frequency,
+        day_count=day_count,
+    )
+    # A part period really is in play for every case here except the on-coupon ones.
+    assert 0.0 < result.accrued_fraction < 1.0
+
+    h = 1e-5
+    price, up, down = dirty(ytm), dirty(ytm + h), dirty(ytm - h)
+    assert result.modified_duration == pytest.approx(-(up - down) / (2.0 * h * price), rel=1e-6)
+    assert result.convexity == pytest.approx((up - 2.0 * price + down) / (h * h * price), rel=1e-5)
+    assert result.macaulay_duration == pytest.approx(
+        result.modified_duration * (1.0 + ytm / frequency), rel=1e-12
+    )
+
+
+def test_duration_and_convexity_together_predict_a_yield_move() -> None:
+    """The practical reading of the two metrics: the second-order price estimate
+
+        dP/P ~= -modified_duration * dY + convexity * dY**2 / 2
+
+    On a 30-year bond over 1 basis point, duration alone is already ~0.1% short; adding
+    the convexity term recovers the actual move to within a few parts per million.
+    """
+
+    def dirty(rate: float) -> float:
+        return bond_price_dated(
+            settlement=d("2024-03-07"),
+            maturity=d("2054-05-15"),
+            coupon_rate=0.0475,
+            ytm=rate,
+            face=100.0,
+        ).dirty_price
+
+    base = bond_price_dated(
+        settlement=d("2024-03-07"),
+        maturity=d("2054-05-15"),
+        coupon_rate=0.0475,
+        ytm=0.045,
+        face=100.0,
+    )
+    shift = 0.0001
+    actual = dirty(0.045 + shift) - base.dirty_price
+    first_order = -base.modified_duration * shift * base.dirty_price
+    second_order = 0.5 * base.convexity * shift * shift * base.dirty_price
+    assert first_order == pytest.approx(-0.16909, abs=1e-5)
+    assert actual == pytest.approx(first_order + second_order, rel=1e-5)
+    # Duration alone is measurably short, which is why convexity is reported at all.
+    assert abs(actual - first_order) > abs(actual - (first_order + second_order))
