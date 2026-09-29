@@ -993,18 +993,40 @@ def test_analyze_performance_short_window_nulls_annualized_fields() -> None:
 
 
 def test_analyze_performance_annualizes_at_the_threshold() -> None:
-    # 91 consecutive daily bars => exactly 90 elapsed days => on the gate, so it annualizes.
-    p = _perf_stats([100.0 + i for i in range(91)])
+    # 86 consecutive daily bars => exactly 85 elapsed days => on the gate, so it annualizes.
+    p = _perf_stats([100.0 + i for i in range(86)])
     assert p.annualized_return_percent is not None
     assert p.annualized_volatility_percent is not None
     assert p.periods_per_year is not None
 
 
 def test_analyze_performance_does_not_annualize_below_the_threshold() -> None:
-    # 90 bars => 89 elapsed days => one day short of the gate.
-    p = _perf_stats([100.0 + i for i in range(90)])
+    # 85 bars => 84 elapsed days => one day short of the gate.
+    p = _perf_stats([100.0 + i for i in range(85)])
     assert p.annualized_return_percent is None
     assert p.annualized_volatility_percent is None
+    assert p.periods_per_year is None
+
+
+def test_analyze_performance_annualizes_the_shortest_three_month_window() -> None:
+    """A 3mo window must annualize on every calendar date, not most of them.
+
+    Sweeping real call dates, period="3mo" spans 87-95 elapsed days between the first and
+    last bar: three calendar months drift by a few days, and the first bar is the first
+    session at or after the start. A 90-day gate cut through that range, so the annualized
+    fields appeared and vanished depending on when the tool was called (~15% of dates).
+    88 bars = 87 elapsed days is the measured floor of that range.
+    """
+    p = _perf_stats([100.0 + i for i in range(88)])
+    assert p.annualized_return_percent is not None
+    assert p.annualized_volatility_percent is not None
+    assert p.periods_per_year is not None
+
+
+def test_analyze_performance_still_nulls_a_one_month_window() -> None:
+    # Lowering the gate must not start annualizing genuinely short windows.
+    p = _perf_stats([100.0 + i for i in range(31)])
+    assert p.annualized_return_percent is None
     assert p.periods_per_year is None
 
 

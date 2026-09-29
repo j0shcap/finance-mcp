@@ -66,7 +66,7 @@ async def test_analyze_performance_schema_documents_the_short_window_null() -> N
     async with Client(server) as client:
         [tool] = [t for t in await client.list_tools() if t.name == "analyze_performance"]
         schema = (tool.outputSchema or {})["properties"]
-        assert "90 days" in schema["annualized_return_percent"]["description"]
+        assert "85 days" in schema["annualized_return_percent"]["description"]
         assert "252 trading days" not in schema["annualized_return_percent"]["description"]
         assert "252-day" not in schema["annualized_volatility_percent"]["description"]
         assert "periods_per_year" in schema

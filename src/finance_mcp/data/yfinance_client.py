@@ -57,7 +57,10 @@ SMA_SHORT_WINDOW = 50
 SMA_LONG_WINDOW = 200
 # Below roughly a quarter of calendar time, annualizing compounds short-run noise into a
 # yearly figure that reads as a forecast (a 4-day AAPL move once reported as +47.3%/yr).
-MIN_ANNUALIZATION_DAYS = 90
+# Set just under three months rather than at it: a period="3mo" window spans 87-95 elapsed
+# days depending on the call date, so a 90-day gate cut through that range and made the
+# annualized fields blink in and out for the same request.
+MIN_ANNUALIZATION_DAYS = 85
 
 _FINANCIALS_ATTR = {
     ("income", "annual"): "income_stmt",
@@ -225,6 +228,7 @@ class YFinanceClient:
 
         get_price_history and analyze_performance are two views of the same fetch; keying the
         raw bars separately from the derived models keeps them on a single network round-trip.
+
         """
         return self._cached(
             ("bars", symbol, period, interval),
