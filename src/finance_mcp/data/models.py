@@ -688,3 +688,132 @@ class BenchmarkComparison(BaseModel):
         "dimensionless: how reliably the asset out- or under-performed rather than by how "
         "much. Null when the overlap spans under 90 days or tracking error is zero.",
     )
+
+
+class ComparisonError(BaseModel):
+    """Why one ticker in a compare_tickers batch has no row."""
+
+    symbol: str = Field(
+        description="The ticker that failed, normalized (or exactly as given if it could not be)."
+    )
+    error: str = Field(
+        description="Why no row could be built: an invalid/delisted symbol, too little price "
+        "history, or a source failure. Read it before retrying - retrying an invalid symbol "
+        "will not help."
+    )
+
+
+class TickerComparisonRow(BaseModel):
+    """One ticker's row in a side-by-side comparison: performance plus key valuation.
+
+    Performance figures come from daily auto-adjusted closes over the requested window
+    (returns therefore already include reinvested dividends); valuation figures are Yahoo's
+    as-reported ratios, with the units the get_key_metrics glossary describes. A row is
+    present whenever its price history was fetched, so the valuation fields can be null with
+    ``metrics_error`` explaining why.
+    """
+
+    symbol: str = Field(description="Ticker symbol.")
+    currency: str | None = Field(
+        default=None,
+        description="Quote currency (ISO 4217) this row's returns are denominated in.",
+    )
+    financial_currency: str | None = Field(
+        default=None,
+        description="Currency the company reports financials in. Differs from `currency` for "
+        "ADRs and other cross-listings, which makes its absolute amounts and `currency` "
+        "figures inconsistent - prefer ratios for such a row.",
+    )
+    currency_differs: bool = Field(
+        default=False,
+        description="True when this row's `currency` is known and differs from the table's "
+        "base_currency: its returns include an FX component the other rows do not, so do not "
+        "rank absolute amounts against them. False when the currency is unknown - a null "
+        "currency is unlabelled, not proven different.",
+    )
+    bars: int = Field(description="Daily closes used for this row's performance figures.")
+    start_date: str = Field(description="First close date (ISO 8601).")
+    end_date: str = Field(description="Last close date (ISO 8601).")
+    total_return_percent: float = Field(
+        description="Total return over the window (e.g. 12.3 = 12.3%)."
+    )
+    annualized_return_percent: float | None = Field(
+        default=None, description="CAGR over the window, percent; null under 90 days."
+    )
+    annualized_volatility_percent: float | None = Field(
+        default=None, description="Annualized volatility, percent; null under 90 days."
+    )
+    max_drawdown_percent: float = Field(
+        description="Largest peak-to-trough decline, as a negative percent."
+    )
+    sharpe_ratio: float | None = Field(
+        default=None,
+        description="Annualized Sharpe against the table's risk_free_rate; null under 90 days "
+        "or when returns never varied.",
+    )
+    sortino_ratio: float | None = Field(
+        default=None,
+        description="Annualized Sortino; null under 90 days or with no downside.",
+    )
+    calmar_ratio: float | None = Field(
+        default=None,
+        description="CAGR per unit of max drawdown; null under 90 days or with no drawdown.",
+    )
+    trailing_pe: float | None = Field(default=None, description="Trailing P/E ratio.")
+    forward_pe: float | None = Field(default=None, description="Forward P/E ratio.")
+    price_to_book: float | None = Field(default=None, description="Price/book ratio.")
+    price_to_sales: float | None = Field(default=None, description="Price/sales (TTM) ratio.")
+    peg_ratio: float | None = Field(
+        default=None,
+        description="P/E-to-growth ratio - the growth-adjusted multiple to rank on, rather "
+        "than raw P/E.",
+    )
+    ev_to_ebitda: float | None = Field(default=None, description="Enterprise value / EBITDA.")
+    profit_margins: float | None = Field(
+        default=None, description="Net profit margin as a FRACTION (0.27 = 27%)."
+    )
+    return_on_equity: float | None = Field(
+        default=None, description="Return on equity as a FRACTION (0.27 = 27%)."
+    )
+    debt_to_equity: float | None = Field(
+        default=None, description="Debt-to-equity as a PERCENT (79.5 = 79.5%), not a multiple."
+    )
+    metrics_error: str | None = Field(
+        default=None,
+        description="Set when the valuation metrics could not be fetched for this ticker, "
+        "leaving every valuation field above null. The performance figures are unaffected.",
+    )
+
+
+class TickerComparison(BaseModel):
+    """Side-by-side performance and valuation for a small set of tickers.
+
+    Results are partial, like get_quote: a ticker whose price history could not be fetched
+    appears in ``errors`` with no row, and one row's failure never discards the others. Rows
+    follow the order the tickers were requested (duplicate spellings collapse).
+    """
+
+    period: str = Field(description="Look-back window used for every row, e.g. '1y'.")
+    risk_free_rate: float = Field(
+        default=0.0,
+        description="Annual risk-free rate applied to every row's Sharpe and Sortino, as a "
+        "decimal (0.045 = 4.5%). Defaults to 0, making those raw rather than excess figures.",
+    )
+    base_currency: str | None = Field(
+        default=None,
+        description="The `currency` of the first row that reported one; the reference for each "
+        "row's currency_differs flag. Null when no row reported a currency.",
+    )
+    mixed_currencies: bool = Field(
+        default=False,
+        description="True when at least one row's currency differs from base_currency. The "
+        "returns in this table are then not in one unit: an FX move is mixed into the rows "
+        "that differ, so compare them on ratios and say so.",
+    )
+    rows: list[TickerComparisonRow] = Field(
+        description="One row per ticker whose price history was fetched, in request order."
+    )
+    errors: list[ComparisonError] = Field(
+        default_factory=list,
+        description="One entry per ticker that produced no row; empty when all succeeded.",
+    )

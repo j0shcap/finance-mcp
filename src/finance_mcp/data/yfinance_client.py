@@ -26,6 +26,7 @@ from finance_mcp.data.models import (
     AnalystData,
     BenchmarkComparison,
     CompanyProfile,
+    ComparisonError,
     DividendEvent,
     FinancialStatement,
     KeyMetrics,
@@ -44,6 +45,8 @@ from finance_mcp.data.models import (
     StatementPeriod,
     SymbolMatch,
     SymbolSearchResult,
+    TickerComparison,
+    TickerComparisonRow,
 )
 
 DEFAULT_MAX_BARS = 260
@@ -61,6 +64,9 @@ QUOTE_MAX_WORKERS = 8
 BENCHMARK_MAX_WORKERS = 2
 # The fewest shared closes that yield a single return to compare.
 MIN_OVERLAP_OBSERVATIONS = 2
+# Each comparison row costs two Yahoo calls (history + info), so the worker bound is lower
+# than the quote bound for the same ceiling on concurrent connections.
+COMPARE_MAX_WORKERS = 5
 # Intervals whose bars are points in time rather than whole sessions. Kept in sync with
 # HistoryInterval (a test pins it): everything that is not a daily-or-longer interval.
 _INTRADAY_INTERVALS = frozenset({"1m", "5m", "15m", "30m", "1h"})
@@ -175,22 +181,34 @@ class YFinanceClient:
             raise SymbolNotFound(_no_data_msg(kind, symbol))
         return ticker, info
 
+    def _normalize_batch(self, symbols: list[str]) -> tuple[list[str], list[tuple[str, str]]]:
+        """Normalize, de-duplicate and order a batch; returns (pending, (raw, reason) pairs).
+
+        Shared by get_quote and compare_tickers, which wrap the failures in their own error
+        models. A symbol that cannot even be normalized never reaches the network.
+        """
+        pending: list[str] = []  # normalized, de-duped, in request order
+        failures: list[tuple[str, str]] = []
+        for raw in symbols:
+            try:
+                symbol = _norm(raw)
+            except DataUnavailable as exc:
+                failures.append((raw, str(exc)))
+                continue
+            if symbol not in pending:
+                pending.append(symbol)
+        return pending, failures
+
     def get_quote(self, symbols: list[str]) -> QuoteResult:
         """Fetch quotes for a batch of symbols concurrently, with partial results.
 
         A batch is a set of independent lookups, so one unknown or unreachable ticker
         reports itself in ``errors`` instead of discarding the quotes that did work.
         """
-        pending: list[str] = []  # normalized, de-duped, in request order
-        errors: list[QuoteError] = []
-        for raw in symbols:
-            try:
-                symbol = _norm(raw)
-            except DataUnavailable as exc:
-                errors.append(QuoteError(symbol=raw, error=str(exc)))
-                continue
-            if symbol not in pending:
-                pending.append(symbol)
+        pending, failures = self._normalize_batch(symbols)
+        errors: list[QuoteError] = [
+            QuoteError(symbol=raw, error=reason) for raw, reason in failures
+        ]
         if not pending:
             return QuoteResult(quotes=[], errors=errors)
         fetched = _fetch_concurrently(pending, self._quote_or_error, QUOTE_MAX_WORKERS)
@@ -464,6 +482,83 @@ class YFinanceClient:
             alpha_percent=alpha,
             tracking_error_percent=tracking,
             information_ratio=info_ratio,
+        )
+
+    def compare_tickers(
+        self, symbols: list[str], period: str, risk_free_rate: float = 0.0
+    ) -> TickerComparison:
+        """Side-by-side performance and valuation for a small batch, fetched concurrently.
+
+        Each row is two independent lookups over the cached fetchers the single-ticker tools
+        already use, so a batch costs no more than calling them one at a time -- and one
+        ticker's failure reports itself instead of discarding the rows that worked.
+        """
+        pending, failures = self._normalize_batch(symbols)
+        errors = [ComparisonError(symbol=raw, error=reason) for raw, reason in failures]
+        built = _fetch_concurrently(
+            pending,
+            lambda s: self._comparison_row(s, period, risk_free_rate),
+            COMPARE_MAX_WORKERS,
+        )
+        rows = [r for r in built if isinstance(r, TickerComparisonRow)]
+        errors.extend(r for r in built if isinstance(r, ComparisonError))
+        base_currency = next((row.currency for row in rows if row.currency), None)
+        for row in rows:
+            row.currency_differs = row.currency is not None and row.currency != base_currency
+        return TickerComparison(
+            period=period,
+            risk_free_rate=risk_free_rate,
+            base_currency=base_currency,
+            mixed_currencies=any(row.currency_differs for row in rows),
+            rows=rows,
+            errors=errors,
+        )
+
+    def _comparison_row(
+        self, symbol: str, period: str, risk_free_rate: float
+    ) -> TickerComparisonRow | ComparisonError:
+        """One ticker's row, or the reason it has none.
+
+        Performance is the row's backbone: without it there is nothing to compare, so a
+        history failure becomes a ComparisonError. Valuation metrics are supplementary, so a
+        metrics failure leaves the row in place with those fields null and the reason in
+        metrics_error -- dropping a whole row because Yahoo's ``info`` blipped would lose the
+        return figures that did arrive.
+        """
+        try:
+            perf = self._compute_performance(symbol, period, risk_free_rate)
+        except DataUnavailable as exc:
+            return ComparisonError(symbol=symbol, error=str(exc))
+        metrics: KeyMetrics | None = None
+        metrics_error: str | None = None
+        try:
+            metrics = self.get_key_metrics(symbol)
+        except DataUnavailable as exc:
+            metrics_error = str(exc)
+        return TickerComparisonRow(
+            symbol=symbol,
+            currency=metrics.currency if metrics else None,
+            financial_currency=metrics.financial_currency if metrics else None,
+            bars=perf.bars,
+            start_date=perf.start_date,
+            end_date=perf.end_date,
+            total_return_percent=perf.total_return_percent,
+            annualized_return_percent=perf.annualized_return_percent,
+            annualized_volatility_percent=perf.annualized_volatility_percent,
+            max_drawdown_percent=perf.max_drawdown_percent,
+            sharpe_ratio=perf.sharpe_ratio,
+            sortino_ratio=perf.sortino_ratio,
+            calmar_ratio=perf.calmar_ratio,
+            trailing_pe=metrics.trailing_pe if metrics else None,
+            forward_pe=metrics.forward_pe if metrics else None,
+            price_to_book=metrics.price_to_book if metrics else None,
+            price_to_sales=metrics.price_to_sales if metrics else None,
+            peg_ratio=metrics.peg_ratio if metrics else None,
+            ev_to_ebitda=metrics.ev_to_ebitda if metrics else None,
+            profit_margins=metrics.profit_margins if metrics else None,
+            return_on_equity=metrics.return_on_equity if metrics else None,
+            debt_to_equity=metrics.debt_to_equity if metrics else None,
+            metrics_error=metrics_error,
         )
 
     def get_financials(

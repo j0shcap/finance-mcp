@@ -201,3 +201,163 @@ def test_compare_to_benchmark_fetches_both_legs_concurrently() -> None:
     )
     result = _client(ticker_factory=factory).compare_to_benchmark("AAPL", "SPY", "1y", 0.0)
     assert result.overlapping_observations == DAYS
+
+
+METRICS_INFO = {
+    "longName": "Apple Inc.",
+    "currency": "USD",
+    "financialCurrency": "USD",
+    "trailingPE": 37.7,
+    "forwardPE": 30.1,
+    "priceToBook": 51.2,
+    "profitMargins": 0.271,
+    "returnOnEquity": 1.41,
+    "debtToEquity": 79.55,
+}
+
+
+def _rows_factory(**overrides: dict[str, Any]) -> Any:
+    """Two healthy comparable tickers, with per-symbol overrides merged in."""
+    base: dict[str, dict[str, Any]] = {
+        "AAPL": {"history_df": make_history_df(_walk(100.0, 0.30, 2.0)), "info": METRICS_INFO},
+        "MSFT": {"history_df": make_history_df(_walk(200.0, 0.50, 3.0)), "info": METRICS_INFO},
+    }
+    base.update(overrides)
+    return fake_multi_ticker_factory(base)
+
+
+def test_compare_tickers_returns_one_row_per_ticker_in_request_order() -> None:
+    table = _client(ticker_factory=_rows_factory()).compare_tickers(["msft", " aapl "], "1y")
+    assert [row.symbol for row in table.rows] == ["MSFT", "AAPL"]
+    assert table.errors == []
+    assert table.period == "1y"
+    assert table.risk_free_rate == 0.0
+
+
+def test_compare_tickers_rows_carry_performance_and_valuation() -> None:
+    table = _client(ticker_factory=_rows_factory()).compare_tickers(["AAPL", "MSFT"], "1y")
+    row = table.rows[0]
+    assert row.total_return_percent is not None
+    assert row.annualized_volatility_percent is not None
+    assert row.sharpe_ratio is not None
+    assert row.max_drawdown_percent < 0
+    assert row.trailing_pe == 37.7
+    assert row.forward_pe == 30.1
+    assert row.profit_margins == 0.271
+    assert row.metrics_error is None
+
+
+def test_compare_tickers_applies_the_risk_free_rate_to_every_row() -> None:
+    raw = _client(ticker_factory=_rows_factory()).compare_tickers(["AAPL", "MSFT"], "1y")
+    excess = _client(ticker_factory=_rows_factory()).compare_tickers(
+        ["AAPL", "MSFT"], "1y", risk_free_rate=0.05
+    )
+    assert excess.risk_free_rate == 0.05
+    assert raw.rows[0].sharpe_ratio is not None and excess.rows[0].sharpe_ratio is not None
+    assert excess.rows[0].sharpe_ratio < raw.rows[0].sharpe_ratio
+
+
+def test_compare_tickers_deduplicates_equivalent_spellings() -> None:
+    table = _client(ticker_factory=_rows_factory()).compare_tickers(["AAPL", "aapl"], "1y")
+    assert [row.symbol for row in table.rows] == ["AAPL"]
+
+
+def test_compare_tickers_reports_a_failed_history_as_an_error_not_a_row() -> None:
+    """The row's backbone is gone, so there is no row."""
+    factory = _rows_factory(NOPE={"history_error": KeyError("exchangeTimezoneName")})
+    table = _client(ticker_factory=factory).compare_tickers(["AAPL", "NOPE"], "1y")
+    assert [row.symbol for row in table.rows] == ["AAPL"]
+    assert [err.symbol for err in table.errors] == ["NOPE"]
+    assert "NOPE" in table.errors[0].error
+
+
+def test_compare_tickers_keeps_the_row_when_only_the_valuation_metrics_fail() -> None:
+    """Performance still stands, so the row survives with null valuation fields and a
+    per-row reason - not silently blank, and not a dropped row."""
+    factory = _rows_factory(
+        BADINFO={
+            "history_df": make_history_df(_walk(300.0, 0.20, 1.0)),
+            "info_error": RuntimeError("Yahoo 503"),
+        }
+    )
+    table = _client(ticker_factory=factory).compare_tickers(["AAPL", "BADINFO"], "1y")
+    row = next(r for r in table.rows if r.symbol == "BADINFO")
+    assert table.errors == []  # not double-reported
+    assert row.total_return_percent is not None
+    assert row.trailing_pe is None
+    assert row.metrics_error is not None and "BADINFO" in row.metrics_error
+
+
+def test_compare_tickers_reports_an_unnormalizable_symbol_without_fetching() -> None:
+    table = _client(ticker_factory=_rows_factory()).compare_tickers(["AAPL", "  "], "1y")
+    assert [row.symbol for row in table.rows] == ["AAPL"]
+    assert table.errors[0].symbol == "  "
+    assert "Empty ticker symbol" in table.errors[0].error
+
+
+def test_compare_tickers_empty_list_is_an_empty_table() -> None:
+    table = _client(ticker_factory=_rows_factory()).compare_tickers([], "1y")
+    assert table.rows == [] and table.errors == []
+    assert table.base_currency is None
+    assert table.mixed_currencies is False
+
+
+def test_compare_tickers_flags_a_currency_difference_per_row() -> None:
+    foreign = dict(METRICS_INFO, currency="EUR", financialCurrency="EUR")
+    factory = _rows_factory(
+        SAP={"history_df": make_history_df(_walk(150.0, 0.25, 2.0)), "info": foreign}
+    )
+    table = _client(ticker_factory=factory).compare_tickers(["AAPL", "SAP"], "1y")
+    by_symbol = {row.symbol: row for row in table.rows}
+    assert table.base_currency == "USD"  # the first row that reported one
+    assert table.mixed_currencies is True
+    assert by_symbol["AAPL"].currency == "USD" and by_symbol["AAPL"].currency_differs is False
+    assert by_symbol["SAP"].currency == "EUR" and by_symbol["SAP"].currency_differs is True
+
+
+def test_compare_tickers_single_currency_batch_is_not_flagged() -> None:
+    table = _client(ticker_factory=_rows_factory()).compare_tickers(["AAPL", "MSFT"], "1y")
+    assert table.mixed_currencies is False
+    assert all(row.currency_differs is False for row in table.rows)
+
+
+def test_compare_tickers_unknown_currency_is_not_flagged_as_a_difference() -> None:
+    # Yahoo sometimes omits the currency; a null is "unlabelled", not "different".
+    no_currency = {k: v for k, v in METRICS_INFO.items() if k != "currency"}
+    factory = _rows_factory(
+        MYST={"history_df": make_history_df(_walk(10.0, 0.05, 0.4)), "info": no_currency}
+    )
+    table = _client(ticker_factory=factory).compare_tickers(["AAPL", "MYST"], "1y")
+    by_symbol = {row.symbol: row for row in table.rows}
+    assert by_symbol["MYST"].currency is None
+    assert by_symbol["MYST"].currency_differs is False
+    assert table.mixed_currencies is False
+
+
+def test_compare_tickers_base_currency_comes_from_the_first_row_that_has_one() -> None:
+    no_currency = {k: v for k, v in METRICS_INFO.items() if k != "currency"}
+    factory = _rows_factory(
+        MYST={"history_df": make_history_df(_walk(10.0, 0.05, 0.4)), "info": no_currency}
+    )
+    table = _client(ticker_factory=factory).compare_tickers(["MYST", "AAPL"], "1y")
+    assert table.base_currency == "USD"
+
+
+def test_compare_tickers_fetches_rows_concurrently() -> None:
+    # Each row constructs a ticker twice (history, then info), so the barrier cycles; it
+    # only ever clears if the rows are in flight together. A sequential implementation
+    # blocks on the first wait until the timeout.
+    symbols = ["AAPL", "MSFT", "GOOG"]
+    gate = threading.Barrier(len(symbols), timeout=10)
+    factory = fake_multi_ticker_factory(
+        {
+            s: {
+                "history_df": make_history_df(_walk(100.0 + i * 10, 0.30, 2.0)),
+                "info": METRICS_INFO,
+            }
+            for i, s in enumerate(symbols)
+        },
+        gate=gate,
+    )
+    table = _client(ticker_factory=factory).compare_tickers(symbols, "1y")
+    assert [row.symbol for row in table.rows] == symbols

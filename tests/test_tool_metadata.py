@@ -40,6 +40,7 @@ MARKET_DATA_TOOLS = {
     "get_key_metrics",
     "analyze_performance",
     "compare_to_benchmark",
+    "compare_tickers",
 }
 
 

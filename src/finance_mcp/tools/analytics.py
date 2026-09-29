@@ -10,11 +10,12 @@ from finance_mcp.data.models import (
     HistoryPeriod,
     KeyMetrics,
     PerformanceStats,
+    TickerComparison,
 )
 from finance_mcp.data.yfinance_client import YFinanceClient
 from finance_mcp.tools._annotations import market_data
 from finance_mcp.tools._dispatch import run_data
-from finance_mcp.tools._inputs import RiskFreeRate, Ticker
+from finance_mcp.tools._inputs import MAX_COMPARE_TICKERS, RiskFreeRate, Ticker
 
 
 def register(mcp: FastMCP, client: YFinanceClient) -> None:
@@ -99,3 +100,40 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
         return await run_data(
             lambda: client.compare_to_benchmark(ticker, benchmark, period, risk_free_rate)
         )
+
+    @mcp.tool(annotations=market_data("Side-by-Side Ticker Comparison"))
+    async def compare_tickers(
+        tickers: Annotated[
+            list[Ticker],
+            Field(
+                min_length=2,
+                max_length=MAX_COMPARE_TICKERS,
+                description=(
+                    f"2-{MAX_COMPARE_TICKERS} ticker symbols to compare, e.g. "
+                    "['AAPL', 'MSFT', 'GOOGL']. For one ticker use analyze_performance."
+                ),
+            ),
+        ],
+        period: Annotated[
+            HistoryPeriod, Field(description="Look-back window applied to every row.")
+        ] = "1y",
+        risk_free_rate: RiskFreeRate = 0.0,
+    ) -> TickerComparison:
+        """Side-by-side performance and key valuation metrics for 2-10 tickers.
+
+        Each row carries total/annualized return, volatility, max drawdown and the
+        risk-adjusted ratios over `period`, plus Yahoo's valuation metrics (P/E, forward
+        P/E, P/B, P/S, PEG, EV/EBITDA, margins, ROE, debt/equity) in their as-reported
+        units - margins and ROE are fractions, debt_to_equity is already a percent. Rank
+        peers on PEG or growth-vs-multiple rather than raw P/E.
+
+        Tickers are fetched in parallel and results are partial: a ticker whose price
+        history could not be fetched is named in `errors` with the reason and has no row,
+        and a row whose valuation metrics failed is still present with those fields null
+        and `metrics_error` set. One bad ticker never invalidates the rest.
+
+        Rows whose quote currency differs from the table's base_currency are flagged with
+        currency_differs, and mixed_currencies summarises it: those returns carry an FX
+        component the other rows do not, so compare such rows on ratios and say so.
+        """
+        return await run_data(lambda: client.compare_tickers(tickers, period, risk_free_rate))

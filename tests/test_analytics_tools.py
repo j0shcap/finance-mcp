@@ -13,6 +13,7 @@ from tests.conftest import (
 
 METRICS_INFO = {
     "longName": "Apple Inc.",
+    "currency": "USD",
     "trailingPE": 37.73,
     "profitMargins": 0.271,
     "returnOnEquity": 1.41,
@@ -26,7 +27,7 @@ async def test_analytics_tools_registered() -> None:
     async with Client(server) as client:
         names = {t.name for t in await client.list_tools()}
         assert {"get_key_metrics", "analyze_performance"} <= names
-        assert len(names) == 20  # 19 prior + compare_to_benchmark
+        assert len(names) == 21  # 19 prior + compare_to_benchmark + compare_tickers
 
 
 async def test_get_key_metrics_tool() -> None:
@@ -166,3 +167,42 @@ async def test_compare_to_benchmark_schema_explains_the_inner_join() -> None:
         assert tool.description is not None
         assert "inner-joined" in tool.description
         assert "quote currency" in tool.description
+
+
+async def test_compare_tickers_tool() -> None:
+    factory = fake_multi_ticker_factory(
+        {
+            "AAPL": {
+                "history_df": make_history_df([100.0 + i * 0.3 for i in range(200)]),
+                "info": METRICS_INFO,
+            },
+            "MSFT": {
+                "history_df": make_history_df([200.0 + i * 0.5 for i in range(200)]),
+                "info": METRICS_INFO,
+            },
+        }
+    )
+    server = create_server(yf_client=make_client(factory=factory))
+    async with Client(server) as client:
+        result = await client.call_tool("compare_tickers", {"tickers": ["AAPL", "MSFT"]})
+        assert [row.symbol for row in result.data.rows] == ["AAPL", "MSFT"]
+        assert result.data.period == "1y"
+        assert result.data.errors == []
+        assert result.data.base_currency == "USD"
+        assert result.data.mixed_currencies is False
+
+
+async def test_compare_tickers_tool_returns_partial_results() -> None:
+    factory = fake_multi_ticker_factory(
+        {
+            "AAPL": {
+                "history_df": make_history_df([100.0 + i * 0.3 for i in range(200)]),
+                "info": METRICS_INFO,
+            }
+        }
+    )
+    server = create_server(yf_client=make_client(factory=factory))
+    async with Client(server) as client:
+        result = await client.call_tool("compare_tickers", {"tickers": ["AAPL", "NOPE"]})
+        assert [row.symbol for row in result.data.rows] == ["AAPL"]
+        assert [err.symbol for err in result.data.errors] == ["NOPE"]
