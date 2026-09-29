@@ -1251,6 +1251,27 @@ def test_analyze_performance_cache_keys_on_period() -> None:
     assert calls["n"] == 2
 
 
+def test_analyze_performance_cache_keys_on_the_risk_free_rate() -> None:
+    """A second call at a different rate must recompute, not replay the first rate's result.
+
+    The cached value is a PerformanceStats whose Sharpe, Sortino and downside figures are
+    all derived from risk_free_rate, so dropping the rate from the key would quietly serve
+    whichever rate happened to be asked for first.
+    """
+    df = make_history_df([100.0 + i for i in range(300)])
+    client = _perf_client(factory=fake_ticker_factory(history_df=df))
+
+    raw = client.analyze_performance("AAPL", "1y")
+    excess = client.analyze_performance("AAPL", "1y", 0.05)
+
+    assert raw.risk_free_rate == 0.0
+    assert excess.risk_free_rate == 0.05
+    assert raw.sharpe_ratio is not None and excess.sharpe_ratio is not None
+    assert excess.sharpe_ratio < raw.sharpe_ratio
+    # And the first rate is still served from cache rather than recomputed differently.
+    assert client.analyze_performance("AAPL", "1y").sharpe_ratio == raw.sharpe_ratio
+
+
 def test_analyze_performance_period_propagates() -> None:
     df = make_history_df([100.0, 110.0, 99.0])
     p = _perf_client(factory=fake_ticker_factory(history_df=df)).analyze_performance("AAPL", "5y")
