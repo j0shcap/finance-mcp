@@ -47,7 +47,8 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
         instrument. Volatility is scaled by an observations-per-year factor inferred from
         the data and reported as periods_per_year (roughly 252 for a weekday-traded
         equity, 365 for a 24/7 instrument such as crypto). Both annualized figures and
-        periods_per_year are null when the window spans under 90 days, because
-        annualizing a sub-quarter move extrapolates noise into a yearly rate.
+        periods_per_year are null when the window spans under 85 days (just under three
+        months), because annualizing a sub-quarter move extrapolates noise into a yearly
+        rate.
         """
         return await run_data(lambda: client.analyze_performance(ticker, period))

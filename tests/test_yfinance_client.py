@@ -36,6 +36,7 @@ from finance_mcp.data.models import (
 from finance_mcp.data.yfinance_client import (
     _INTRADAY_INTERVALS,
     DEFAULT_CACHE_MAX_ENTRIES,
+    MAX_CACHEABLE_BARS,
     QUOTE_MAX_WORKERS,
     YFinanceClient,
     _recommendation_trend,
@@ -993,19 +994,97 @@ def test_analyze_performance_short_window_nulls_annualized_fields() -> None:
 
 
 def test_analyze_performance_annualizes_at_the_threshold() -> None:
-    # 91 consecutive daily bars => exactly 90 elapsed days => on the gate, so it annualizes.
-    p = _perf_stats([100.0 + i for i in range(91)])
+    # 86 consecutive daily bars => exactly 85 elapsed days => on the gate, so it annualizes.
+    p = _perf_stats([100.0 + i for i in range(86)])
     assert p.annualized_return_percent is not None
     assert p.annualized_volatility_percent is not None
     assert p.periods_per_year is not None
 
 
 def test_analyze_performance_does_not_annualize_below_the_threshold() -> None:
-    # 90 bars => 89 elapsed days => one day short of the gate.
-    p = _perf_stats([100.0 + i for i in range(90)])
+    # 85 bars => 84 elapsed days => one day short of the gate.
+    p = _perf_stats([100.0 + i for i in range(85)])
     assert p.annualized_return_percent is None
     assert p.annualized_volatility_percent is None
     assert p.periods_per_year is None
+
+
+def test_analyze_performance_annualizes_the_shortest_three_month_window() -> None:
+    """A 3mo window must annualize on every calendar date, not most of them.
+
+    Sweeping real call dates, period="3mo" spans 87-95 elapsed days between the first and
+    last bar: three calendar months drift by a few days, and the first bar is the first
+    session at or after the start. A 90-day gate cut through that range, so the annualized
+    fields appeared and vanished depending on when the tool was called (~15% of dates).
+    88 bars = 87 elapsed days is the measured floor of that range.
+    """
+    p = _perf_stats([100.0 + i for i in range(88)])
+    assert p.annualized_return_percent is not None
+    assert p.annualized_volatility_percent is not None
+    assert p.periods_per_year is not None
+
+
+def test_analyze_performance_still_nulls_a_one_month_window() -> None:
+    # Lowering the gate must not start annualizing genuinely short windows.
+    p = _perf_stats([100.0 + i for i in range(31)])
+    assert p.annualized_return_percent is None
+    assert p.periods_per_year is None
+
+
+def _counting_factory(df: pd.DataFrame, calls: dict[str, int]) -> Callable[[str], Any]:
+    def counting(symbol: str) -> Any:
+        calls["n"] += 1
+        return fake_ticker_factory(history_df=df)(symbol)
+
+    return counting
+
+
+def test_oversized_bar_lists_are_not_retained_in_the_cache() -> None:
+    # An entry-count LRU does not bound bytes: a period="max" daily history is ~11.5k bars at
+    # ~787 B each (~9 MB), so 256 such entries would retain gigabytes. Lists past the limit
+    # are still returned in full -- they are just not kept.
+    closes = [100.0 + i for i in range(MAX_CACHEABLE_BARS + 1)]
+    client = _perf_client(factory=fake_ticker_factory(history_df=make_history_df(closes)))
+    bars = client._all_bars("AAPL", "max", "1d")
+    assert len(bars) == MAX_CACHEABLE_BARS + 1  # returned whole
+    assert ("bars", "AAPL", "max", "1d") not in client._cache
+
+
+def test_bar_lists_at_the_limit_are_retained() -> None:
+    closes = [100.0 + i for i in range(MAX_CACHEABLE_BARS)]
+    client = _perf_client(factory=fake_ticker_factory(history_df=make_history_df(closes)))
+    client._all_bars("AAPL", "10y", "1d")
+    assert ("bars", "AAPL", "10y", "1d") in client._cache
+
+
+def test_dedupe_still_holds_below_the_cache_limit() -> None:
+    calls = {"n": 0}
+    df = make_history_df([100.0 + i for i in range(120)])
+    client = _perf_client(factory=_counting_factory(df, calls))
+    client.get_price_history("AAPL", period="6mo", interval="1d")
+    client.analyze_performance("AAPL", "6mo")
+    assert calls["n"] == 1  # one fetch still feeds both views
+
+
+def test_repeated_analysis_of_an_oversized_history_does_not_refetch() -> None:
+    # Bars past the limit are not cached, so without a cached PerformanceStats every call
+    # would go back to the network. The derived result is tiny; cache that instead.
+    calls = {"n": 0}
+    df = make_history_df([100.0 + i for i in range(MAX_CACHEABLE_BARS + 1)])
+    client = _perf_client(factory=_counting_factory(df, calls))
+    first = client.analyze_performance("AAPL", "max")
+    second = client.analyze_performance("AAPL", "max")
+    assert calls["n"] == 1
+    assert first.total_return_percent == second.total_return_percent
+
+
+def test_oversized_price_history_still_caches_its_derived_view() -> None:
+    calls = {"n": 0}
+    df = make_history_df([100.0 + i for i in range(MAX_CACHEABLE_BARS + 1)])
+    client = _perf_client(factory=_counting_factory(df, calls))
+    client.get_price_history("AAPL", period="max", interval="1d")
+    client.get_price_history("AAPL", period="max", interval="1d")
+    assert calls["n"] == 1
 
 
 def test_analyze_performance_shares_the_bars_cache_with_get_price_history() -> None:
