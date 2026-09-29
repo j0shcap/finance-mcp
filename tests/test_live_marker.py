@@ -1,21 +1,16 @@
 """Pins the configuration and completeness of the opt-in live suite.
 
-`tests/live/` hits real Yahoo endpoints. What keeps it out of `make check` (and therefore
-out of CI, every contributor's machine, and the coverage gate) is:
+Three things keep `tests/live/` out of `make check`: the `live` marker is registered,
+`addopts` carries `-m "not live"`, and the marker is applied only to items under that
+directory. Each is one edit away from being lost - the first two would make the offline gate
+network-dependent, the third would empty it while leaving the config looking correct. So the
+first two are checked against the loaded config and the third against a real collection pass.
 
-1. the `live` marker is registered, so `--strict-markers` cannot silently swallow a typo;
-2. `addopts` carries `-m "not live"`, so the marker is deselected unless asked for;
-3. the marker is applied only to items under `tests/live/`.
-
-Each is one edit away from being lost. Losing (1) or (2) turns the offline quality gate
-into a network-dependent one that fails on a plane or behind a firewall; losing (3) empties
-it entirely while leaving the config looking correct. So the first two are asserted against
-the loaded config and the third against a real collection pass.
-
-This module also pins that the live suite covers every market-data tool, since a tool
-added without one is a tool whose schema drift is invisible again.
+Also pins that every market-data tool has a live test, since one added without it is a tool
+whose schema drift is invisible again.
 """
 
+import ast
 import subprocess
 import sys
 from pathlib import Path
@@ -25,13 +20,11 @@ import pytest
 from finance_mcp.conventions import MARKET_DATA_TOOLS
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+LIVE_DIR = REPO_ROOT / "tests" / "live"
 
 
 def _collect(*args: str) -> str:
-    """Node ids a real collection pass selects, so the assertions below are not theoretical.
-
-    --collect-only, so this never executes a test and never reaches the network.
-    """
+    """Node ids a real collection pass selects. --collect-only never runs a test."""
     result = subprocess.run(  # fixed argv, no shell, no user input
         [sys.executable, "-m", "pytest", "--collect-only", "-q", "--no-cov", *args],
         cwd=REPO_ROOT,
@@ -43,13 +36,11 @@ def _collect(*args: str) -> str:
 
 
 def test_default_run_keeps_the_offline_suite_and_drops_the_live_one() -> None:
-    """The whole point of the marker, asserted against an actual selection.
+    """The marker's whole point, asserted against an actual selection.
 
-    The config checks below cannot catch the failure this one does: a
-    pytest_collection_modifyitems hook in tests/live/conftest.py is handed EVERY collected
-    item in the session, so marking without a path filter marks the entire offline suite
-    live, and `-m 'not live'` then deselects all of it. That leaves `make check` reporting
-    success having run nothing at all, with the config still looking perfect.
+    The config checks below cannot catch what this one does: the marking hook is handed
+    every item in the session, so without a path filter it marks the offline suite live and
+    `-m 'not live'` deselects all of it - a gate that passes having run nothing.
     """
     collected = _collect()
 
@@ -61,7 +52,7 @@ def test_default_run_keeps_the_offline_suite_and_drops_the_live_one() -> None:
 
 
 def test_live_run_selects_only_the_live_suite() -> None:
-    """`make test-live` must reach the live tests and nothing else."""
+    """`make test-live` reaches the live tests and nothing else."""
     collected = _collect("-m", "live")
 
     assert "tests/live/" in collected, "`-m live` must select the live suite"
@@ -79,7 +70,7 @@ def test_live_marker_is_registered(pytestconfig: pytest.Config) -> None:
 
 
 def test_live_tests_are_deselected_by_default(pytestconfig: pytest.Config) -> None:
-    """The default run excludes the live suite, so `make check` never touches the network."""
+    """The default run excludes the live suite, so `make check` stays offline."""
     addopts = pytestconfig.getini("addopts")
     assert "-m" in addopts, f"addopts must pass a -m expression, got {addopts}"
     assert "not live" in addopts[addopts.index("-m") + 1], (
@@ -92,21 +83,37 @@ def test_strict_markers_is_enabled(pytestconfig: pytest.Config) -> None:
     assert "--strict-markers" in pytestconfig.getini("addopts")
 
 
-def test_every_market_data_tool_has_live_coverage() -> None:
-    """Each market-data tool is exercised by the live suite.
+def _tools_called_by_the_live_suite() -> set[str]:
+    """Tool names passed to `layer.call(...)`, read from the AST rather than grepped.
 
-    The live suite is the only thing watching Yahoo's payload shape, so a tool added
-    without a live test is a tool whose schema drift is invisible again. Checked against
-    the same MARKET_DATA_TOOLS tuple the server instructions render from, so adding a tool
-    there without covering it here fails in the offline gate rather than going unnoticed
+    A substring search over the sources would also match a name in a comment or a message,
+    which is how a "covered" tool ends up with no call behind it.
+    """
+    called: set[str] = set()
+    for path in sorted(LIVE_DIR.glob("test_*.py")):
+        for node in ast.walk(ast.parse(path.read_text())):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "call"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+            ):
+                called.add(node.args[0].value)
+    return called
+
+
+def test_every_market_data_tool_has_live_coverage() -> None:
+    """A tool with no live test is a tool whose schema drift is invisible.
+
+    Checked against the same MARKET_DATA_TOOLS the server instructions render from, so
+    adding one without live coverage fails the offline gate rather than going unnoticed
     until the nightly run.
     """
-    sources = "\n".join(
-        path.read_text() for path in sorted((REPO_ROOT / "tests" / "live").glob("test_*.py"))
-    )
+    uncovered = set(MARKET_DATA_TOOLS) - _tools_called_by_the_live_suite()
 
-    uncovered = [tool for tool in MARKET_DATA_TOOLS if f'"{tool}"' not in sources]
     assert not uncovered, (
-        f"market-data tools with no live contract test: {uncovered}. Add one to tests/live/ "
-        f"so Yahoo changing their payload shape is still caught."
+        f"market-data tools never called by tests/live/: {sorted(uncovered)}. Add a contract "
+        f"test so Yahoo changing their payload shape is still caught."
     )

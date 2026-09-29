@@ -1,8 +1,8 @@
 """Live contract: analyze_performance, get_news, search_symbols.
 
-analyze_performance is computed by us from live bars, so its assertions check our
-analytics against real market data; get_news and search_symbols read payload shapes
-yfinance has changed before (the nested news ``content``, ``yf.Search``).
+analyze_performance is ours, computed from live bars, so its assertions check our analytics
+against real market data. get_news and search_symbols read payload shapes yfinance has
+restructured before.
 """
 
 import datetime
@@ -30,9 +30,8 @@ async def test_analyze_performance_equity_shape_and_units(layer: Layer) -> None:
 
     require_present(stats, (*ANNUALIZED_FIELDS, "sma_50", "sma_200"))
 
-    # Annualization runs off the calendar span, so on a one-year window the annualized
-    # return equals the total return. This is the invariant the tool description states and
-    # the prompt repeats; asserting it on live data is the point of this test.
+    # Annualization runs off the calendar span, so over a one-year window the annualized
+    # return equals the total return - the invariant the tool description states.
     assert stats.annualized_return_percent == pytest.approx(stats.total_return_percent, rel=0.05), (
         f"over a 1y window annualized ({stats.annualized_return_percent}) must equal total "
         f"({stats.total_return_percent}); a bar-count-based factor would diverge here"
@@ -62,9 +61,8 @@ async def test_analyze_performance_equity_shape_and_units(layer: Layer) -> None:
 async def test_analyze_performance_crypto_infers_a_247_calendar(layer: Layer) -> None:
     """A 24/7 instrument yields ~365 observations a year, not ~252.
 
-    periods_per_year is inferred from the data rather than hardcoded, and the prompt tells
-    the model to state it when comparing volatility across asset classes - so the two
-    calendars have to actually come out different.
+    periods_per_year is inferred from the data, and the prompt has the model cite it when
+    comparing volatility across asset classes, so the two calendars must come out different.
     """
     stats = await layer.call("analyze_performance", ticker=BTC, period="1y")
 
@@ -88,7 +86,7 @@ async def test_analyze_performance_suppresses_annualization_on_short_windows(
             f"{field} must be null on a sub-quarter window - annualizing a one-month move "
             f"reports short-run noise as a yearly rate"
         )
-    # The unannualized figures are still reported, since they are what the model should quote.
+    # The unannualized figures are still reported: they are what the model should quote.
     assert stats.bars > 5
     assert stats.max_drawdown_percent <= 0
 
@@ -103,9 +101,9 @@ async def test_news_shape(layer: Layer) -> None:
     for article in result.articles:
         assert article.title and article.title.strip(), "every article needs a headline"
 
-    # These three come from nested keys (content.provider.displayName,
-    # content.canonicalUrl.url, content.summary) that yfinance has restructured before. Any
-    # single article may be missing one, but a payload change nulls them all at once.
+    # These come from nested keys (content.provider.displayName, content.canonicalUrl.url,
+    # content.summary) that yfinance has restructured before. One article may be missing
+    # one; a payload change nulls them across every article at once.
     for field in ("publisher", "link", "summary"):
         assert any(getattr(a, field) for a in result.articles), (
             f"no article has a {field}; the nested news payload shape has most likely changed"
@@ -140,8 +138,8 @@ async def test_search_resolves_a_company_name(layer: Layer) -> None:
     assert len(result.matches) <= 8, "max_results must cap the match list"
 
     by_symbol = {m.symbol: m for m in result.matches}
-    # search_symbols is how the model turns a name into a ticker before every other call,
-    # so the canonical name resolving to the canonical symbol is the whole contract.
+    # This is how the model turns a name into a ticker before every other call, so the
+    # canonical name resolving to the canonical symbol is the whole contract.
     assert AAPL in by_symbol, f"'Apple' must resolve to AAPL, got {sorted(by_symbol)}"
 
     apple = by_symbol[AAPL]
@@ -156,7 +154,7 @@ async def test_search_resolves_a_company_name(layer: Layer) -> None:
 
 
 async def test_search_returns_non_equity_types(layer: Layer) -> None:
-    """quote_type is how the model tells an ETF or a coin from a stock, so it must vary."""
+    """quote_type is how the model tells a coin or an ETF from a stock, so it must vary."""
     result = await layer.call("search_symbols", query="Bitcoin", max_results=8)
 
     assert result.matches

@@ -1,7 +1,7 @@
 """Live contract: get_financials, get_company_profile, get_key_metrics, get_analyst_data.
 
-These are the tools whose units the conventions glossary and the analyze_stock prompt make
-promises about, so most of the unit-plausibility assertions in the suite live here.
+These are the tools the conventions glossary makes unit promises about, so most of the
+unit assertions live here.
 """
 
 import datetime
@@ -15,9 +15,9 @@ from tests.live.conftest import (
     require_present,
 )
 
-#: Fields Yahoo populates for any large listing. peg_ratio is deliberately included: the
-#: client reads info["pegRatio"], and Yahoo has shipped a "trailingPegRatio" spelling, so
-#: this is the single most likely key to drift out from under us.
+#: Fields Yahoo populates for any large listing. peg_ratio is included deliberately: the
+#: client reads info["pegRatio"] and Yahoo has shipped a "trailingPegRatio" spelling, which
+#: makes it the likeliest key to drift out from under us.
 METRICS_FIELDS = (
     "currency",
     "financial_currency",
@@ -91,7 +91,7 @@ async def test_financials_income_annual_shape(layer: Layer) -> None:
         f"period_ends must be strictly most-recent-first, got {statement.period_ends}"
     )
 
-    # These two labels are the backbone the analyze_stock prompt relies on by name.
+    # The analyze_stock prompt relies on both labels by name.
     for label in ("Total Revenue", "Net Income"):
         assert label in statement.line_items, (
             f"{label!r} is missing; available labels: {sorted(statement.line_items)}"
@@ -102,15 +102,15 @@ async def test_financials_income_annual_shape(layer: Layer) -> None:
         )
 
     revenue = statement.line_items["Total Revenue"][0]
-    # Absolute units, not millions: 416161000000, not 416161. A scale change here would
-    # silently shrink every figure the model reports by six orders of magnitude.
+    # Absolute units, not millions: 416161000000, not 416161. A scale change would shrink
+    # every figure the model reports by six orders of magnitude.
     assert revenue is not None and revenue > 1e11, (
         f"AAPL annual revenue should be hundreds of billions in absolute units, got {revenue}"
     )
 
     assert statement.missing_line_items == []
     assert statement.available_line_items == [], (
-        "available_line_items should stay empty when nothing was missing - it would just "
+        "available_line_items stays empty when nothing was missing; otherwise it would just "
         "repeat line_items' keys"
     )
 
@@ -124,7 +124,7 @@ async def test_financials_quarterly_shape(layer: Layer) -> None:
     assert len(statement.period_ends) >= 2
     assert iso_dates_descending(statement.period_ends)
     assert statement.line_items, "a quarterly balance sheet must report line items"
-    # Quarterly periods are ~3 months apart, which is what distinguishes this from annual.
+    # ~3 months apart is what distinguishes a quarterly statement from an annual one.
     newest = datetime.date.fromisoformat(statement.period_ends[0])
     second = datetime.date.fromisoformat(statement.period_ends[1])
     assert 60 <= (newest - second).days <= 125, (
@@ -148,7 +148,7 @@ async def test_financials_missing_label_reports_suggestions(layer: Layer) -> Non
         "available_line_items must be populated when a requested label was missing"
     )
     assert "Total Revenue" in statement.available_line_items
-    # The suggestion is what turns a wrong guess into a working retry.
+    # The suggestion turns a wrong guess into a working retry.
     assert "Total Revenue" in statement.line_item_suggestions.get("Revenue", []), (
         f"expected 'Revenue' to suggest 'Total Revenue', got {statement.line_item_suggestions}"
     )
@@ -157,9 +157,8 @@ async def test_financials_missing_label_reports_suggestions(layer: Layer) -> Non
 async def test_financials_non_usd_reporter_is_labelled(layer: Layer) -> None:
     """SAP reports in EUR while its US listing quotes in USD.
 
-    The FinancialStatement.currency docstring names this exact case, and the prompt tells
-    the model never to compare absolute figures across companies without checking it. A
-    flip to USD here would mean the model silently compares EUR revenue against USD peers.
+    FinancialStatement.currency names this case explicitly. A flip to USD would have the
+    model comparing EUR revenue against USD peers without noticing.
     """
     statement = await layer.call("get_financials", ticker=SAP, statement="income", period="annual")
 
@@ -171,7 +170,7 @@ async def test_financials_non_usd_reporter_is_labelled(layer: Layer) -> None:
 
 
 async def test_key_metrics_cross_listing_currencies_differ(layer: Layer) -> None:
-    """The two currency fields are not interchangeable, and SAP is where that shows."""
+    """The two currency fields are not interchangeable; SAP is where that shows."""
     metrics = await layer.call("get_key_metrics", ticker=SAP)
 
     require_present(metrics, ("currency", "financial_currency"))
@@ -195,8 +194,8 @@ async def test_company_profile_shape(layer: Layer) -> None:
 
     assert profile.recent_dividends, "AAPL pays a dividend, so recent_dividends must be populated"
     dividend_dates = [d.date for d in profile.recent_dividends]
-    # Newest LAST, which is the opposite order from period_ends - the field description
-    # says so, and getting it backwards would make "the latest dividend" the oldest one.
+    # Newest LAST - the opposite order from period_ends. Backwards, "the latest dividend"
+    # would be the oldest one.
     assert dividend_dates == sorted(dividend_dates), (
         f"recent_dividends must be oldest-first (newest last), got {dividend_dates}"
     )
@@ -213,11 +212,10 @@ async def test_company_profile_shape(layer: Layer) -> None:
 async def test_company_profile_dividend_yield_is_a_percent(layer: Layer) -> None:
     """dividend_yield is a percent (5.92 = 5.92%), cross-checked against the dividends.
 
-    A range assertion cannot detect this flip: for any yield y, both y and y/100 sit inside
-    a plausible 0-25 band, so a fraction would pass. The only real check is to recompute
-    the trailing yield from the dividends and the price in the same response. The tolerance
-    is wide (a factor of 5 either way) because Yahoo's trailing window and ours differ -
-    but a units flip is a factor of 100, far outside it.
+    A range assertion cannot catch this flip: for any yield y, both y and y/100 fall inside
+    a plausible 0-25 band. Recomputing the trailing yield from the dividends and price is
+    the only real check. The factor-of-5 tolerance covers the differing trailing windows; a
+    units flip is a factor of 100.
     """
     profile = await layer.call("get_company_profile", ticker=AAPL)
     quote = (await layer.call("get_quote", tickers=[AAPL])).quotes[0]
@@ -261,8 +259,8 @@ async def test_key_metrics_shape_and_units(layer: Layer) -> None:
             f"reports 100x too large."
         )
 
-    # debt_to_equity is ALREADY a percent (79.5 = 79.5%, not 79.5x). The >5 bound is what
-    # separates a percent from a silently-converted ratio; AAPL's sits well above it.
+    # debt_to_equity is ALREADY a percent (79.5 = 79.5%, not 79.5x). The >5 bound separates
+    # a percent from a silently-converted ratio; AAPL's sits well above it.
     assert metrics.debt_to_equity is not None
     assert 5 < metrics.debt_to_equity < 2000, (
         f"debt_to_equity is {metrics.debt_to_equity}; as a percent it should be well above "
@@ -281,7 +279,7 @@ async def test_key_metrics_shape_and_units(layer: Layer) -> None:
         value = getattr(metrics, field)
         assert 0 < value < 1000, f"{field} is {value}, not a plausible per-share figure"
 
-    # EBITDA and its margin have to agree in sign, or one of them is not what it claims.
+    # EBITDA and its margin must agree in sign, or one of them is not what it claims.
     assert (metrics.ebitda > 0) == (metrics.ebitda_margins > 0)
 
 
@@ -307,8 +305,7 @@ async def test_analyst_data_shape_and_units(layer: Layer) -> None:
     assert analyst.currency == "USD"
     assert analyst.current_price is not None and analyst.current_price > 0
 
-    # The 1-5 scale is INVERTED (1 = strong buy). Every consumer of this number depends on
-    # that, and it is stated in the tool description, the glossary and the prompt.
+    # The 1-5 scale is INVERTED (1 = strong buy), per the tool description and glossary.
     assert analyst.recommendation_mean is not None
     assert 1.0 <= analyst.recommendation_mean <= 5.0, (
         f"recommendation_mean {analyst.recommendation_mean} is off the documented 1-5 scale"
@@ -349,9 +346,8 @@ async def test_analyst_data_shape_and_units(layer: Layer) -> None:
 async def test_analyst_data_on_an_etf_is_a_clear_error(layer: Layer) -> None:
     """An ETF has no sell-side coverage, and the error has to say so.
 
-    Both the tool description and the analyze_stock prompt tell the model this ("ETFs,
-    indices, and crypto have no analyst coverage and return an error"). If Yahoo ever
-    starts publishing ETF targets, this test fails and one of the three has to change.
+    The tool description and the analyze_stock prompt both promise this. If Yahoo starts
+    publishing ETF targets, this goes red and one of the three has to change.
     """
     async with layer.expect_error("No analyst coverage"):
         await layer.call("get_analyst_data", ticker=SPY)

@@ -1,9 +1,8 @@
-"""Tests for the live suite's own harness, with no network involved.
+"""Offline tests for the live suite's own harness.
 
-The rate-limit handling in tests/live/conftest.py only runs when Yahoo is actually
-throttling us, which is exactly when nobody is watching and a wrong branch turns into
-either a red nightly build or - worse - a green one that asserted nothing. So the retry,
-skip and error-matching paths are exercised here, offline, with fakes.
+The rate-limit handling in tests/live/conftest.py only executes while Yahoo is throttling
+us - precisely when nobody is watching, and where a wrong branch means either a red nightly
+build or a green one that asserted nothing. So it is exercised here with fakes.
 """
 
 from types import SimpleNamespace
@@ -23,12 +22,12 @@ THROTTLED = "Too Many Requests. Rate limited. Try after a while."
 
 @pytest.fixture(autouse=True)
 def _no_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep the retry path instant; the delays themselves are not what is under test."""
+    """Keep the retries instant; the delays are not what is under test."""
     monkeypatch.setattr(live, "BACKOFF_SECONDS", (0.0, 0.0))
 
 
 class FakeClient:
-    """Stands in for YFinanceClient, failing a configurable number of times first."""
+    """Stands in for YFinanceClient, failing a set number of times before succeeding."""
 
     def __init__(self, failures: int, exc: Exception, result: Any = "ok") -> None:
         self.remaining = failures
@@ -44,13 +43,9 @@ class FakeClient:
         return self.result
 
 
-def _layer(name: str, client: Any = None, mcp_client: Any = None) -> Layer:
-    """A Layer over fakes; the constructor's types are widened to Any for the stand-ins."""
-    return Layer(name, client, mcp_client)
-
-
-def _direct(client: Any = None) -> Layer:
-    return _layer("direct", client)
+def _layer(client: Any = None, mcp_client: Any = None) -> Layer:
+    """A Layer over fakes, with the constructor's types widened for the stand-ins."""
+    return Layer(client, mcp_client)
 
 
 @pytest.mark.parametrize(
@@ -60,7 +55,6 @@ def _direct(client: Any = None) -> Layer:
         # What the client actually raises: the type is gone, only the message survives.
         DataUnavailable(f"Failed to fetch quote for 'AAPL': {THROTTLED}"),
         ToolError("Failed to fetch metrics for 'AAPL': rate limit exceeded"),
-        DataUnavailable("Failed to fetch news for 'AAPL': 429 Client Error"),
     ],
 )
 def test_rate_limit_is_recognised_however_it_arrives(exc: Exception) -> None:
@@ -73,49 +67,46 @@ def test_rate_limit_is_recognised_however_it_arrives(exc: Exception) -> None:
         SymbolNotFound("No quote data for 'NOTATICKER.XX'. The symbol may be invalid or delisted."),
         DataUnavailable("No analyst coverage for 'SPY'."),
         ToolError("Failed to parse profile for 'AAPL': unexpected payload"),
+        # A bare number must not read as a 429: line-item values and prices contain digits.
+        DataUnavailable("Failed to parse income statement for 'AAPL': bad value 4290000"),
     ],
 )
 def test_real_failures_are_not_mistaken_for_throttling(exc: Exception) -> None:
-    """A contract failure must stay a failure, or this suite would skip its way to green."""
+    """A contract failure must stay a failure, or the suite could skip its way to green."""
     assert not live._is_rate_limited(exc)
 
 
 async def test_call_retries_a_throttled_request_and_succeeds() -> None:
     client = FakeClient(failures=1, exc=YFRateLimitError())
 
-    result = await _direct(client).call("get_quote", tickers=["AAPL"])
+    result = await _layer(client).call("get_quote", tickers=["AAPL"])
 
     assert result == "ok"
     assert client.calls == 2, "the first attempt was throttled, so it must be retried"
 
 
 async def test_call_skips_after_exhausting_its_attempts() -> None:
-    """A persistently throttled call is a skip, not a failure - the whole point of requirement 4."""
+    """A persistently throttled call is a skip, not a failure."""
     client = FakeClient(failures=99, exc=DataUnavailable(f"Failed to fetch quote: {THROTTLED}"))
 
     with pytest.raises(pytest.skip.Exception, match="rate-limited"):
-        await _direct(client).call("get_quote", tickers=["AAPL"])
+        await _layer(client).call("get_quote", tickers=["AAPL"])
 
     assert client.calls == live.MAX_ATTEMPTS
 
 
 async def test_call_reraises_a_genuine_failure_without_retrying() -> None:
-    """A real error must surface immediately, not be retried three times and then skipped."""
+    """A real error surfaces at once rather than being retried and then skipped."""
     client = FakeClient(failures=99, exc=DataUnavailable("Failed to parse profile for 'AAPL': x"))
 
     with pytest.raises(DataUnavailable, match="Failed to parse profile"):
-        await _direct(client).call("get_quote", tickers=["AAPL"])
+        await _layer(client).call("get_quote", tickers=["AAPL"])
 
     assert client.calls == 1
 
 
 async def test_call_skips_when_throttling_hides_in_the_quote_errors_list() -> None:
-    """get_quote reports per-symbol failures instead of raising, so it needs its own path.
-
-    Without this, a fully throttled batch reads as a contract failure ("expected a quote for
-    AAPL, got an error") rather than as Yahoo rate-limiting us.
-    """
-
+    """get_quote reports per-symbol failures instead of raising, so it needs its own path."""
     throttled = SimpleNamespace(
         symbol="AAPL", error=f"Failed to fetch quote for 'AAPL': {THROTTLED}"
     )
@@ -123,12 +114,11 @@ async def test_call_skips_when_throttling_hides_in_the_quote_errors_list() -> No
     client = FakeClient(failures=0, exc=YFRateLimitError(), result=result)
 
     with pytest.raises(pytest.skip.Exception, match="rate-limited"):
-        await _direct(client).call("get_quote", tickers=["AAPL"])
+        await _layer(client).call("get_quote", tickers=["AAPL"])
 
 
 async def test_call_returns_a_partial_quote_result_with_ordinary_errors() -> None:
     """An invalid-symbol error in the same list must NOT trigger a skip."""
-
     invalid = SimpleNamespace(
         symbol="NOTATICKER.XX",
         error="No quote data for 'NOTATICKER.XX'. The symbol may be invalid or delisted.",
@@ -139,38 +129,39 @@ async def test_call_returns_a_partial_quote_result_with_ordinary_errors() -> Non
         result=SimpleNamespace(errors=[invalid], quotes=[]),
     )
 
-    result = await _direct(client).call("get_quote", tickers=["NOTATICKER.XX"])
+    result = await _layer(client).call("get_quote", tickers=["NOTATICKER.XX"])
 
     assert result.errors[0].symbol == "NOTATICKER.XX"
 
 
 async def test_expect_error_matches_the_message() -> None:
-    async with _direct(None).expect_error("No analyst coverage"):
+    async with _layer().expect_error("No analyst coverage"):
         raise DataUnavailable("No analyst coverage for 'SPY'.")
 
 
 async def test_expect_error_rejects_a_different_error() -> None:
-    """A wrong-but-real error is a failure: the message is part of the contract."""
+    """A wrong-but-real error still fails: the message is part of the contract."""
     with pytest.raises(AssertionError, match="expected a DataUnavailable"):
-        async with _direct(None).expect_error("No analyst coverage"):
+        async with _layer().expect_error("No analyst coverage"):
             raise DataUnavailable("Failed to fetch analyst data for 'SPY': timeout")
 
 
 async def test_expect_error_fails_when_nothing_is_raised() -> None:
-    """If Yahoo starts covering ETFs, the SPY test has to go red rather than quietly pass."""
+    """If Yahoo starts covering ETFs, the SPY test goes red rather than quietly passing."""
     with pytest.raises(pytest.fail.Exception, match="but the call succeeded"):
-        async with _direct(None).expect_error("No analyst coverage"):
+        async with _layer().expect_error("No analyst coverage"):
             pass
 
 
 async def test_expect_error_skips_when_throttled_instead_of_matching() -> None:
-    """A rate limit arrives as the same type, so it must not be counted as the expected error."""
+    """Throttling arrives as the same type, so it must not count as the expected error."""
     with pytest.raises(pytest.skip.Exception, match="rate-limited"):
-        async with _direct(None).expect_error("No analyst coverage"):
+        async with _layer().expect_error("No analyst coverage"):
             raise DataUnavailable(f"Failed to fetch analyst data for 'SPY': {THROTTLED}")
 
 
-def test_mcp_layer_expects_tool_error() -> None:
-    """The two layers surface the same domain failure as different types."""
-    assert _layer("direct").error_type is DataUnavailable
-    assert _layer("mcp", mcp_client=object()).error_type is ToolError
+def test_the_layers_surface_the_same_failure_as_different_types() -> None:
+    assert _layer().error_type is DataUnavailable
+    assert _layer().name == "direct"
+    assert _layer(mcp_client=object()).error_type is ToolError
+    assert _layer(mcp_client=object()).name == "mcp"
