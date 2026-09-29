@@ -24,6 +24,7 @@ MARKET_DATA_TOOLS = (
     "get_key_metrics",
     "get_analyst_data",
     "analyze_performance",
+    "compare_to_benchmark",
     "get_news",
 )
 CALCULATOR_TOOLS = (

@@ -4,7 +4,12 @@ from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
 from finance_mcp.server import create_server
-from tests.conftest import fake_ticker_factory, make_client, make_history_df
+from tests.conftest import (
+    fake_multi_ticker_factory,
+    fake_ticker_factory,
+    make_client,
+    make_history_df,
+)
 
 METRICS_INFO = {
     "longName": "Apple Inc.",
@@ -21,7 +26,7 @@ async def test_analytics_tools_registered() -> None:
     async with Client(server) as client:
         names = {t.name for t in await client.list_tools()}
         assert {"get_key_metrics", "analyze_performance"} <= names
-        assert len(names) == 19  # 18 prior + get_news
+        assert len(names) == 20  # 19 prior + compare_to_benchmark
 
 
 async def test_get_key_metrics_tool() -> None:
@@ -122,3 +127,42 @@ async def test_analyze_performance_schema_states_the_risk_free_default_in_the_ou
         assert "RAW" in properties["risk_free_rate"]["description"]
         assert "downside_deviation" in properties["sortino_ratio"]["description"]
         assert tool.description is not None and "Sharpe" in tool.description
+
+
+async def test_compare_to_benchmark_tool() -> None:
+    closes = [100.0 + i * 0.3 for i in range(200)]
+    bench = [400.0 + i * 0.8 for i in range(200)]
+    factory = fake_multi_ticker_factory(
+        {
+            "AAPL": {"history_df": make_history_df(closes)},
+            "SPY": {"history_df": make_history_df(bench)},
+        }
+    )
+    server = create_server(yf_client=make_client(factory=factory))
+    async with Client(server) as client:
+        result = await client.call_tool("compare_to_benchmark", {"ticker": "AAPL"})
+        assert result.data.benchmark == "SPY"  # the default
+        assert result.data.period == "1y"  # the default
+        assert result.data.overlapping_observations == 200
+        assert result.data.beta is not None
+
+
+async def test_compare_to_benchmark_tool_rejects_a_self_comparison_as_a_tool_error() -> None:
+    factory = fake_multi_ticker_factory(
+        {"SPY": {"history_df": make_history_df([400.0 + i for i in range(200)])}}
+    )
+    server = create_server(yf_client=make_client(factory=factory))
+    async with Client(server) as client:
+        with pytest.raises(ToolError, match="two different"):
+            await client.call_tool("compare_to_benchmark", {"ticker": "SPY", "benchmark": "SPY"})
+
+
+async def test_compare_to_benchmark_schema_explains_the_inner_join() -> None:
+    server = create_server(yf_client=make_client(factory=fake_ticker_factory()))
+    async with Client(server) as client:
+        [tool] = [t for t in await client.list_tools() if t.name == "compare_to_benchmark"]
+        properties = (tool.outputSchema or {})["properties"]
+        assert "inner join" in properties["overlapping_observations"]["description"]
+        assert tool.description is not None
+        assert "inner-joined" in tool.description
+        assert "quote currency" in tool.description

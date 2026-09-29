@@ -5,7 +5,12 @@ from typing import Annotated
 from fastmcp import FastMCP
 from pydantic import Field
 
-from finance_mcp.data.models import HistoryPeriod, KeyMetrics, PerformanceStats
+from finance_mcp.data.models import (
+    BenchmarkComparison,
+    HistoryPeriod,
+    KeyMetrics,
+    PerformanceStats,
+)
 from finance_mcp.data.yfinance_client import YFinanceClient
 from finance_mcp.tools._annotations import market_data
 from finance_mcp.tools._dispatch import run_data
@@ -59,3 +64,38 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
         beta, alpha or a comparison against an index, use compare_to_benchmark.
         """
         return await run_data(lambda: client.analyze_performance(ticker, period, risk_free_rate))
+
+    @mcp.tool(annotations=market_data("Benchmark-Relative Statistics"))
+    async def compare_to_benchmark(
+        ticker: Ticker,
+        benchmark: Annotated[
+            Ticker,
+            Field(
+                description="Benchmark to measure against; defaults to SPY (S&P 500). Use a "
+                "benchmark that matches the asset: ^GSPC or SPY for US large-cap, QQQ for "
+                "US tech, a local index for a non-US listing (returns are compared in each "
+                "instrument's own quote currency)."
+            ),
+        ] = "SPY",
+        period: Annotated[
+            HistoryPeriod, Field(description="Look-back window for the comparison.")
+        ] = "1y",
+        risk_free_rate: RiskFreeRate = 0.0,
+    ) -> BenchmarkComparison:
+        """Beta, correlation, Jensen's alpha, tracking error, information ratio and excess
+        return versus a benchmark, over the dates the two instruments share.
+
+        The two daily close series are inner-joined on date, so a 24/7 instrument compared
+        against an equity benchmark contributes only its weekday closes (the weekend move
+        lands in the Monday return). overlapping_observations reports how many dates were
+        actually used - a thin overlap makes every figure noisy, so read it first.
+
+        Annualized figures (both CAGRs, alpha, tracking error, information ratio) are null
+        when the overlap spans under 90 days; beta, correlation and excess return are not,
+        since they need no annualization. risk_free_rate defaults to 0 and only affects
+        alpha. Returns are in each instrument's own quote currency, so a cross-currency
+        pair folds an FX move into every figure - say so rather than reading it straight.
+        """
+        return await run_data(
+            lambda: client.compare_to_benchmark(ticker, benchmark, period, risk_free_rate)
+        )

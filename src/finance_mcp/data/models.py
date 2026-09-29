@@ -600,3 +600,91 @@ class PerformanceStats(BaseModel):
     sma_200: float | None = Field(
         default=None, description="200-day simple moving average; null if < 200 bars."
     )
+
+
+class BenchmarkComparison(BaseModel):
+    """How one instrument performed relative to a benchmark over the dates they share.
+
+    Both series are daily auto-adjusted closes, INNER-JOINED on date: a 24/7 instrument's
+    weekend closes are dropped because the benchmark has none, so the asset's weekend move
+    lands in the following session's return. ``overlapping_observations`` is the number of
+    shared dates actually used - read it before trusting any figure here, since a thin
+    overlap (a recent listing, a long halt) makes every statistic noisy.
+
+    Returns are in each instrument's own quote currency. Comparing a non-USD listing against
+    a USD benchmark therefore mixes an FX move into beta, alpha and excess return; compare
+    like-for-like listings, or treat a cross-currency figure as indicative only.
+    """
+
+    symbol: str = Field(description="Ticker symbol analyzed.")
+    benchmark: str = Field(description="Benchmark ticker compared against.")
+    period: str = Field(description="Look-back window requested, e.g. '1y'.")
+    overlapping_observations: int = Field(
+        description="Daily closes the two instruments share over the window, after the "
+        "inner join on date. Fewer than the asset's own bar count whenever the calendars "
+        "differ (a 7-day crypto series against a 5-day equity benchmark)."
+    )
+    start_date: str = Field(description="First shared close date (ISO 8601).")
+    end_date: str = Field(description="Last shared close date (ISO 8601).")
+    periods_per_year: float | None = Field(
+        default=None,
+        description="Observations per year inferred from the OVERLAPPING dates - roughly "
+        "252 when either leg trades weekdays only, even if the other trades every day. "
+        "Null when the overlap spans under 90 days.",
+    )
+    risk_free_rate: float = Field(
+        default=0.0,
+        description="Annual risk-free rate used for alpha, as a decimal (0.045 = 4.5%). "
+        "Defaults to 0; with a beta of exactly 1 it cancels out of alpha entirely.",
+    )
+    total_return_percent: float = Field(
+        description="The asset's total return over the shared dates (e.g. 12.3 = 12.3%)."
+    )
+    benchmark_total_return_percent: float = Field(
+        description="The benchmark's total return over the same shared dates."
+    )
+    excess_return_percent: float = Field(
+        description="total_return_percent minus benchmark_total_return_percent, in "
+        "percentage POINTS. A simple difference, not a ratio and not beta-adjusted - for "
+        "the beta-adjusted version read alpha_percent."
+    )
+    annualized_return_percent: float | None = Field(
+        default=None,
+        description="The asset's CAGR over the shared dates, percent. Null when the "
+        "overlap spans under 90 days.",
+    )
+    benchmark_annualized_return_percent: float | None = Field(
+        default=None,
+        description="The benchmark's CAGR over the same shared dates, percent. Null when "
+        "the overlap spans under 90 days.",
+    )
+    beta: float | None = Field(
+        default=None,
+        description="Sensitivity to the benchmark: 1.0 moves with it, above 1 amplifies "
+        "it, negative moves against it. Null when the overlap has under two returns or "
+        "the benchmark never moved.",
+    )
+    correlation: float | None = Field(
+        default=None,
+        description="Pearson correlation of the daily returns, -1 to 1. Read it alongside "
+        "beta: a large beta at a low correlation means the moves are big but unrelated, so "
+        "the beta explains little. Null when either series never moved.",
+    )
+    alpha_percent: float | None = Field(
+        default=None,
+        description="Annualized Jensen's alpha in percentage POINTS: (Ra - Rf) - beta * "
+        "(Rb - Rf), the return earned beyond what the beta exposure predicted. Null when "
+        "beta or either annualized return is null.",
+    )
+    tracking_error_percent: float | None = Field(
+        default=None,
+        description="Annualized standard deviation of the daily active return (asset minus "
+        "benchmark), percent. 0 for a perfect tracker. Null when the overlap spans under "
+        "90 days.",
+    )
+    information_ratio: float | None = Field(
+        default=None,
+        description="Mean active return per unit of tracking error, annualized and "
+        "dimensionless: how reliably the asset out- or under-performed rather than by how "
+        "much. Null when the overlap spans under 90 days or tracking error is zero.",
+    )

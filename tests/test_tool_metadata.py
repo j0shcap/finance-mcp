@@ -39,6 +39,7 @@ MARKET_DATA_TOOLS = {
     "search_symbols",
     "get_key_metrics",
     "analyze_performance",
+    "compare_to_benchmark",
 }
 
 

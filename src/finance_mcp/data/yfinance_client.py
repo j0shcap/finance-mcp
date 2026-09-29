@@ -21,9 +21,10 @@ import yfinance as yf
 from yfinance.exceptions import YFTickerMissingError
 
 from finance_mcp.data import analytics
-from finance_mcp.data.errors import DataUnavailable, SymbolNotFound
+from finance_mcp.data.errors import DataUnavailable, InvalidInput, SymbolNotFound
 from finance_mcp.data.models import (
     AnalystData,
+    BenchmarkComparison,
     CompanyProfile,
     DividendEvent,
     FinancialStatement,
@@ -55,6 +56,11 @@ MAX_CACHEABLE_BARS = 2000
 # Quotes in a batch are independent single requests, so they are fetched in parallel; the
 # bound keeps a large batch from opening a connection per ticker at once.
 QUOTE_MAX_WORKERS = 8
+# A benchmark comparison is two independent history fetches; both go through
+# _fetch_concurrently under this bound.
+BENCHMARK_MAX_WORKERS = 2
+# The fewest shared closes that yield a single return to compare.
+MIN_OVERLAP_OBSERVATIONS = 2
 # Intervals whose bars are points in time rather than whole sessions. Kept in sync with
 # HistoryInterval (a test pins it): everything that is not a daily-or-longer interval.
 _INTRADAY_INTERVALS = frozenset({"1m", "5m", "15m", "30m", "1h"})
@@ -187,8 +193,7 @@ class YFinanceClient:
                 pending.append(symbol)
         if not pending:
             return QuoteResult(quotes=[], errors=errors)
-        with ThreadPoolExecutor(max_workers=min(QUOTE_MAX_WORKERS, len(pending))) as pool:
-            fetched = list(pool.map(self._quote_or_error, pending))  # map keeps input order
+        fetched = _fetch_concurrently(pending, self._quote_or_error, QUOTE_MAX_WORKERS)
         errors.extend(r for r in fetched if isinstance(r, QuoteError))
         return QuoteResult(quotes=[r for r in fetched if isinstance(r, Quote)], errors=errors)
 
@@ -388,6 +393,77 @@ class YFinanceClient:
             calmar_ratio=calmar,
             sma_50=analytics.sma(closes, SMA_SHORT_WINDOW),
             sma_200=analytics.sma(closes, SMA_LONG_WINDOW),
+        )
+
+    def compare_to_benchmark(
+        self, symbol: str, benchmark: str, period: str, risk_free_rate: float = 0.0
+    ) -> BenchmarkComparison:
+        """Benchmark-relative statistics over the dates the two instruments share.
+
+        The two histories are independent fetches, so they run in parallel; both are the
+        same cached ``_all_bars`` entries the other analytics tools use.
+        """
+        symbol, bench = _norm(symbol), _norm(benchmark)
+        if symbol == bench:
+            raise InvalidInput(
+                f"A benchmark comparison needs two different symbols; '{symbol}' was given "
+                "for both. Use analyze_performance for a single instrument."
+            )
+        asset_bars, bench_bars = _fetch_concurrently(
+            [symbol, bench],
+            lambda s: self._all_bars(s, period, "1d"),
+            BENCHMARK_MAX_WORKERS,
+        )
+        dates, asset_closes, bench_closes = analytics.align_closes(
+            [(b.date, b.close) for b in asset_bars], [(b.date, b.close) for b in bench_bars]
+        )
+        if len(dates) < MIN_OVERLAP_OBSERVATIONS:
+            raise DataUnavailable(
+                f"'{symbol}' and '{bench}' have only {len(dates)} overlapping daily close(s) "
+                f"over '{period}', so there is nothing to compare. Try a longer period, or "
+                "check that both symbols traded over this window."
+            )
+        elapsed_days = _elapsed_days(dates[0], dates[-1])
+        periods_per_year: float | None = None
+        asset_cagr: float | None = None
+        bench_cagr: float | None = None
+        tracking: float | None = None
+        info_ratio: float | None = None
+        # Beta and correlation are unit-free and need no calendar, so they are computed
+        # unconditionally; everything annualized sits behind the same 90-day gate
+        # analyze_performance uses.
+        asset_beta = analytics.beta(asset_closes, bench_closes)
+        if elapsed_days >= MIN_ANNUALIZATION_DAYS:
+            years = elapsed_days / analytics.DAYS_PER_YEAR
+            periods_per_year = analytics.infer_periods_per_year(len(dates), years)
+            asset_cagr = analytics.annualized_return(asset_closes, years)
+            bench_cagr = analytics.annualized_return(bench_closes, years)
+            tracking = analytics.tracking_error(asset_closes, bench_closes, periods_per_year)
+            info_ratio = analytics.information_ratio(asset_closes, bench_closes, periods_per_year)
+        alpha: float | None = None
+        if asset_beta is not None and asset_cagr is not None and bench_cagr is not None:
+            alpha = analytics.jensen_alpha(asset_cagr, bench_cagr, asset_beta, risk_free_rate)
+        asset_total = analytics.total_return(asset_closes)
+        bench_total = analytics.total_return(bench_closes)
+        return BenchmarkComparison(
+            symbol=symbol,
+            benchmark=bench,
+            period=period,
+            overlapping_observations=len(dates),
+            start_date=dates[0],
+            end_date=dates[-1],
+            periods_per_year=periods_per_year,
+            risk_free_rate=risk_free_rate,
+            total_return_percent=asset_total,
+            benchmark_total_return_percent=bench_total,
+            excess_return_percent=asset_total - bench_total,
+            annualized_return_percent=asset_cagr,
+            benchmark_annualized_return_percent=bench_cagr,
+            beta=asset_beta,
+            correlation=analytics.correlation(asset_closes, bench_closes),
+            alpha_percent=alpha,
+            tracking_error_percent=tracking,
+            information_ratio=info_ratio,
         )
 
     def get_financials(
@@ -617,6 +693,20 @@ class YFinanceClient:
             return SymbolSearchResult(query=query, matches=matches)
         except Exception as exc:  # surface any parsing failure verbatim
             raise DataUnavailable(f"Failed to parse search results for '{query}': {exc}") from exc
+
+
+def _fetch_concurrently[T](
+    items: list[str], fetch: Callable[[str], T], max_workers: int
+) -> list[T]:
+    """Run ``fetch`` over ``items`` in parallel, preserving input order.
+
+    Independent single-symbol lookups have no reason to serialize. ``pool.map`` keeps the
+    results in request order so callers can pair them back up positionally.
+    """
+    if not items:
+        return []
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(items))) as pool:
+        return list(pool.map(fetch, items))
 
 
 def _elapsed_days(start: str, end: str) -> int:
