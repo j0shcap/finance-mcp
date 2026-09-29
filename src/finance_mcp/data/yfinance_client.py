@@ -549,6 +549,7 @@ class YFinanceClient:
             sharpe_ratio=perf.sharpe_ratio,
             sortino_ratio=perf.sortino_ratio,
             calmar_ratio=perf.calmar_ratio,
+            periods_per_year=perf.periods_per_year,
             trailing_pe=metrics.trailing_pe if metrics else None,
             forward_pe=metrics.forward_pe if metrics else None,
             price_to_book=metrics.price_to_book if metrics else None,

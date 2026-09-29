@@ -247,6 +247,33 @@ def test_compare_tickers_rows_carry_performance_and_valuation() -> None:
     assert row.metrics_error is None
 
 
+def test_compare_tickers_rows_report_the_calendar_each_was_annualized_on() -> None:
+    """A 24/7 row and a weekday row in one table are scaled differently; the row says which.
+
+    Without periods_per_year on the row there is nothing in the table to warn that its
+    volatility and sharpe_ratio columns are not on a common footing.
+    """
+    factory = _rows_factory(
+        MSFT={
+            "history_df": make_history_df(_walk(200.0, 0.50, 3.0), freq="B"),
+            "info": METRICS_INFO,
+        }
+    )
+    table = _client(ticker_factory=factory).compare_tickers(["AAPL", "MSFT"], "1y")
+    crypto_like, equity_like = table.rows
+    assert crypto_like.periods_per_year == pytest.approx(365.25, rel=0.02)
+    assert equity_like.periods_per_year == pytest.approx(261.0, rel=0.02)
+
+
+def test_compare_tickers_short_window_row_has_no_periods_per_year() -> None:
+    """Under the annualization floor the row reports no calendar, matching its null ratios."""
+    factory = _rows_factory(AAPL={"history_df": make_history_df(_walk(100.0, 0.3, 2.0, n=30))})
+    table = _client(ticker_factory=factory).compare_tickers(["AAPL"], "1mo")
+    row = table.rows[0]
+    assert row.periods_per_year is None
+    assert row.sharpe_ratio is None
+
+
 def test_compare_tickers_applies_the_risk_free_rate_to_every_row() -> None:
     raw = _client(ticker_factory=_rows_factory()).compare_tickers(["AAPL", "MSFT"], "1y")
     excess = _client(ticker_factory=_rows_factory()).compare_tickers(

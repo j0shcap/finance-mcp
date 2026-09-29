@@ -14,14 +14,18 @@ You are a senior equity research analyst. Produce a deep-dive on \
 below. Cite the tool and period behind every quantitative claim.
 
 ## Phase 1 - Collect data (call these in parallel; do not serialize)
+RF is the risk_free_rate you use for EVERY call below that takes one - pass the SAME value to \
+analyze_performance, compare_to_benchmark and compare_tickers, or Phase 7 will consolidate an \
+excess-over-cash Sharpe with an rf=0 alpha. No tool here sources a T-bill yield: use one only if \
+you have a dated, citable figure and state its source and date, otherwise omit risk_free_rate \
+entirely and read every ratio as a RAW (not excess-over-cash) figure.
 - get_company_profile(ticker="{ticker}")
 - get_financials(ticker="{ticker}", statement="income"|"balance"|"cashflow", \
 period="annual" and "quarterly")
 - get_key_metrics(ticker="{ticker}")
-- analyze_performance(ticker="{ticker}", risk_free_rate=<current 3-month T-bill yield as a \
-decimal, else omit for 0>)
-- compare_to_benchmark(ticker="{ticker}", benchmark="SPY") - swap SPY for a benchmark that fits \
-the listing (QQQ for US tech, a local index for a non-US line)
+- analyze_performance(ticker="{ticker}", risk_free_rate=RF)
+- compare_to_benchmark(ticker="{ticker}", benchmark="SPY", risk_free_rate=RF) - swap SPY for a \
+benchmark that fits the listing (QQQ for US tech, a local index for a non-US line)
 - get_analyst_data(ticker="{ticker}")
 - get_news(ticker="{ticker}")
 - get_quote(tickers=["{ticker}"]) - returns quotes plus a per-ticker errors list
@@ -51,27 +55,29 @@ sequential QoQ only as a secondary note.
 free cash flow.
 
 ## Phase 4 - Peer-relative valuation
-Name ~3 genuinely comparable competitors (same sector AND similar business model/size; state these \
-are your own selection, not from a tool). Call compare_tickers once with {ticker} and those \
-peers - it returns performance and valuation side by side for up to 10 tickers in one call, so do \
-not loop get_key_metrics over them. Compare on a GROWTH-ADJUSTED basis (PEG / \
+Name ~3 genuinely comparable competitors (same sector AND similar business model/size; state \
+these are your own selection, not from a tool). Call compare_tickers once with {ticker}, those \
+peers and the same RF - it returns performance and valuation side by side for up to 10 tickers \
+in one call, so do not loop get_key_metrics over them. Compare on a GROWTH-ADJUSTED basis (PEG / \
 growth-vs-multiple), not raw P/E, and rank risk-adjusted return (sharpe_ratio) rather than raw \
-return. Read the table's errors \
-list and any row's metrics_error before treating a blank cell as a finding. Currency: any row \
-flagged currency_differs (or a table with mixed_currencies true) is not denominated in \
-base_currency - its returns carry an FX move the others do not, so compare those rows on ratios \
-and say so. A row whose financial_currency differs from its own currency is a cross-listing whose \
-absolute amounts are internally inconsistent.
+return. Read the table's errors list and any row's metrics_error before treating a blank cell as \
+a finding, and each row's periods_per_year before ranking volatility or sharpe_ratio - rows on \
+different calendars are not directly comparable. Currency: any row flagged currency_differs (or \
+a table with mixed_currencies true) is not denominated in base_currency - its returns carry an \
+FX move the others do not, so compare those rows on ratios and say so. A row whose \
+financial_currency differs from its own currency is a cross-listing whose absolute amounts are \
+internally inconsistent.
 
 ## Phase 5 - Performance, risk-adjusted return & technical posture
 From analyze_performance: total & annualized return, annualized volatility, max drawdown, the \
 50/200-day SMA cross -> trend posture, and the risk-adjusted set - sharpe_ratio (return per unit \
-of total risk), sortino_ratio (per unit of DOWNSIDE risk; above the Sharpe just means the swings \
-were mostly upward), downside_deviation_percent and calmar_ratio (CAGR per unit of worst \
-drawdown). State the risk_free_rate the result echoes: at the default 0 these are raw, not \
-excess-over-cash, figures. The volatility figure is scaled by periods_per_year, which is inferred \
-per instrument (~252 for a weekday-traded equity, ~365 for a 24/7 instrument such as crypto) - \
-state it when comparing volatility across asset classes.
+of total risk), sortino_ratio (per unit of DOWNSIDE risk; on a positive Sharpe, sitting above it \
+means the swings were mostly upward - the comparison inverts when the Sharpe is negative), \
+downside_deviation_percent and calmar_ratio (CAGR per unit of worst drawdown). State the \
+risk_free_rate the result echoes: at the default 0 these are raw, not excess-over-cash, figures. \
+The volatility figure is scaled by periods_per_year, which is inferred per instrument (~252 for a \
+weekday-traded equity, ~365 for a 24/7 instrument such as crypto) - state it when comparing \
+volatility across asset classes.
 From compare_to_benchmark: beta (market sensitivity) read together with correlation (how much of \
 the move the benchmark actually explains - a big beta at a low correlation explains little), \
 alpha_percent (annualized outperformance beyond what beta predicted, in percentage points), \

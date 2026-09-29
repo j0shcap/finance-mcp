@@ -74,7 +74,9 @@ against cash.
 DIMENSIONLESS ratios - never percents. downside_deviation_percent, tracking_error_percent, \
 alpha_percent and excess_return_percent are PERCENTS; the last two are percentage POINTS of \
 difference (alpha_percent 3.0 = 3 points of annualized return beyond what beta predicted), not \
-multiples. sortino_ratio above sharpe_ratio just means the dispersion was mostly upside.
+multiples. On a POSITIVE sharpe_ratio, a sortino_ratio above it means the dispersion was mostly \
+upside; when the Sharpe is negative that comparison inverts, so do not read the gap as a quality \
+signal there.
 - Every annualized figure, and every ratio that depends on one, is null when the window spans \
 under ~3 months: sharpe_ratio, sortino_ratio, downside_deviation_percent and calmar_ratio on \
 analyze_performance, and alpha_percent, tracking_error_percent and information_ratio on \
@@ -85,10 +87,13 @@ compared with an equity benchmark contributes only its weekday closes and its we
 in the next session's return. overlapping_observations is how many dates were actually used - read \
 it first, because a thin overlap makes beta and alpha noise. Returns stay in each instrument's own \
 quote currency, so a cross-currency pair mixes an FX move into every figure.
-- compare_tickers returns partial results like get_quote: a ticker with no usable price history \
-is in errors with no row, while a row whose valuation metrics failed is present with those fields \
+- compare_tickers returns partial results like get_quote: a ticker with no usable price history is \
+in errors with no row, while a row whose valuation metrics failed is present with those fields \
 null and metrics_error set. Rows flagged currency_differs (and the table-level mixed_currencies) \
-are not denominated in base_currency - rank those on ratios, not absolute amounts."""
+are not denominated in base_currency - rank those on ratios, not absolute amounts. Each row \
+carries its own periods_per_year, so a 24/7 instrument in the table was annualized on a different \
+calendar than the equities beside it - check it before ranking volatility or sharpe_ratio across \
+rows."""
 
 #: Sign and rate conventions for the calculators. Shared by the resource and instructions.
 CALCULATOR_CONVENTIONS = """\

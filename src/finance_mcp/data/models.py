@@ -573,7 +573,9 @@ class PerformanceStats(BaseModel):
         description=(
             "Annualized Sortino ratio: the same numerator as sharpe_ratio, but divided by "
             "downside_deviation instead of total volatility, so upside swings are not "
-            "penalized. Higher than the Sharpe when the dispersion is mostly upside. Null "
+            "penalized. When the numerator is POSITIVE it sits above the Sharpe if the "
+            "dispersion was mostly upside; when the numerator is negative the comparison "
+            "inverts, so only read the gap between the two on a positive Sharpe. Null "
             "when the window is under 85 days or nothing fell below the risk-free target - "
             "null there means 'no downside observed', not 'bad'."
         ),
@@ -582,8 +584,10 @@ class PerformanceStats(BaseModel):
         default=None,
         description=(
             "Annualized dispersion of returns BELOW risk_free_rate, percent - the "
-            "denominator of sortino_ratio. Always <= annualized_volatility_percent. Null "
-            "when the window is under 85 days; 0.0 means no return fell below the target."
+            "denominator of sortino_ratio. Measured as a root-mean-square shortfall below "
+            "the target rather than a spread around the mean, so it can EXCEED "
+            "annualized_volatility_percent when most returns fell short. Null when the "
+            "window is under 85 days; 0.0 means no return fell below the target."
         ),
     )
     calmar_ratio: float | None = Field(
@@ -758,6 +762,13 @@ class TickerComparisonRow(BaseModel):
     calmar_ratio: float | None = Field(
         default=None,
         description="CAGR per unit of max drawdown; null under 90 days or with no drawdown.",
+    )
+    periods_per_year: float | None = Field(
+        default=None,
+        description="Trading periods per year inferred for THIS row (~252 for a weekday-traded "
+        "equity, ~365 for a 24/7 instrument), which scales its annualized and risk-adjusted "
+        "figures. Rows with different values were annualized on different calendars - say so "
+        "before ranking their volatility or Sharpe against each other. Null under 90 days.",
     )
     trailing_pe: float | None = Field(default=None, description="Trailing P/E ratio.")
     forward_pe: float | None = Field(default=None, description="Forward P/E ratio.")
