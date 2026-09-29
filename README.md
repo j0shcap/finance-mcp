@@ -26,7 +26,9 @@ and deterministic financial calculators.
 **Analytics**
 
 - `get_key_metrics` — valuation/profitability/leverage ratios (P/E, EV/EBITDA, margins, ROE, debt/equity, FCF, EPS, …) as reported by Yahoo; units noted per field, and absolute amounts labelled with the quote vs. reporting currency they're in.
-- `analyze_performance` — total & annualized return, annualized volatility, max drawdown, and 50/200-day SMAs computed from the daily price series.
+- `analyze_performance` — total & annualized return, annualized volatility, max drawdown, 50/200-day SMAs, and risk-adjusted statistics (Sharpe, Sortino, downside deviation, Calmar) computed from the daily price series. `risk_free_rate` is an annual decimal and defaults to 0, so the Sharpe and Sortino are raw return per unit of risk unless you pass one; the rate used is echoed in the result.
+- `compare_to_benchmark` — beta, correlation, Jensen's alpha, tracking error, information ratio and excess return versus a benchmark ticker (default `SPY`). The two daily series are inner-joined on date, so a 24/7 instrument compared with an equity benchmark contributes only its weekday closes; the number of overlapping observations is reported so you can judge how much weight the figures carry.
+- `compare_tickers` — side-by-side performance plus key valuation metrics for 2–10 tickers, fetched in parallel. Partial like `get_quote`: a ticker with no usable history lands in `errors`, and a row whose valuation metrics failed keeps its performance figures with `metrics_error` set. Rows not denominated in the table's base currency are flagged.
 
 **Time value & loans**
 
@@ -55,7 +57,7 @@ structured results and report invalid inputs as clear errors.
 MCP prompts — reusable analysis templates the client exposes for you to invoke (Claude Code shows
 them as slash commands; other clients surface them their own way).
 
-- `analyze_stock` (arguments: `ticker`, optional `horizon`, default `12mo`) — single-stock deep-dive: fundamentals, growth-adjusted peer valuation, performance, analyst view, and news catalysts → bull/bear cases and a fair-value range with a horizon-framed verdict, citing the data behind each claim.
+- `analyze_stock` (arguments: `ticker`, optional `horizon`, default `12mo`) — single-stock deep-dive: fundamentals, growth-adjusted peer valuation, risk-adjusted and benchmark-relative risk posture, analyst view, and news catalysts → bull/bear cases and a fair-value range with a horizon-framed verdict, citing the data behind each claim.
 
 ## Resources
 

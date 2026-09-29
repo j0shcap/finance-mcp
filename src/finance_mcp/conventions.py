@@ -64,7 +64,31 @@ return for that window and never annualize it yourself.
 the single headline price if sources disagree, and read it from the entry whose symbol matches the \
 ticker you are pricing, never by position: any ticker that failed is in errors instead, so \
 positions shift. A ticker in errors was not fetched at all - say so rather than substituting \
-another source's price."""
+another source's price.
+- risk_free_rate (analyze_performance, compare_to_benchmark, compare_tickers) is an ANNUAL \
+DECIMAL: 0.045 = 4.5%. It defaults to 0, which makes sharpe_ratio and sortino_ratio RAW return \
+per unit of risk rather than excess-over-cash figures - the rate used is echoed in every result, \
+so read it before calling a Sharpe "excess". Pass a current T-bill yield when the comparison is \
+against cash.
+- sharpe_ratio, sortino_ratio, calmar_ratio, beta, correlation and information_ratio are \
+DIMENSIONLESS ratios - never percents. downside_deviation_percent, tracking_error_percent, \
+alpha_percent and excess_return_percent are PERCENTS; the last two are percentage POINTS of \
+difference (alpha_percent 3.0 = 3 points of annualized return beyond what beta predicted), not \
+multiples. sortino_ratio above sharpe_ratio just means the dispersion was mostly upside.
+- Every annualized figure, and every ratio that depends on one, is null when the window spans \
+under ~3 months: sharpe_ratio, sortino_ratio, downside_deviation_percent and calmar_ratio on \
+analyze_performance, and alpha_percent, tracking_error_percent and information_ratio on \
+compare_to_benchmark. beta, correlation and excess_return_percent need no annualization, so they \
+survive a short window. A null ratio means "not computable", never "zero".
+- compare_to_benchmark INNER-JOINS the two daily close series on date, so a 24/7 instrument \
+compared with an equity benchmark contributes only its weekday closes and its weekend move lands \
+in the next session's return. overlapping_observations is how many dates were actually used - read \
+it first, because a thin overlap makes beta and alpha noise. Returns stay in each instrument's own \
+quote currency, so a cross-currency pair mixes an FX move into every figure.
+- compare_tickers returns partial results like get_quote: a ticker with no usable price history \
+is in errors with no row, while a row whose valuation metrics failed is present with those fields \
+null and metrics_error set. Rows flagged currency_differs (and the table-level mixed_currencies) \
+are not denominated in base_currency - rank those on ratios, not absolute amounts."""
 
 #: Sign and rate conventions for the calculators. Shared by the resource and instructions.
 CALCULATOR_CONVENTIONS = """\

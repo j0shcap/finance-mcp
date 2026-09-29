@@ -48,6 +48,8 @@ async def test_analyze_stock_references_the_tools_it_orchestrates() -> None:
             "get_analyst_data",
             "get_news",
             "get_quote",
+            "compare_tickers",
+            "compare_to_benchmark",
         ):
             assert tool in text
 
@@ -121,3 +123,40 @@ async def test_analyze_stock_computes_implied_return_arithmetically() -> None:
         )
         assert "(mean target / current price) - 1" in text
         assert "time_value_of_money" not in text
+
+
+async def test_analyze_stock_no_longer_claims_sharpe_is_unavailable() -> None:
+    """The caveat this change exists to delete: the server now computes a Sharpe ratio."""
+    async with Client(create_server()) as client:
+        text = (
+            (await client.get_prompt("analyze_stock", {"ticker": "AAPL"})).messages[0].content.text
+        )
+        assert "no Sharpe" not in text
+
+
+async def test_analyze_stock_uses_the_comparison_tools() -> None:
+    async with Client(create_server()) as client:
+        text = (
+            (await client.get_prompt("analyze_stock", {"ticker": "AAPL"})).messages[0].content.text
+        )
+        assert "compare_tickers" in text
+        assert "compare_to_benchmark" in text
+
+
+async def test_analyze_stock_reads_risk_posture_from_sharpe_and_beta() -> None:
+    async with Client(create_server()) as client:
+        text = (
+            (await client.get_prompt("analyze_stock", {"ticker": "AAPL"})).messages[0].content.text
+        )
+        assert "sharpe_ratio" in text
+        assert "beta" in text
+        # beta must come from the benchmark comparison, not only the profile's ~5y figure.
+        assert "compare_to_benchmark's beta" in text
+
+
+async def test_analyze_stock_warns_that_a_thin_overlap_makes_beta_noisy() -> None:
+    async with Client(create_server()) as client:
+        text = (
+            (await client.get_prompt("analyze_stock", {"ticker": "AAPL"})).messages[0].content.text
+        )
+        assert "overlapping_observations" in text

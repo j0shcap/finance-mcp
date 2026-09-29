@@ -151,3 +151,28 @@ async def test_instructions_name_exactly_the_registered_tools(
     assert families == {tool.name for tool in await client.list_tools()}
     for name in families:
         assert name in instructions, name
+
+
+async def test_conventions_resource_explains_the_risk_adjusted_conventions(
+    client: Client[FastMCPTransport],
+) -> None:
+    contents = await client.read_resource("finance://conventions")
+    assert isinstance(contents[0], TextResourceContents)
+    text = contents[0].text
+    assert "risk_free_rate" in text
+    assert "sharpe_ratio" in text
+    # The two figures a model is most likely to mis-scale: a decimal rate and a
+    # percentage-point difference.
+    assert "DECIMAL" in text
+    assert "percentage POINTS" in text
+
+
+async def test_conventions_resource_explains_the_benchmark_alignment(
+    client: Client[FastMCPTransport],
+) -> None:
+    contents = await client.read_resource("finance://conventions")
+    assert isinstance(contents[0], TextResourceContents)
+    text = contents[0].text
+    assert "overlapping_observations" in text
+    assert "compare_to_benchmark" in text
+    assert "compare_tickers" in text
