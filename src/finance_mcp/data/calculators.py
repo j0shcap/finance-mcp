@@ -721,6 +721,52 @@ def _coupon_schedule(
     return previous, next_coupon, periods
 
 
+def _bond_metrics(
+    face: float,
+    coupon_rate: float,
+    frequency: int,
+    y: float,
+    n: int,
+    first_fraction: float = 1.0,
+) -> tuple[float, float, float, float]:
+    """Price a coupon stream and its risk metrics, allowing a fractional first period.
+
+    Returns ``(dirty_price, macaulay_years, modified_years, convexity_years_squared)``.
+
+    ``y`` is the PERIODIC yield (annual / frequency) and ``n`` the number of coupons still
+    to be paid. ``first_fraction`` is how much of the first coupon period is still to run:
+    1.0 on a coupon date, and ``1 - accrued/period`` when settlement falls inside a period.
+    The k-th cashflow is therefore discounted over ``w_k = (k - 1) + first_fraction``
+    periods -- the standard street convention, which compounds across the part-period stub.
+
+    On the full set of cashflows:
+
+        dirty     = sum CF_k / (1+y)**w_k
+        macaulay  = (sum w_k * PV_k / dirty) / frequency          (years)
+        modified  = macaulay / (1 + y)                            (years)
+        convexity = (sum CF_k w_k (w_k+1) / (1+y)**(w_k+2) / dirty) / frequency**2
+
+    The price returned is the DIRTY price: the present value of every remaining cashflow,
+    which is the cash a buyer pays. On a coupon date nothing has accrued, ``w_k == k``, and
+    these collapse exactly to the on-coupon formulas -- which is why ``bond_price`` can
+    delegate here without moving any of its numbers.
+    """
+    coupon = face * coupon_rate / frequency
+    base = 1.0 + y
+    price = 0.0
+    weighted_time = 0.0
+    convexity_sum = 0.0
+    for k in range(1, n + 1):
+        cash = coupon + (face if k == n else 0.0)
+        w = (k - 1) + first_fraction
+        pv = cash / base**w
+        price += pv
+        weighted_time += w * pv
+        convexity_sum += cash * w * (w + 1.0) / base ** (w + 2.0)
+    macaulay = (weighted_time / price) / frequency
+    return price, macaulay, macaulay / base, (convexity_sum / price) / frequency**2
+
+
 def bond_price(
     face: float,
     coupon_rate: float,
@@ -762,22 +808,9 @@ def bond_price(
         )
     if n < 1:
         raise InvalidInput("years_to_maturity * frequency must be at least one period.")
-    periodic_coupon = face * coupon_rate / frequency
-    y = ytm / frequency
-
-    price = 0.0
-    weighted_time = 0.0
-    convexity_sum = 0.0
-    for k in range(1, n + 1):
-        cash = periodic_coupon + (face if k == n else 0.0)
-        pv = cash / (1.0 + y) ** k
-        price += pv
-        weighted_time += k * pv
-        convexity_sum += cash * k * (k + 1) / (1.0 + y) ** (k + 2)
-
-    macaulay = (weighted_time / price) / frequency
-    modified = macaulay / (1.0 + y)
-    convexity = (convexity_sum / price) / (frequency**2)
+    price, macaulay, modified, convexity = _bond_metrics(
+        face=face, coupon_rate=coupon_rate, frequency=frequency, y=ytm / frequency, n=n
+    )
     return BondAnalytics(
         price=price,
         current_yield=face * coupon_rate / price,

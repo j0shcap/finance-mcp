@@ -11,8 +11,10 @@ import pytest
 
 from finance_mcp.data.calculators import (
     _add_months,
+    _bond_metrics,
     _coupon_schedule,
     _days_30_360_us,
+    bond_price,
 )
 
 
@@ -161,3 +163,46 @@ def test_coupon_schedule_honours_frequency(
     assert previous == d(expected_previous)
     assert next_coupon == d(expected_next)
     assert periods == expected_periods
+
+
+# --------------------------------------------------------------------------------------
+# _bond_metrics: the shared core. At first_fraction == 1.0 the fractional-period formulas
+# collapse to the on-coupon-date ones, which is what lets bond_price delegate to it.
+# --------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("coupon_rate", "years", "ytm", "frequency"),
+    [
+        (0.05, 10.0, 0.06, 2),  # discount
+        (0.06, 10.0, 0.06, 2),  # par
+        (0.07, 10.0, 0.06, 2),  # premium
+        (0.0, 5.0, 0.04, 1),  # zero coupon
+        (0.05, 2.5, 0.06, 2),  # half-year maturity
+        (0.09, 30.0, 0.0884, 2),  # long bond
+    ],
+)
+def test_bond_metrics_on_a_coupon_date_reproduces_bond_price_exactly(
+    coupon_rate: float, years: float, ytm: float, frequency: int
+) -> None:
+    """The delegation contract: identical results, not merely close ones. Anything less
+    would silently move the existing tool's numbers."""
+    expected = bond_price(
+        face=1000.0,
+        coupon_rate=coupon_rate,
+        years_to_maturity=years,
+        ytm=ytm,
+        frequency=frequency,
+    )
+    dirty, macaulay, modified, convexity = _bond_metrics(
+        face=1000.0,
+        coupon_rate=coupon_rate,
+        frequency=frequency,
+        y=ytm / frequency,
+        n=round(years * frequency),
+        first_fraction=1.0,
+    )
+    assert dirty == expected.price
+    assert macaulay == expected.macaulay_duration
+    assert modified == expected.modified_duration
+    assert convexity == expected.convexity
