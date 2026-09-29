@@ -202,20 +202,45 @@ def make_recommendations_df(
 def fake_search_factory(
     quotes: list[dict[str, Any]] | None = None,
     error: Exception | None = None,
+    news: list[dict[str, Any]] | None = None,
 ) -> Callable[[str], Any]:
     """Return a callable that mimics ``yf.Search``.
 
     The returned callable accepts ``(query, **kwargs)``; if ``error`` is set it
-    raises it, otherwise it returns an object whose ``.quotes`` attribute is
-    ``quotes or []``.
+    raises it, otherwise it returns an object whose ``.quotes`` and ``.news``
+    attributes are ``quotes or []`` and ``news or []``. Calls are recorded on the
+    callable's ``calls`` list so a test can assert the fallback was or was not taken.
     """
+    calls: list[dict[str, Any]] = []
 
     def _search(query: str, **kwargs: Any) -> Any:
+        calls.append({"query": query, **kwargs})
         if error is not None:
             raise error
-        return SimpleNamespace(quotes=quotes or [])
+        return SimpleNamespace(quotes=quotes or [], news=news or [])
 
+    _search.calls = calls  # type: ignore[attr-defined]
     return _search
+
+
+def make_search_news_item(
+    title: str | None,
+    publisher: str | None = None,
+    link: str | None = None,
+    published: int | None = None,
+) -> dict[str, Any]:
+    """Build a news item in the FLAT shape ``yf.Search().news`` returns.
+
+    Unlike ``make_news_item``'s nested ``content`` payload, the search endpoint returns
+    top-level keys and a unix ``providerPublishTime``, and carries no summary at all.
+    """
+    return {
+        "uuid": "uuid-" + (title or "none"),
+        "title": title,
+        "publisher": publisher,
+        "link": link,
+        "providerPublishTime": published,
+    }
 
 
 def make_news_item(

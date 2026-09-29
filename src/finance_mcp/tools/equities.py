@@ -127,9 +127,11 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
     ) -> NewsResult:
         """Recent news headlines for a symbol, newest first.
 
-        Each article has a title, publisher, link, publish time (ISO8601 UTC), and a short summary.
-        Works for stocks, ETFs, and crypto. A symbol with no news (or an unknown symbol) returns an
-        empty article list rather than an error.
+        Each article has a title, publisher, link and publish time (ISO8601 UTC). Summaries come
+        from the per-symbol news stream only: when `source` is "search" that stream returned
+        nothing and this fell back to Yahoo's search endpoint, which carries no summary, so every
+        summary is null for a reason unrelated to the stories. Works for stocks, ETFs, and crypto.
+        A symbol with no news (or an unknown symbol) returns an empty article list, not an error.
         """
         return await run_data(lambda: client.get_news(ticker, count))
 

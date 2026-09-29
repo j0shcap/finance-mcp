@@ -52,6 +52,7 @@ from tests.conftest import (
     make_intraday_df,
     make_news_item,
     make_recommendations_df,
+    make_search_news_item,
     make_series,
 )
 
@@ -1634,12 +1635,18 @@ def test_search_symbols_parse_error_is_data_unavailable() -> None:
 
 def _news_client(**kw: Any) -> YFinanceClient:
     factory = kw.pop("factory")
+    clock = kw.pop("clock", FakeClock())
+    # get_news falls back to search on an empty stream, so every news client needs a search
+    # factory. Defaulting to an empty fake keeps a test that does not care about the
+    # fallback off the network -- the real yf.Search would otherwise be called.
+    kw.setdefault("search_factory", fake_search_factory())
     return YFinanceClient(
         ticker_factory=factory,
-        time_fn=kw.pop("clock", FakeClock()),
+        time_fn=clock,
         quote_ttl=30.0,
         history_ttl=300.0,
         fundamentals_ttl=3600.0,
+        **kw,
     )
 
 
@@ -1689,6 +1696,89 @@ def test_get_news_empty_returns_empty_no_raise() -> None:
     client = _news_client(factory=fake_ticker_factory(news=[]))
     result = client.get_news("ZZZZ")
     assert result.symbol == "ZZZZ" and result.articles == []
+
+
+def test_get_news_falls_back_to_search_when_the_ticker_stream_is_empty() -> None:
+    """An empty ticker stream is cross-checked, because Yahoo returns one for an outage.
+
+    yfinance parses a 500 from the news endpoint into an empty list, so a server error and
+    a symbol with genuinely no coverage are indistinguishable at the call site. If the
+    search endpoint has articles for the symbol, the empty stream was a failure - reporting
+    "no recent news" there tells the model a company had no catalysts when it did.
+    """
+    search = fake_search_factory(
+        news=[
+            make_search_news_item("Apple beats", "Reuters", "https://x/a", 1790647283),
+            make_search_news_item("Apple ships", "AP", "https://x/b", 1790647000),
+        ]
+    )
+    client = _news_client(factory=fake_ticker_factory(news=[]), search_factory=search)
+
+    result = client.get_news("AAPL")
+
+    assert [a.title for a in result.articles] == ["Apple beats", "Apple ships"]
+    assert result.source == "search", "the result must say which endpoint served it"
+    assert search.calls, "the empty stream must be cross-checked against search"  # type: ignore[attr-defined]
+
+
+def test_get_news_search_fallback_maps_the_flat_payload_shape() -> None:
+    """The fallback's payload is flat with a unix timestamp, not the nested content shape."""
+    search = fake_search_factory(
+        news=[make_search_news_item("Apple beats", "Reuters", "https://x/a", 1790647283)]
+    )
+    client = _news_client(factory=fake_ticker_factory(news=[]), search_factory=search)
+
+    article = client.get_news("AAPL").articles[0]
+
+    assert article.title == "Apple beats"
+    assert article.publisher == "Reuters"
+    assert article.link == "https://x/a"
+    assert article.published == "2026-09-29T02:01:23+00:00"
+    # The search endpoint carries no summary; null is honest, a fabricated one would not be.
+    assert article.summary is None
+
+
+def test_get_news_does_not_call_search_when_the_ticker_stream_has_news() -> None:
+    """The fallback costs a request, so it must only run when the primary came back empty."""
+    search = fake_search_factory(news=[make_search_news_item("should not be used")])
+    client = _news_client(factory=fake_ticker_factory(news=NEWS_ITEMS), search_factory=search)
+
+    result = client.get_news("AAPL")
+
+    assert search.calls == [], "search must not be called when the ticker stream has news"  # type: ignore[attr-defined]
+    assert result.source == "ticker"
+    assert all(a.title != "should not be used" for a in result.articles)
+
+
+def test_get_news_empty_from_both_sources_is_still_empty() -> None:
+    """A symbol with no coverage anywhere reports no news, not an error."""
+    search = fake_search_factory(news=[])
+    client = _news_client(factory=fake_ticker_factory(news=[]), search_factory=search)
+
+    result = client.get_news("ZZZZ")
+
+    assert result.symbol == "ZZZZ" and result.articles == []
+
+
+def test_get_news_a_failing_search_fallback_leaves_the_empty_result_intact() -> None:
+    """The primary succeeded with "no news"; a broken cross-check must not make it an error."""
+    search = fake_search_factory(error=YFException("search down"))
+    client = _news_client(factory=fake_ticker_factory(news=[]), search_factory=search)
+
+    assert client.get_news("ZZZZ").articles == []
+
+
+def test_get_news_search_fallback_caps_at_count_and_drops_untitled_items() -> None:
+    search = fake_search_factory(
+        news=[
+            make_search_news_item(None, "Reuters", "https://x/a", 1790647283),
+            make_search_news_item("kept", "AP", "https://x/b", 1790647000),
+            make_search_news_item("dropped by count", "AP", "https://x/c", 1790646000),
+        ]
+    )
+    client = _news_client(factory=fake_ticker_factory(news=[]), search_factory=search)
+
+    assert [a.title for a in client.get_news("AAPL", count=1).articles] == ["kept"]
 
 
 def test_get_news_typed_error_is_data_unavailable() -> None:
