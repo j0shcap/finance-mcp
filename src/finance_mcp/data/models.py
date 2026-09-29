@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 TVMVariable = Literal["pv", "fv", "pmt", "rate", "nper"]
 Statement = Literal["income", "balance", "cashflow"]
+NewsSource = Literal["ticker", "search"]
 StatementPeriod = Literal["annual", "quarterly"]
 HistoryPeriod = Literal["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "max"]
 HistoryInterval = Literal["1m", "5m", "15m", "30m", "1h", "1d", "1wk", "1mo"]
@@ -472,6 +473,16 @@ class NewsResult(BaseModel):
     symbol: str = Field(description="Ticker symbol.")
     articles: list[NewsArticle] = Field(
         description="Recent news articles, newest first; empty if no news is available."
+    )
+    source: NewsSource = Field(
+        default="ticker",
+        description=(
+            "Which Yahoo endpoint served these articles. 'ticker' is the per-symbol news "
+            "stream, which carries a summary for each article. 'search' is the fallback used "
+            "when that stream returns nothing: it still carries title, publisher, link and "
+            "publish time, but NO summary, so every summary is null for a reason unrelated to "
+            "the articles themselves - do not read that as the stories being contentless."
+        ),
     )
 
 

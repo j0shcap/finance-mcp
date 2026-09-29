@@ -14,7 +14,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, cast
 
 import yfinance as yf
@@ -762,12 +762,34 @@ class YFinanceClient:
         except Exception as exc:  # a failed news fetch is a data issue, not a missing symbol
             raise DataUnavailable(f"Failed to fetch news for '{symbol}': {exc}") from exc
         if not items:
-            return NewsResult(symbol=symbol, articles=[])
+            # An empty stream is ambiguous: yfinance turns a 500 from the news endpoint into
+            # an empty list, so an outage is indistinguishable from a symbol with no
+            # coverage. Cross-check against search rather than reporting "no recent news",
+            # which the model would read as "no catalysts" and put in a research note.
+            return NewsResult(
+                symbol=symbol, articles=self._search_news(symbol, count), source="search"
+            )
         try:
             articles = [a for a in (_news_article(it) for it in items) if a is not None][:count]
-            return NewsResult(symbol=symbol, articles=articles)
+            return NewsResult(symbol=symbol, articles=articles, source="ticker")
         except Exception as exc:  # surface any parsing failure verbatim
             raise DataUnavailable(f"Failed to parse news for '{symbol}': {exc}") from exc
+
+    def _search_news(self, symbol: str, count: int) -> list[NewsArticle]:
+        """News for `symbol` from the search endpoint, or none if it cannot supply any.
+
+        Only reached when the ticker news stream came back empty. A failure here is
+        swallowed deliberately: the primary call already succeeded with "no news", so the
+        worst case is the empty result the caller would have returned anyway, and raising
+        would turn a symbol with genuinely no coverage into an error.
+        """
+        try:
+            found = self._search(symbol, max_results=1, news_count=count, lists_count=0).news
+        except Exception:
+            return []
+        return [a for a in (_search_news_article(it) for it in found or []) if a is not None][
+            :count
+        ]
 
     def search_symbols(self, query: str, max_results: int = 8) -> SymbolSearchResult:
         return self._cached(
@@ -945,6 +967,26 @@ def _symbol_match(q: dict[str, Any]) -> SymbolMatch:
         sector=q.get("sectorDisp"),
         industry=q.get("industryDisp"),
         score=_opt(q.get("score")),
+    )
+
+
+def _search_news_article(item: dict[str, Any]) -> NewsArticle | None:
+    """Parse the FLAT news shape the search endpoint returns.
+
+    Distinct from :func:`_news_article`: the fields sit at the top level rather than under
+    ``content``, the timestamp is unix seconds rather than an ISO string, and there is no
+    summary at all - which is reported as null rather than filled in from the title.
+    """
+    title = item.get("title")
+    if not title:
+        return None
+    published = item.get("providerPublishTime")
+    return NewsArticle(
+        title=title,
+        publisher=item.get("publisher"),
+        link=item.get("link"),
+        published=datetime.fromtimestamp(published, tz=UTC).isoformat() if published else None,
+        summary=None,
     )
 
 

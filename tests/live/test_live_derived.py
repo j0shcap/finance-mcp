@@ -104,9 +104,18 @@ async def test_news_shape(layer: Layer) -> None:
     # These come from nested keys (content.provider.displayName, content.canonicalUrl.url,
     # content.summary) that yfinance has restructured before. One article may be missing
     # one; a payload change nulls them across every article at once.
-    for field in ("publisher", "link", "summary"):
+    #
+    # summary only when the per-symbol stream served the result: the search fallback has no
+    # summary field at all, so asserting one there would fail on a working result. Asserting
+    # it is null on that path keeps the check meaningful rather than merely skipped.
+    expected = ("publisher", "link", "summary") if result.source == "ticker" else ("publisher",)
+    for field in expected:
         assert any(getattr(a, field) for a in result.articles), (
             f"no article has a {field}; the nested news payload shape has most likely changed"
+        )
+    if result.source == "search":
+        assert all(a.summary is None for a in result.articles), (
+            "the search fallback carries no summary; a value here means the payload gained one"
         )
 
     for article in result.articles:
