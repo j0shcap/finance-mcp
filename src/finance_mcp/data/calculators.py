@@ -954,7 +954,9 @@ def bond_price_dated(
     ``coupon_rate`` and ``ytm`` are annual decimals. ``day_count`` measures the elapsed
     part of the current coupon period and defaults to Actual/Actual ICMA -- the convention
     for US Treasuries and most sovereigns. Pass ``"30/360"`` for the US corporate/municipal
-    convention, which is also Excel's default (``basis=0``) and reproduces its PRICE.
+    convention, which is also Excel's default (``basis=0``) and reproduces its PRICE -- except
+    in the final coupon period, where Excel discounts the stub with SIMPLE interest, which is
+    ``first_period_discount="simple"`` here.
 
     Returns the clean and dirty prices (per ``face`` and per 100), the accrued interest,
     and duration/convexity computed with the fractional first period under the standard

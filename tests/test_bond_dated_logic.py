@@ -829,8 +829,53 @@ def test_the_two_first_period_conventions_disagree_by_a_material_amount() -> Non
     assert price("compound") - price("simple") == pytest.approx(0.007655, abs=1e-6)
 
 
+def test_in_the_final_coupon_period_simple_is_what_matches_excel() -> None:
+    """Excel's PRICE/YIELD documentation gives a SEPARATE formula for "one coupon period or
+    less to redemption" that discounts the stub with simple interest:
+
+        P = (redemption + coupon) / (1 + (DSR/E) * yield/frequency) - (A/E) * coupon
+
+    (Microsoft, "YIELD function" -- https://support.microsoft.com/en-us/office/
+    yield-function-f5f5ca43-c4bd-434f-8bd2-ed3c9727a4fe.) That is exactly this module's
+    'simple' branch, so it is 'simple', not the default 'compound', that reproduces Excel
+    inside the last period. Pinned here because every other Excel/Treasury reference in this
+    file has n >= 18, leaving the n == 1 boundary otherwise untested.
+    """
+
+    def price(ytm: float, discount: FirstPeriodDiscount) -> BondDatedAnalytics:
+        # A 6% semiannual bond maturing 2024-07-15, settling 2024-04-01: one coupon left.
+        return bond_price_dated(
+            settlement=d("2024-04-01"),
+            maturity=d("2024-07-15"),
+            coupon_rate=0.06,
+            ytm=ytm,
+            frequency=2,
+            day_count="30/360",
+            first_period_discount=discount,
+        )
+
+    for ytm, excel_price, compound_price in (
+        (0.065, 99.834871, 99.847465),
+        (0.20, 96.107283, 96.214664),
+    ):
+        simple = price(ytm, "simple")
+        compound = price(ytm, "compound")
+        assert simple.periods_remaining == 1
+        # The Excel closed form, evaluated from the schedule this module resolved.
+        coupon, a, e = 100 * 0.06 / 2, simple.accrued_days, simple.period_days
+        closed_form = (100 + coupon) / (1 + (e - a) / e * ytm / 2) - a / e * coupon
+        assert closed_form == pytest.approx(excel_price, abs=1e-6)
+        assert simple.clean_price_per_100 == pytest.approx(excel_price, abs=1e-6)
+        # The default compounds throughout instead, and is measurably higher. Documented, not
+        # a defect: 'compound' is one uniform formula for every n, which is what the street
+        # and LibreOffice do -- but it is why the Excel-equivalence claims name this exception.
+        assert compound.clean_price_per_100 == pytest.approx(compound_price, abs=1e-6)
+        assert compound.clean_price_per_100 > simple.clean_price_per_100
+
+
 def test_compound_is_the_default() -> None:
-    """The task's 'standard street convention', and what Excel's PRICE implements."""
+    """The task's 'standard street convention', and what Excel's PRICE implements while more
+    than one coupon period remains."""
     explicit = bond_price_dated(
         settlement=d("1985-11-29"),
         maturity=d("1995-11-15"),

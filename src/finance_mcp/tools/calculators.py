@@ -210,9 +210,11 @@ def register(mcp: FastMCP) -> None:
             Field(
                 description="How to discount the part period before the next coupon. "
                 "'compound' (the default) is the street convention, (1+y)**stub, and matches "
-                "Excel's PRICE/YIELD. 'simple' is the US Treasury convention in 31 CFR 356 "
-                "appendix B, 1 + stub*y. They differ by a few thousandths per 100, so use "
-                "'simple' only when matching Treasury's own published figures.",
+                "Excel's PRICE/YIELD while more than one coupon remains. 'simple' is 1 + stub*y "
+                "-- the US Treasury convention in 31 CFR 356 appendix B, and also what Excel "
+                "switches to in the FINAL coupon period, where 'compound' is ~0.01 per 100 "
+                "higher. They differ by a few thousandths per 100 elsewhere, so use 'simple' to "
+                "match Treasury's published figures or Excel inside the last period.",
             ),
         ] = "compound",
     ) -> BondDatedAnalytics:
@@ -227,7 +229,8 @@ def register(mcp: FastMCP) -> None:
 
         Day count defaults to Actual/Actual ICMA (US Treasuries and most sovereigns); pass
         day_count='30/360' for the US corporate/municipal convention, which reproduces
-        Excel's PRICE with basis=0.
+        Excel's PRICE with basis=0 -- except in the final coupon period, where Excel uses
+        simple interest over the stub: pass first_period_discount='simple' to match it there.
 
         Assumes a regular schedule -- every coupon period a whole 12/frequency months. Bonds
         with an odd (long or short) first or last coupon period are not supported.
@@ -307,9 +310,11 @@ def register(mcp: FastMCP) -> None:
             Field(
                 description="How to discount the part period before the next coupon. "
                 "'compound' (the default) is the street convention, (1+y)**stub, and matches "
-                "Excel's PRICE/YIELD. 'simple' is the US Treasury convention in 31 CFR 356 "
-                "appendix B, 1 + stub*y. They differ by a few thousandths per 100, so use "
-                "'simple' only when matching Treasury's own published figures.",
+                "Excel's PRICE/YIELD while more than one coupon remains. 'simple' is 1 + stub*y "
+                "-- the US Treasury convention in 31 CFR 356 appendix B, and also what Excel "
+                "switches to in the FINAL coupon period, where 'compound' is ~0.01 per 100 "
+                "higher. They differ by a few thousandths per 100 elsewhere, so use 'simple' to "
+                "match Treasury's published figures or Excel inside the last period.",
             ),
         ] = "compound",
     ) -> BondDatedYTM:
@@ -318,7 +323,8 @@ def register(mcp: FastMCP) -> None:
         The dated counterpart to bond_ytm, and the inverse of bond_price_dated: use it when
         settlement may fall between coupon dates. Also returns the accrued interest and the
         dirty price, so a clean-price quote still tells you the cash amount. Day count
-        defaults to Actual/Actual ICMA; '30/360' reproduces Excel's YIELD with basis=0.
+        defaults to Actual/Actual ICMA; '30/360' reproduces Excel's YIELD with basis=0, except
+        in the final coupon period -- pass first_period_discount='simple' to match Excel there.
         """
         return run_calc(
             lambda: calculators.bond_ytm_dated(

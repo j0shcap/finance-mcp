@@ -185,7 +185,8 @@ class BondDatedAnalytics(BaseModel):
     )
     clean_price_per_100: float = Field(
         description="Clean price per 100 of face, the market quoting convention. Equals Excel's "
-        "PRICE when day_count='30/360'."
+        "PRICE when day_count='30/360', except in the final coupon period, where Excel uses "
+        "simple interest over the stub (first_period_discount='simple')."
     )
     dirty_price_per_100: float = Field(
         description="Dirty price per 100 of face: clean_price_per_100 + accrued_interest_per_100."

@@ -120,7 +120,8 @@ coincide, which is why bond_price/bond_ytm report a single price.
 Treasuries and most sovereigns), NOT Excel's default of 30/360 - pass day_count='30/360' to \
 match Excel's PRICE/YIELD or to price a US corporate or municipal bond. They also default to \
 the street convention for the part period before the next coupon; pass \
-first_period_discount='simple' only to match the US Treasury's own published prices."""
+first_period_discount='simple' to match the US Treasury's own published prices, or to match \
+Excel inside the FINAL coupon period, where Excel too uses simple interest over the stub."""
 
 CONVENTIONS_DOC = f"""\
 # finance-mcp conventions
