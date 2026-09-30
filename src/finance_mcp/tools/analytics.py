@@ -92,7 +92,7 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
         actually used - a thin overlap makes every figure noisy, so read it first.
 
         Annualized figures (both CAGRs, alpha, tracking error, information ratio) are null
-        when the overlap spans under 90 days; beta, correlation and excess return are not,
+        when the overlap spans under 85 days; beta, correlation and excess return are not,
         since they need no annualization. risk_free_rate defaults to 0 and only affects
         alpha. Returns are in each instrument's own quote currency, so a cross-currency
         pair folds an FX move into every figure - say so rather than reading it straight.

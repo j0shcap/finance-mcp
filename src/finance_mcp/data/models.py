@@ -127,8 +127,8 @@ class BondDatedAnalytics(BaseModel):
     Prices come in two flavours and both are reported, because confusing them misstates
     the cash by up to one coupon: the CLEAN price is what the market quotes, the DIRTY
     price is what a buyer actually pays. Each is given per ``face`` and per 100 of face
-    (the quoting convention). Duration and convexity follow the street convention and are
-    measured against the dirty price.
+    (the quoting convention). Duration and convexity use the same part-period convention
+    as the price (``first_period_discount``) and are measured against the dirty price.
     """
 
     settlement: datetime.date = Field(description="Settlement date the bond was priced for.")
@@ -197,7 +197,7 @@ class BondDatedAnalytics(BaseModel):
     )
     macaulay_duration: float = Field(
         description="Macaulay duration in years: the cashflow-weighted average time to payment, "
-        "weighted by present value against the DIRTY price (street convention)."
+        "weighted by present value against the DIRTY price."
     )
     modified_duration: float = Field(
         description="Modified duration in years: the approximate percentage fall in the DIRTY "
@@ -758,7 +758,7 @@ class BenchmarkComparison(BaseModel):
         default=None,
         description="Observations per year inferred from the OVERLAPPING dates - roughly "
         "252 when either leg trades weekdays only, even if the other trades every day. "
-        "Null when the overlap spans under 90 days.",
+        "Null when the overlap spans under 85 days.",
     )
     risk_free_rate: float = Field(
         default=0.0,
@@ -779,12 +779,12 @@ class BenchmarkComparison(BaseModel):
     annualized_return_percent: float | None = Field(
         default=None,
         description="The asset's CAGR over the shared dates, percent. Null when the "
-        "overlap spans under 90 days.",
+        "overlap spans under 85 days.",
     )
     benchmark_annualized_return_percent: float | None = Field(
         default=None,
         description="The benchmark's CAGR over the same shared dates, percent. Null when "
-        "the overlap spans under 90 days.",
+        "the overlap spans under 85 days.",
     )
     beta: float | None = Field(
         default=None,
@@ -808,13 +808,13 @@ class BenchmarkComparison(BaseModel):
         default=None,
         description="Annualized standard deviation of the daily active return (asset minus "
         "benchmark), percent. 0 for a perfect tracker. Null when the overlap spans under "
-        "90 days.",
+        "85 days.",
     )
     information_ratio: float | None = Field(
         default=None,
         description="Mean active return per unit of tracking error, annualized and "
         "dimensionless: how reliably the asset out- or under-performed rather than by how "
-        "much. Null when the overlap spans under 90 days or tracking error is zero.",
+        "much. Null when the overlap spans under 85 days or tracking error is zero.",
     )
 
 
@@ -866,33 +866,33 @@ class TickerComparisonRow(BaseModel):
         description="Total return over the window (e.g. 12.3 = 12.3%)."
     )
     annualized_return_percent: float | None = Field(
-        default=None, description="CAGR over the window, percent; null under 90 days."
+        default=None, description="CAGR over the window, percent; null under 85 days."
     )
     annualized_volatility_percent: float | None = Field(
-        default=None, description="Annualized volatility, percent; null under 90 days."
+        default=None, description="Annualized volatility, percent; null under 85 days."
     )
     max_drawdown_percent: float = Field(
         description="Largest peak-to-trough decline, as a negative percent."
     )
     sharpe_ratio: float | None = Field(
         default=None,
-        description="Annualized Sharpe against the table's risk_free_rate; null under 90 days "
+        description="Annualized Sharpe against the table's risk_free_rate; null under 85 days "
         "or when returns never varied.",
     )
     sortino_ratio: float | None = Field(
         default=None,
-        description="Annualized Sortino; null under 90 days or with no downside.",
+        description="Annualized Sortino; null under 85 days or with no downside.",
     )
     calmar_ratio: float | None = Field(
         default=None,
-        description="CAGR per unit of max drawdown; null under 90 days or with no drawdown.",
+        description="CAGR per unit of max drawdown; null under 85 days or with no drawdown.",
     )
     periods_per_year: float | None = Field(
         default=None,
         description="Trading periods per year inferred for THIS row (~252 for a weekday-traded "
         "equity, ~365 for a 24/7 instrument), which scales its annualized and risk-adjusted "
         "figures. Rows with different values were annualized on different calendars - say so "
-        "before ranking their volatility or Sharpe against each other. Null under 90 days.",
+        "before ranking their volatility or Sharpe against each other. Null under 85 days.",
     )
     trailing_pe: float | None = Field(default=None, description="Trailing P/E ratio.")
     forward_pe: float | None = Field(default=None, description="Forward P/E ratio.")

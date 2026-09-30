@@ -921,8 +921,8 @@ def bond_price_dated(
     ``first_period_discount="simple"`` here.
 
     Returns the clean and dirty prices (per ``face`` and per 100), the accrued interest,
-    and duration/convexity computed with the fractional first period under the standard
-    street convention -- the part period is compounded, ``(1+y)**(DSC/E)``.
+    and duration/convexity computed with the fractional first period discounted per
+    ``first_period_discount``: compounded, ``(1+y)**(DSC/E)``, by default.
 
     Assumes a regular schedule: every coupon period is a whole ``12 / frequency`` months.
     Bonds with an odd (long or short) first or last coupon period are out of scope, and
