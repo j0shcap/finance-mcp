@@ -1,4 +1,4 @@
-.PHONY: install test test-live lint format typecheck security check build run clean
+.PHONY: install test test-live e2e lint format typecheck security check build run clean
 
 install:
 	uv sync
@@ -13,6 +13,13 @@ test:
 # which stays offline; CI runs this nightly (.github/workflows/live.yml).
 test-live:
 	uv run pytest -m live --no-cov
+
+# The built wheel, installed into a fresh venv and driven over stdio (tests/e2e/): the
+# artifact users run, not the source tree. Offline apart from the package index - the
+# Yahoo-backed e2e tests are also `live`, so they run with test-live instead. --no-cov
+# because the server under test runs in a subprocess, out of coverage's reach.
+e2e:
+	uv run pytest -m "e2e and not live" --no-cov
 
 lint:
 	uv run ruff check .
