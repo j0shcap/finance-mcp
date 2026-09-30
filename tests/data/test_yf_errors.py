@@ -14,8 +14,6 @@ from tests.fakes import (
     make_client,
 )
 
-# --- error classification: transport failure vs. missing symbol (item 3) ---
-
 
 class _FakeResponse:
     def __init__(self, status_code: int) -> None:

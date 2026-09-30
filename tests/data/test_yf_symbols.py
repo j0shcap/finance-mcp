@@ -1,13 +1,12 @@
 """Symbol normalization, which happens before any cache lookup or fetch."""
 
-from typing import Any
-
 import pytest
 
 from finance_mcp.data.errors import SymbolNotFound
 from tests.fakes import (
     INCOME,
     QUOTE_FI,
+    counting,
     fake_ticker_factory,
     make_client,
     make_financials_df,
@@ -15,18 +14,11 @@ from tests.fakes import (
     make_news_item,
 )
 
-# --- symbol normalization (strip + upper) ---
-
 
 def test_symbols_are_normalized_before_caching_and_echoed_normalized() -> None:
     """'aapl' and ' AAPL ' name the same instrument, so they must share one cache entry."""
-    calls: list[str] = []
-
-    def counting_factory(symbol: str) -> Any:
-        calls.append(symbol)
-        return fake_ticker_factory(fast_info=QUOTE_FI)(symbol)
-
-    client = make_client(factory=counting_factory)
+    factory, calls = counting(fake_ticker_factory(fast_info=QUOTE_FI))
+    client = make_client(factory)
     lower = client.get_quote(["aapl"]).quotes
     padded = client.get_quote([" AAPL "]).quotes
     assert calls == ["AAPL"]  # one fetch, with the normalized symbol
@@ -35,14 +27,8 @@ def test_symbols_are_normalized_before_caching_and_echoed_normalized() -> None:
 
 
 def test_price_history_normalizes_symbol() -> None:
-    df = make_history_df([100.0, 101.0])
-    calls: list[str] = []
-
-    def counting_factory(symbol: str) -> Any:
-        calls.append(symbol)
-        return fake_ticker_factory(history_df=df)(symbol)
-
-    client = make_client(factory=counting_factory)
+    factory, calls = counting(fake_ticker_factory(history_df=make_history_df([100.0, 101.0])))
+    client = make_client(factory)
     first = client.get_price_history(" aapl", period="1mo", interval="1d")
     client.get_price_history("AAPL", period="1mo", interval="1d")
     assert calls == ["AAPL"]
@@ -69,13 +55,8 @@ def test_profile_metrics_analyst_news_and_performance_normalize_symbol() -> None
 
 @pytest.mark.parametrize("blank", ["", "   "])
 def test_blank_symbol_raises_symbol_not_found_without_fetching(blank: str) -> None:
-    calls: list[str] = []
-
-    def counting_factory(symbol: str) -> Any:
-        calls.append(symbol)
-        return fake_ticker_factory(fast_info=QUOTE_FI)(symbol)
-
-    client = make_client(factory=counting_factory)
+    factory, calls = counting(fake_ticker_factory(fast_info=QUOTE_FI))
+    client = make_client(factory)
     with pytest.raises(SymbolNotFound, match="Empty ticker symbol"):
         client.get_company_profile(blank)
     assert calls == []

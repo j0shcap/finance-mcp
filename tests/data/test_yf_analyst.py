@@ -11,11 +11,11 @@ from finance_mcp.data.models import (
     AnalystData,
 )
 from finance_mcp.data.yfinance_client import (
-    YFinanceClient,
     _recommendation_trend,
 )
 from tests.fakes import (
     FakeClock,
+    counting,
     fake_ticker_factory,
     make_client,
     make_recommendations_df,
@@ -70,21 +70,13 @@ def test_get_analyst_data_happy_path() -> None:
     assert (last.strong_buy, last.buy, last.hold, last.sell, last.strong_sell) == (9, 17, 9, 2, 1)
 
 
-def test_get_analyst_data_no_coverage_raises_data_unavailable() -> None:
+def test_get_analyst_data_no_coverage_is_data_unavailable_not_symbol_not_found() -> None:
     info = {"longName": "SPDR S&P 500 ETF", "currency": "USD"}
     client = make_client(factory=fake_ticker_factory(info=info))
     with pytest.raises(DataUnavailable) as exc:
         client.get_analyst_data("SPY")
+    assert type(exc.value) is DataUnavailable
     assert "No analyst coverage for 'SPY'" in str(exc.value)
-
-
-def test_get_analyst_data_no_coverage_is_not_symbol_not_found() -> None:
-    # SymbolNotFound subclasses DataUnavailable; assert it is the base class, not the subclass.
-    info = {"longName": "SPDR S&P 500 ETF", "currency": "USD"}
-    client = make_client(factory=fake_ticker_factory(info=info))
-    with pytest.raises(DataUnavailable) as exc_info:
-        client.get_analyst_data("SPY")
-    assert type(exc_info.value) is DataUnavailable
 
 
 def test_get_analyst_data_raw_error_is_symbol_not_found() -> None:
@@ -150,8 +142,7 @@ def test_get_analyst_data_parse_error_is_data_unavailable() -> None:
 
 
 def test_get_analyst_data_recommendations_read_error_is_data_unavailable() -> None:
-    # A failing recommendations READ (after .info identified coverage) surfaces as
-    # DataUnavailable, not SymbolNotFound — guards the refactor that moved this read.
+    # .info has already identified the instrument, so this is not SymbolNotFound.
     info = {"longName": "Apple Inc.", "currency": "USD", "numberOfAnalystOpinions": 40}
     client = make_client(
         factory=fake_ticker_factory(info=info, recommendations_error=YFException("recs down"))
@@ -162,31 +153,9 @@ def test_get_analyst_data_recommendations_read_error_is_data_unavailable() -> No
     assert "recs down" in str(exc.value)
 
 
-def test_get_analyst_data_non_numeric_recommendation_mean_raises_data_unavailable() -> None:
-    # Defensive: in live data recommendationMean is always a float, but if the source
-    # ever returns a non-numeric value for it, float() raises ValueError — that must
-    # surface as DataUnavailable, not a raw traceback (matches _fetch_metrics).
-    info = {
-        "longName": "Apple Inc.",
-        "currency": "USD",
-        "recommendationMean": "n/a",  # non-numeric — float() will raise ValueError
-        "numberOfAnalystOpinions": 40,
-    }
-    client = make_client(factory=fake_ticker_factory(info=info))
-    with pytest.raises(DataUnavailable) as exc:
-        client.get_analyst_data("AAPL")
-    assert "Failed to parse analyst data for 'AAPL'" in str(exc.value)
-
-
-def test_get_analyst_data_non_numeric_target_price_raises_data_unavailable() -> None:
-    # Same defensive guard for a target price: a non-numeric value must surface as
-    # DataUnavailable, not a raw ValueError/TypeError.
-    info = {
-        "longName": "Apple Inc.",
-        "currency": "USD",
-        "numberOfAnalystOpinions": 40,
-        "targetMeanPrice": "n/a",  # non-numeric — float() will raise ValueError
-    }
+@pytest.mark.parametrize("field", ["recommendationMean", "targetMeanPrice"])
+def test_get_analyst_data_non_numeric_value_is_data_unavailable(field: str) -> None:
+    info = {"longName": "Apple Inc.", "numberOfAnalystOpinions": 40, field: "n/a"}
     client = make_client(factory=fake_ticker_factory(info=info))
     with pytest.raises(DataUnavailable) as exc:
         client.get_analyst_data("AAPL")
@@ -194,24 +163,13 @@ def test_get_analyst_data_non_numeric_target_price_raises_data_unavailable() -> 
 
 
 def test_get_analyst_data_caches_within_ttl() -> None:
-    calls = {"n": 0}
     df = make_recommendations_df(ANALYST_TREND)
-
-    def counting(symbol: str) -> object:
-        calls["n"] += 1
-        return fake_ticker_factory(info=ANALYST_INFO, recommendations=df)(symbol)
-
+    factory, calls = counting(fake_ticker_factory(info=ANALYST_INFO, recommendations=df))
     clock = FakeClock()
-    client = YFinanceClient(
-        ticker_factory=counting,
-        time_fn=clock,
-        quote_ttl=30.0,
-        history_ttl=300.0,
-        fundamentals_ttl=3600.0,
-    )
+    client = make_client(factory, clock=clock, fundamentals_ttl=3600.0)
     client.get_analyst_data("AAPL")
     client.get_analyst_data("AAPL")
-    assert calls["n"] == 1
+    assert len(calls) == 1
     clock.advance(3601.0)
     client.get_analyst_data("AAPL")
-    assert calls["n"] == 2
+    assert len(calls) == 2

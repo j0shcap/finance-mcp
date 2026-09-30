@@ -198,28 +198,25 @@ def make_recommendations_df(
     return pd.DataFrame(rows, columns=["period", "strongBuy", "buy", "hold", "sell", "strongSell"])
 
 
-def fake_search_factory(
-    quotes: list[dict[str, Any]] | None = None,
-    error: Exception | None = None,
-    news: list[dict[str, Any]] | None = None,
-) -> Callable[[str], Any]:
-    """Return a callable that mimics ``yf.Search``.
+class FakeSearch:
+    """Stands in for ``yf.Search``; ``calls`` records each call's query and keyword args."""
 
-    The returned callable accepts ``(query, **kwargs)``; if ``error`` is set it
-    raises it, otherwise it returns an object whose ``.quotes`` and ``.news``
-    attributes are ``quotes or []`` and ``news or []``. Calls are recorded on the
-    callable's ``calls`` list so a test can assert the fallback was or was not taken.
-    """
-    calls: list[dict[str, Any]] = []
+    def __init__(
+        self,
+        quotes: list[dict[str, Any]] | None = None,
+        error: Exception | None = None,
+        news: list[dict[str, Any]] | None = None,
+    ) -> None:
+        self.quotes = quotes or []
+        self.news = news or []
+        self.error = error
+        self.calls: list[dict[str, Any]] = []
 
-    def _search(query: str, **kwargs: Any) -> Any:
-        calls.append({"query": query, **kwargs})
-        if error is not None:
-            raise error
-        return SimpleNamespace(quotes=quotes or [], news=news or [])
-
-    _search.calls = calls  # type: ignore[attr-defined]
-    return _search
+    def __call__(self, query: str, **kwargs: Any) -> Any:
+        self.calls.append({"query": query, **kwargs})
+        if self.error is not None:
+            raise self.error
+        return SimpleNamespace(quotes=self.quotes, news=self.news)
 
 
 def make_search_news_item(
@@ -330,7 +327,7 @@ def make_client(
     """
     return YFinanceClient(
         ticker_factory=factory or fake_ticker_factory(fast_info=QUOTE_FI),
-        search_factory=search_factory or fake_search_factory(),
+        search_factory=search_factory or FakeSearch(),
         time_fn=clock if clock is not None else FakeClock(),
         **options,
     )
@@ -352,8 +349,6 @@ INCOME = {  # rows: label -> [most-recent, prior]
     "Net Income": [100.0, float("nan")],
 }
 
-
-# --- currency labelling for cross-currency comparisons (item 2) ---
 
 SAP_INFO = {  # SAP's US listing quotes in USD while it reports its financials in EUR
     "longName": "SAP SE",

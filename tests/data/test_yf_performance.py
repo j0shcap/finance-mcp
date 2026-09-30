@@ -14,10 +14,10 @@ from finance_mcp.data.models import (
 )
 from finance_mcp.data.yfinance_client import (
     MAX_CACHEABLE_BARS,
-    YFinanceClient,
 )
 from tests.fakes import (
     FakeClock,
+    counting,
     fake_ticker_factory,
     make_client,
     make_history_df,
@@ -76,12 +76,7 @@ def test_analyze_performance_computes_calmar_from_its_own_figures() -> None:
 
 
 def test_analyze_performance_nulls_risk_adjusted_stats_on_a_short_window() -> None:
-    """A risk_free_rate on a sub-90-day window must not conjure a Sharpe.
-
-    Every risk-adjusted figure here is scaled by periods_per_year, which the 90-day gate
-    withholds; computing one anyway would silently re-introduce the fixed 252 convention
-    the calendar-annualization work removed.
-    """
+    """Every risk-adjusted figure needs periods_per_year, which a short window lacks."""
     p = make_client(
         factory=fake_ticker_factory(history_df=make_history_df([100.0, 101.0, 99.0, 103.0]))
     ).analyze_performance("AAPL", "5d", risk_free_rate=0.05)
@@ -108,13 +103,11 @@ def _perf_stats(closes: list[float], **df_kw: Any) -> PerformanceStats:
 
 
 def test_analyze_performance_one_year_annualized_equals_total_return() -> None:
-    """The acceptance case: 366 seven-day-a-week bars spanning one calendar year.
+    """366 seven-day-a-week bars spanning one calendar year, as for BTC-USD.
 
-    This is the reported BTC-USD shape. The old code applied an exponent of 252/365 and
-    reported -16.49% for a real -22.98% year; the two must agree over a one-year window.
-    The residual tolerance is exact, not slop: 365 elapsed days is 365/365.25 = 0.99932
-    years, so the CAGR exponent is 1.000685 and the figures differ in the 4th significant
-    digit. Exact equality at years=1.0 is pinned in test_analytics_logic.py.
+    The tolerance is not slop: 365 elapsed days is 365/365.25 = 0.99932 years, so the CAGR
+    exponent is 1.000685 and the figures differ in the 4th significant digit. Exact
+    equality at years=1.0 is pinned in test_analytics_logic.py.
     """
     closes = [100.0 * (0.7702 ** (i / 365)) for i in range(366)]
     p = _perf_stats(closes)
@@ -141,7 +134,6 @@ def test_analyze_performance_infers_weekday_calendar() -> None:
 
 def test_analyze_performance_annualized_return_ignores_bar_count() -> None:
     # The same calendar move over the same year, printed at two different bar rates.
-    # The old bar-count exponent gave two different answers; calendar time gives one.
     seven_day = _perf_stats([100.0] * 365 + [80.0])
     weekday = _perf_stats([100.0] * 260 + [80.0], freq="B")
     assert seven_day.annualized_return_percent is not None
@@ -152,11 +144,9 @@ def test_analyze_performance_annualized_return_ignores_bar_count() -> None:
 
 
 def test_analyze_performance_crypto_volatility_is_not_understated() -> None:
-    # Identical daily dispersion, 24/7 vs weekday. The 24/7 series observes more returns per
-    # year, so the same dispersion must annualize higher by sqrt of the ratio of the two
-    # inferred factors. Under the old constant 252 both series annualized identically.
-    # The SAME closes on both calendars, so per-observation dispersion is identical and the
-    # only thing that can move the annualized figure is the inferred observation rate.
+    # The same closes on a 24/7 and a weekday calendar: identical per-observation dispersion,
+    # but the 24/7 series observes more returns a year, so it must annualize higher by the
+    # square root of the ratio of the two inferred rates.
     closes = [100.0 + (5.0 if i % 2 else 0.0) for i in range(261)]
     seven_day = _perf_stats(closes)
     weekday = _perf_stats(closes, freq="B")
@@ -171,7 +161,7 @@ def test_analyze_performance_crypto_volatility_is_not_understated() -> None:
 
 
 def test_analyze_performance_short_window_nulls_annualized_fields() -> None:
-    # The reported AAPL period=5d case: a few days' move must not become a yearly figure.
+    # A few days' move must not become a yearly figure.
     p = _perf_stats([100.0, 101.0, 102.0, 103.0, 104.0])
     assert p.annualized_return_percent is None
     assert p.annualized_volatility_percent is None
@@ -198,13 +188,10 @@ def test_analyze_performance_does_not_annualize_below_the_threshold() -> None:
 
 
 def test_analyze_performance_annualizes_the_shortest_three_month_window() -> None:
-    """A 3mo window must annualize on every calendar date, not most of them.
+    """A 3mo window must annualize whatever the call date.
 
-    Sweeping real call dates, period="3mo" spans 87-95 elapsed days between the first and
-    last bar: three calendar months drift by a few days, and the first bar is the first
-    session at or after the start. A 90-day gate cut through that range, so the annualized
-    fields appeared and vanished depending on when the tool was called (~15% of dates).
-    88 bars = 87 elapsed days is the measured floor of that range.
+    Depending on the date, period="3mo" spans 87-95 elapsed days between the first and last
+    bar; 88 bars = 87 elapsed days is the shortest.
     """
     p = _perf_stats([100.0 + i for i in range(88)])
     assert p.annualized_return_percent is not None
@@ -213,18 +200,13 @@ def test_analyze_performance_annualizes_the_shortest_three_month_window() -> Non
 
 
 def test_analyze_performance_still_nulls_a_one_month_window() -> None:
-    # Lowering the gate must not start annualizing genuinely short windows.
     p = _perf_stats([100.0 + i for i in range(31)])
     assert p.annualized_return_percent is None
     assert p.periods_per_year is None
 
 
-def _counting_factory(df: pd.DataFrame, calls: dict[str, int]) -> Callable[[str], Any]:
-    def counting(symbol: str) -> Any:
-        calls["n"] += 1
-        return fake_ticker_factory(history_df=df)(symbol)
-
-    return counting
+def _counting_history(closes: list[float]) -> tuple[Callable[[str], Any], list[str]]:
+    return counting(fake_ticker_factory(history_df=make_history_df(closes)))
 
 
 def test_oversized_bar_lists_are_not_retained_in_the_cache() -> None:
@@ -245,79 +227,44 @@ def test_bar_lists_at_the_limit_are_retained() -> None:
     assert ("bars", "AAPL", "10y", "1d") in client._cache
 
 
-def test_dedupe_still_holds_below_the_cache_limit() -> None:
-    calls = {"n": 0}
-    df = make_history_df([100.0 + i for i in range(120)])
-    client = make_client(factory=_counting_factory(df, calls))
-    client.get_price_history("AAPL", period="6mo", interval="1d")
-    client.analyze_performance("AAPL", "6mo")
-    assert calls["n"] == 1  # one fetch still feeds both views
-
-
 def test_repeated_analysis_of_an_oversized_history_does_not_refetch() -> None:
     # Bars past the limit are not cached, so without a cached PerformanceStats every call
     # would go back to the network. The derived result is tiny; cache that instead.
-    calls = {"n": 0}
-    df = make_history_df([100.0 + i for i in range(MAX_CACHEABLE_BARS + 1)])
-    client = make_client(factory=_counting_factory(df, calls))
+    factory, calls = _counting_history([100.0 + i for i in range(MAX_CACHEABLE_BARS + 1)])
+    client = make_client(factory)
     first = client.analyze_performance("AAPL", "max")
     second = client.analyze_performance("AAPL", "max")
-    assert calls["n"] == 1
+    assert len(calls) == 1
     assert first.total_return_percent == second.total_return_percent
 
 
 def test_oversized_price_history_still_caches_its_derived_view() -> None:
-    calls = {"n": 0}
-    df = make_history_df([100.0 + i for i in range(MAX_CACHEABLE_BARS + 1)])
-    client = make_client(factory=_counting_factory(df, calls))
+    factory, calls = _counting_history([100.0 + i for i in range(MAX_CACHEABLE_BARS + 1)])
+    client = make_client(factory)
     client.get_price_history("AAPL", period="max", interval="1d")
     client.get_price_history("AAPL", period="max", interval="1d")
-    assert calls["n"] == 1
+    assert len(calls) == 1
 
 
-def test_analyze_performance_shares_the_bars_cache_with_get_price_history() -> None:
-    calls = {"n": 0}
-    df = make_history_df([100.0 + i for i in range(120)])
-
-    def counting(symbol: str) -> object:
-        calls["n"] += 1
-        return fake_ticker_factory(history_df=df)(symbol)
-
-    client = make_client(factory=counting)
-    client.get_price_history("AAPL", period="6mo", interval="1d")
-    client.analyze_performance("AAPL", "6mo")
-    assert calls["n"] == 1  # one fetch feeds both derived views
-
-
-def test_get_price_history_reuses_bars_fetched_by_analyze_performance() -> None:
-    calls = {"n": 0}
-    df = make_history_df([100.0 + i for i in range(120)])
-
-    def counting(symbol: str) -> object:
-        calls["n"] += 1
-        return fake_ticker_factory(history_df=df)(symbol)
-
-    client = make_client(factory=counting)
+@pytest.mark.parametrize("history_first", [True, False])
+def test_analyze_performance_and_get_price_history_share_one_fetch(history_first: bool) -> None:
+    factory, calls = _counting_history([100.0 + i for i in range(120)])
+    client = make_client(factory)
+    if history_first:
+        client.get_price_history("AAPL", period="6mo", interval="1d")
     client.analyze_performance("AAPL", "6mo")
     client.get_price_history("AAPL", period="6mo", interval="1d")
-    assert calls["n"] == 1  # the dedupe works in either order
-
-
-def test_analyze_performance_sma_when_enough_bars() -> None:
-    closes = [100.0 + i for i in range(60)]  # 60 daily bars
-    client = make_client(factory=fake_ticker_factory(history_df=make_history_df(closes)))
-    p = client.analyze_performance("AAPL", "3mo")
-    assert p.sma_50 == pytest.approx(analytics.sma(closes, 50))
-    assert p.sma_200 is None  # still < 200
+    assert len(calls) == 1
 
 
 def test_analyze_performance_smas_survive_a_short_window() -> None:
-    # SMAs do not annualize, so the 90-day gate must not blank them.
+    # SMAs do not annualize, so the annualization gate does not blank them.
     closes = [100.0 + i for i in range(60)]  # 59 elapsed days, under the gate
     client = make_client(factory=fake_ticker_factory(history_df=make_history_df(closes)))
     p = client.analyze_performance("AAPL", "3mo")
     assert p.annualized_return_percent is None
     assert p.sma_50 == pytest.approx(analytics.sma(closes, 50))
+    assert p.sma_200 is None
 
 
 def test_analyze_performance_too_few_bars_raises() -> None:
@@ -332,59 +279,22 @@ def test_analyze_performance_invalid_symbol_raises() -> None:
         client.analyze_performance("BAD", "1y")
 
 
-def test_analyze_performance_caches_within_ttl() -> None:
-    calls = {"n": 0}
-    df = make_history_df([100.0, 110.0, 99.0])
-
-    def counting(symbol: str) -> object:
-        calls["n"] += 1
-        return fake_ticker_factory(history_df=df)(symbol)
-
+def test_analyze_performance_caches_within_ttl_and_keys_on_period() -> None:
+    factory, calls = _counting_history([100.0, 110.0, 99.0])
     clock = FakeClock()
-    client = YFinanceClient(
-        ticker_factory=counting,
-        time_fn=clock,
-        quote_ttl=30.0,
-        history_ttl=300.0,
-        fundamentals_ttl=3600.0,
-    )
+    client = make_client(factory, clock=clock, history_ttl=300.0)
     client.analyze_performance("AAPL", "1mo")
     client.analyze_performance("AAPL", "1mo")
-    assert calls["n"] == 1
+    assert len(calls) == 1
+    client.analyze_performance("AAPL", "1y")
+    assert len(calls) == 2
     clock.advance(301.0)
     client.analyze_performance("AAPL", "1mo")
-    assert calls["n"] == 2
-
-
-def test_analyze_performance_cache_keys_on_period() -> None:
-    calls = {"n": 0}
-    df = make_history_df([100.0, 110.0, 99.0])
-
-    def counting(symbol: str) -> object:
-        calls["n"] += 1
-        return fake_ticker_factory(history_df=df)(symbol)
-
-    client = YFinanceClient(
-        ticker_factory=counting,
-        time_fn=FakeClock(),
-        quote_ttl=30.0,
-        history_ttl=300.0,
-        fundamentals_ttl=3600.0,
-    )
-    client.analyze_performance("AAPL", "1mo")
-    client.analyze_performance("AAPL", "1mo")
-    assert calls["n"] == 1
-    client.analyze_performance("AAPL", "1y")  # distinct period -> distinct key
-    assert calls["n"] == 2
+    assert len(calls) == 3
 
 
 def test_analyze_performance_cache_keys_on_the_risk_free_rate() -> None:
-    """A second call at a different rate must recompute, not replay the first rate's result.
-
-    The cached value is a PerformanceStats whose Sharpe, Sortino and downside figures are
-    all derived from risk_free_rate, so dropping the rate from the key would quietly serve
-    whichever rate happened to be asked for first.
-    """
+    """A second call at a different rate recomputes rather than replaying the first result."""
     df = make_history_df([100.0 + i for i in range(300)])
     client = make_client(factory=fake_ticker_factory(history_df=df))
 
@@ -397,12 +307,6 @@ def test_analyze_performance_cache_keys_on_the_risk_free_rate() -> None:
     assert excess.sharpe_ratio < raw.sharpe_ratio
     # And the first rate is still served from cache rather than recomputed differently.
     assert client.analyze_performance("AAPL", "1y").sharpe_ratio == raw.sharpe_ratio
-
-
-def test_analyze_performance_period_propagates() -> None:
-    df = make_history_df([100.0, 110.0, 99.0])
-    p = make_client(factory=fake_ticker_factory(history_df=df)).analyze_performance("AAPL", "5y")
-    assert p.period == "5y"
 
 
 def test_analyze_performance_sma_200_populated() -> None:

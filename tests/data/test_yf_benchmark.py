@@ -1,7 +1,4 @@
-"""Mocked-client tests for the benchmark comparison and the multi-ticker table.
-
-Kept out of test_yfinance_client.py, which is already past 2 000 lines.
-"""
+"""YFinanceClient.compare_to_benchmark and compare_tickers."""
 
 import math
 import threading
@@ -14,7 +11,7 @@ from finance_mcp.data.errors import DataUnavailable, InvalidInput
 from finance_mcp.data.models import BenchmarkComparison
 from tests.fakes import fake_multi_ticker_factory, make_client, make_history_df
 
-# 200 consecutive calendar days from 2024-01-01, so both legs clear the 90-day gate.
+# 200 consecutive calendar days from 2024-01-01, so both legs clear the annualization gate.
 DAYS = 200
 
 
@@ -133,7 +130,7 @@ def test_compare_to_benchmark_with_no_shared_dates_names_both_symbols() -> None:
 
 def test_compare_to_benchmark_nulls_annualized_figures_on_a_short_overlap() -> None:
     asset, bench = _walk(100.0, 0.30, 2.0, n=30), _walk(400.0, 0.80, 4.0, n=30)
-    result = _compare(asset, bench)  # 30 calendar days: under the 90-day gate
+    result = _compare(asset, bench)  # 30 calendar days: under the annualization gate
     assert result.periods_per_year is None
     assert result.annualized_return_percent is None
     assert result.benchmark_annualized_return_percent is None

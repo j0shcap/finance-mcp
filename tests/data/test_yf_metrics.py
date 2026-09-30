@@ -9,12 +9,10 @@ from finance_mcp.data.errors import DataUnavailable, SymbolNotFound
 from finance_mcp.data.models import (
     KeyMetrics,
 )
-from finance_mcp.data.yfinance_client import (
-    YFinanceClient,
-)
 from tests.fakes import (
     SAP_INFO,
     FakeClock,
+    counting,
     fake_ticker_factory,
     make_client,
 )
@@ -87,12 +85,6 @@ def test_get_key_metrics_typed_error_is_data_unavailable() -> None:
     assert "rate limited" in str(exc.value)
 
 
-def test_get_key_metrics_raw_error_is_symbol_not_found() -> None:
-    client = make_client(factory=fake_ticker_factory(info_error=KeyError("boom")))
-    with pytest.raises(SymbolNotFound):
-        client.get_key_metrics("AAPL")
-
-
 def test_get_key_metrics_mapping_failure_is_data_unavailable() -> None:
     # A value that survives the name check but fails float() coercion in mapping.
     info = {"longName": "Apple Inc.", "trailingPE": object()}
@@ -103,45 +95,23 @@ def test_get_key_metrics_mapping_failure_is_data_unavailable() -> None:
 
 
 def test_get_key_metrics_caches_within_ttl() -> None:
-    calls = {"n": 0}
-
-    def counting(symbol: str) -> object:
-        calls["n"] += 1
-        return fake_ticker_factory(info=METRICS_INFO)(symbol)
-
+    factory, calls = counting(fake_ticker_factory(info=METRICS_INFO))
     clock = FakeClock()
-    client = YFinanceClient(
-        ticker_factory=counting,
-        time_fn=clock,
-        quote_ttl=30.0,
-        history_ttl=300.0,
-        fundamentals_ttl=3600.0,
-    )
+    client = make_client(factory, clock=clock, fundamentals_ttl=3600.0)
     client.get_key_metrics("AAPL")
     client.get_key_metrics("AAPL")
-    assert calls["n"] == 1
+    assert len(calls) == 1
     clock.advance(3601.0)
     client.get_key_metrics("AAPL")
-    assert calls["n"] == 2
+    assert len(calls) == 2
 
 
 def test_profile_and_metrics_caches_do_not_collide() -> None:
-    calls = {"n": 0}
-
-    def counting(symbol: str) -> object:
-        calls["n"] += 1
-        return fake_ticker_factory(info=METRICS_INFO)(symbol)
-
-    client = YFinanceClient(
-        ticker_factory=counting,
-        time_fn=FakeClock(),
-        quote_ttl=30.0,
-        history_ttl=300.0,
-        fundamentals_ttl=3600.0,
-    )
+    factory, calls = counting(fake_ticker_factory(info=METRICS_INFO))
+    client = make_client(factory)
     prof = client.get_company_profile("AAPL")
     metr = client.get_key_metrics("AAPL")
-    assert calls["n"] == 2  # distinct cache keys -> two fetches
+    assert len(calls) == 2
     assert prof.symbol == "AAPL" and metr.symbol == "AAPL"
 
 

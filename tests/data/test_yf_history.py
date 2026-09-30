@@ -11,10 +11,10 @@ from finance_mcp.data.models import (
 )
 from finance_mcp.data.yfinance_client import (
     _INTRADAY_INTERVALS,
-    YFinanceClient,
 )
 from tests.fakes import (
     FakeClock,
+    counting,
     fake_ticker_factory,
     make_client,
     make_history_df,
@@ -43,31 +43,27 @@ def test_get_price_history_empty_raises_symbol_not_found() -> None:
 
 def test_get_price_history_truncates_to_max_bars() -> None:
     df = make_history_df([float(i) for i in range(1, 11)])
-    client = YFinanceClient(
-        ticker_factory=fake_ticker_factory(history_df=df),
-        time_fn=FakeClock(),
-        quote_ttl=30.0,
-        history_ttl=300.0,
-        max_bars=5,
-    )
+    client = make_client(fake_ticker_factory(history_df=df), max_bars=5)
     hist = client.get_price_history("AAPL", period="1mo", interval="1d")
     assert len(hist.bars) == 5
     assert hist.truncated is True
     assert hist.summary.bars == 10
 
 
-def test_get_price_history_drops_nan_rows() -> None:
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_get_price_history_drops_non_finite_rows(bad: float) -> None:
     df = make_history_df([100.0, 101.0, 102.0])
-    df.loc[df.index[1], "Close"] = float("nan")
+    df.loc[df.index[1], "Close"] = bad
     client = make_client(factory=fake_ticker_factory(history_df=df))
     hist = client.get_price_history("AAPL", period="1mo", interval="1d")
     assert hist.summary.bars == 2
     assert all(math.isfinite(b.close) for b in hist.bars)
 
 
-def test_get_price_history_all_nan_raises() -> None:
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_get_price_history_with_no_finite_rows_is_symbol_not_found(bad: float) -> None:
     df = make_history_df([100.0])
-    df.loc[df.index[0], "Close"] = float("nan")
+    df.loc[df.index[0], "Close"] = bad
     client = make_client(factory=fake_ticker_factory(history_df=df))
     with pytest.raises(SymbolNotFound):
         client.get_price_history("AAPL", period="1mo", interval="1d")
@@ -80,22 +76,6 @@ def test_get_price_history_zero_start_close_no_crash() -> None:
     assert hist.summary.total_return_percent == 0.0
 
 
-def test_get_price_history_drops_inf_rows() -> None:
-    df = make_history_df([100.0, 101.0, 102.0])
-    df.loc[df.index[1], "Close"] = float("inf")
-    client = make_client(factory=fake_ticker_factory(history_df=df))
-    hist = client.get_price_history("AAPL", period="1mo", interval="1d")
-    assert hist.summary.bars == 2
-
-
-def test_get_price_history_all_inf_raises() -> None:
-    df = make_history_df([100.0])
-    df.loc[df.index[0], "Close"] = float("inf")
-    client = make_client(factory=fake_ticker_factory(history_df=df))
-    with pytest.raises(SymbolNotFound):
-        client.get_price_history("AAPL", period="1mo", interval="1d")
-
-
 def test_get_price_history_parse_error_becomes_data_unavailable() -> None:
     df = make_history_df([100.0, 101.0]).drop(columns=["Volume"])
     client = make_client(factory=fake_ticker_factory(history_df=df))
@@ -105,29 +85,17 @@ def test_get_price_history_parse_error_becomes_data_unavailable() -> None:
 
 
 def test_get_price_history_caches_and_keys_on_interval() -> None:
-    calls = {"n": 0}
-    df = make_history_df([100.0, 101.0])
-
-    def counting(symbol: str) -> object:
-        calls["n"] += 1
-        return fake_ticker_factory(history_df=df)(symbol)
-
+    factory, calls = counting(fake_ticker_factory(history_df=make_history_df([100.0, 101.0])))
     clock = FakeClock()
-    client = YFinanceClient(
-        ticker_factory=counting,
-        time_fn=clock,
-        quote_ttl=30.0,
-        history_ttl=300.0,
-        fundamentals_ttl=3600.0,
-    )
+    client = make_client(factory, clock=clock, history_ttl=300.0)
     client.get_price_history("AAPL", "1mo", "1d")
     client.get_price_history("AAPL", "1mo", "1d")
-    assert calls["n"] == 1
-    client.get_price_history("AAPL", "1mo", "1wk")  # different interval -> distinct key
-    assert calls["n"] == 2
+    assert len(calls) == 1
+    client.get_price_history("AAPL", "1mo", "1wk")
+    assert len(calls) == 2
     clock.advance(301.0)
-    client.get_price_history("AAPL", "1mo", "1d")  # expired -> refetch
-    assert calls["n"] == 3
+    client.get_price_history("AAPL", "1mo", "1d")
+    assert len(calls) == 3
 
 
 def test_get_price_history_single_bar() -> None:
@@ -135,9 +103,6 @@ def test_get_price_history_single_bar() -> None:
     h = client.get_price_history("AAPL", "1d", "1d")
     assert h.summary.bars == 1 and h.summary.total_return_percent == 0.0
     assert h.summary.start_date == h.summary.end_date and h.truncated is False
-
-
-# --- intraday bars keep their time (item 1) ---
 
 
 def test_intraday_bars_carry_a_full_timestamp_with_utc_offset() -> None:
@@ -164,8 +129,7 @@ def test_every_intraday_interval_emits_distinct_timestamps(interval: str) -> Non
 
 @pytest.mark.parametrize("interval", ["1d", "1wk", "1mo"])
 def test_daily_and_longer_bars_stay_date_only(interval: str) -> None:
-    # Yahoo's daily index is midnight in the EXCHANGE's timezone; emitting a timestamp (or
-    # converting to UTC) would either lie about the time or shift the calendar date.
+    # Yahoo indexes daily bars at midnight exchange time; converting to UTC would shift the date.
     df = make_history_df([100.0, 101.0], start="2026-09-24", tz="America/New_York")
     client = make_client(factory=fake_ticker_factory(history_df=df))
     dates = [b.date for b in client.get_price_history("AAPL", "1mo", interval).bars]

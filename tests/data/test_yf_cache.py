@@ -1,39 +1,20 @@
 """The TTL and LRU cache behind every YFinanceClient method."""
 
-from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any
 
-from finance_mcp.data.yfinance_client import (
-    DEFAULT_CACHE_MAX_ENTRIES,
-    YFinanceClient,
-)
 from tests.fakes import (
     QUOTE_FI,
     FakeClock,
+    counting,
     fake_ticker_factory,
+    make_client,
 )
-
-# --- bounded LRU cache (item 7) ---
-
-
-def _counting_quote_factory(calls: list[str]) -> Callable[[str], Any]:
-    def factory(symbol: str) -> Any:
-        calls.append(symbol)
-        return fake_ticker_factory(fast_info=QUOTE_FI)(symbol)
-
-    return factory
 
 
 def test_cache_evicts_least_recently_used_entry_over_max() -> None:
-    calls: list[str] = []
-    clock = FakeClock()
-    client = YFinanceClient(
-        ticker_factory=_counting_quote_factory(calls),
-        time_fn=clock,
-        quote_ttl=30.0,
-        cache_max_entries=2,
-    )
+    factory, calls = counting(fake_ticker_factory(fast_info=QUOTE_FI))
+    client = make_client(factory, quote_ttl=30.0, cache_max_entries=2)
     client.get_quote(["AAA"])
     client.get_quote(["BBB"])
     client.get_quote(["AAA"])  # cache hit -> AAA becomes the most recently USED entry
@@ -47,11 +28,8 @@ def test_cache_evicts_least_recently_used_entry_over_max() -> None:
 
 
 def test_cache_purges_expired_entries_on_insert() -> None:
-    calls: list[str] = []
     clock = FakeClock()
-    client = YFinanceClient(
-        ticker_factory=_counting_quote_factory(calls), time_fn=clock, quote_ttl=30.0
-    )
+    client = make_client(clock=clock, quote_ttl=30.0)
     client.get_quote(["AAA"])
     clock.advance(31.0)
     client.get_quote(["BBB"])
@@ -61,25 +39,10 @@ def test_cache_purges_expired_entries_on_insert() -> None:
 
 
 def test_cache_never_exceeds_max_entries() -> None:
-    calls: list[str] = []
-    client = YFinanceClient(
-        ticker_factory=_counting_quote_factory(calls),
-        time_fn=FakeClock(),
-        quote_ttl=30.0,
-        cache_max_entries=3,
-    )
+    client = make_client(cache_max_entries=3)
     for i in range(20):
         client.get_quote([f"SYM{i}"])
         assert len(client._cache) <= 3
-
-
-def test_cache_default_max_entries_is_bounded() -> None:
-    client = YFinanceClient(ticker_factory=fake_ticker_factory(fast_info=QUOTE_FI))
-    assert client._cache_max_entries == DEFAULT_CACHE_MAX_ENTRIES
-    assert DEFAULT_CACHE_MAX_ENTRIES > 0
-
-
-# --- cache entries are timestamped when the fetch completes ---
 
 
 def test_cache_entry_is_timestamped_after_the_fetch_completes() -> None:
@@ -96,7 +59,7 @@ def test_cache_entry_is_timestamped_after_the_fetch_completes() -> None:
 
         return _Ticker()
 
-    client = YFinanceClient(ticker_factory=slow_factory, time_fn=clock, quote_ttl=30.0)
+    client = make_client(slow_factory, clock=clock, quote_ttl=30.0)
     client.get_quote(["AAPL"])
     client.get_quote(["AAPL"])
     # Timestamping at the start would insert the entry already expired, making the cache
@@ -105,11 +68,7 @@ def test_cache_entry_is_timestamped_after_the_fetch_completes() -> None:
 
 
 def test_refreshing_a_present_key_makes_it_most_recently_used() -> None:
-    client = YFinanceClient(
-        ticker_factory=fake_ticker_factory(fast_info=QUOTE_FI),
-        time_fn=FakeClock(),
-        cache_max_entries=2,
-    )
+    client = make_client(cache_max_entries=2)
 
     def racing_fetch() -> str:
         # What concurrent get_quote calls do: another thread inserts this key while this

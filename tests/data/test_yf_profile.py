@@ -7,11 +7,9 @@ from yfinance.exceptions import (
 )
 
 from finance_mcp.data.errors import DataUnavailable, SymbolNotFound
-from finance_mcp.data.yfinance_client import (
-    YFinanceClient,
-)
 from tests.fakes import (
     FakeClock,
+    counting,
     fake_ticker_factory,
     make_client,
     make_series,
@@ -46,8 +44,12 @@ def test_get_company_profile_maps_fields() -> None:
     assert p.summary == "Apple designs phones."
 
 
-def test_get_company_profile_name_falls_back_to_short_name() -> None:
-    info = {"shortName": "Apple", "sector": "Tech"}
+@pytest.mark.parametrize(
+    "info",
+    [{"shortName": "Apple"}, {"longName": "", "shortName": "Apple"}],
+    ids=["absent", "empty"],
+)
+def test_get_company_profile_name_falls_back_to_short_name(info: dict[str, str]) -> None:
     client = make_client(factory=fake_ticker_factory(info=info))
     assert client.get_company_profile("AAPL").name == "Apple"
 
@@ -82,14 +84,15 @@ def test_get_company_profile_no_name_raises_symbol_not_found() -> None:
         client.get_company_profile("BAD")
 
 
-def test_get_company_profile_typed_error_is_data_unavailable() -> None:
+def test_get_company_profile_source_error_is_data_unavailable() -> None:
     client = make_client(factory=fake_ticker_factory(info_error=YFException("rate limited")))
     with pytest.raises(DataUnavailable) as exc:
         client.get_company_profile("AAPL")
+    assert type(exc.value) is DataUnavailable
     assert "rate limited" in str(exc.value)
 
 
-def test_get_company_profile_raw_error_is_symbol_not_found() -> None:
+def test_get_company_profile_unknown_symbol_is_symbol_not_found() -> None:
     client = make_client(factory=fake_ticker_factory(info_error=KeyError("boom")))
     with pytest.raises(SymbolNotFound):
         client.get_company_profile("AAPL")
@@ -113,27 +116,18 @@ def test_get_company_profile_parse_error_is_data_unavailable() -> None:
     assert "AAPL" in str(exc.value)
 
 
-def test_get_company_profile_dividends_read_error_is_data_unavailable() -> None:
-    # .info already identified the instrument, so a failing dividends READ is a data
-    # availability issue (DataUnavailable), NOT SymbolNotFound. Guards the refactor that
-    # moved this read out of the SymbolNotFound try block.
+@pytest.mark.parametrize("read", ["dividends", "splits"])
+def test_get_company_profile_event_read_error_is_data_unavailable(read: str) -> None:
+    # .info has already identified the instrument, so this is not SymbolNotFound.
     client = make_client(
-        factory=fake_ticker_factory(info=FULL_INFO, dividends_error=YFException("divs down"))
-    )
-    with pytest.raises(DataUnavailable) as exc:
-        client.get_company_profile("AAPL")
-    assert type(exc.value) is DataUnavailable  # not the SymbolNotFound subclass
-    assert "divs down" in str(exc.value)
-
-
-def test_get_company_profile_splits_read_error_is_data_unavailable() -> None:
-    client = make_client(
-        factory=fake_ticker_factory(info=FULL_INFO, splits_error=YFException("splits down"))
+        factory=fake_ticker_factory(
+            info=FULL_INFO, **{f"{read}_error": YFException(f"{read} down")}
+        )
     )
     with pytest.raises(DataUnavailable) as exc:
         client.get_company_profile("AAPL")
     assert type(exc.value) is DataUnavailable
-    assert "splits down" in str(exc.value)
+    assert f"{read} down" in str(exc.value)
 
 
 def test_get_company_profile_nan_employees_nulled_not_fatal() -> None:
@@ -151,32 +145,15 @@ def test_get_company_profile_float_employees_coerced_to_int() -> None:
 
 
 def test_get_company_profile_caches_within_ttl() -> None:
-    calls = {"n": 0}
-
-    def counting(symbol: str) -> object:
-        calls["n"] += 1
-        return fake_ticker_factory(info=FULL_INFO)(symbol)
-
+    factory, calls = counting(fake_ticker_factory(info=FULL_INFO))
     clock = FakeClock()
-    client = YFinanceClient(
-        ticker_factory=counting,
-        time_fn=clock,
-        quote_ttl=30.0,
-        history_ttl=300.0,
-        fundamentals_ttl=3600.0,
-    )
+    client = make_client(factory, clock=clock, fundamentals_ttl=3600.0)
     client.get_company_profile("AAPL")
     client.get_company_profile("AAPL")
-    assert calls["n"] == 1
+    assert len(calls) == 1
     clock.advance(3601.0)
     client.get_company_profile("AAPL")
-    assert calls["n"] == 2
-
-
-def test_get_company_profile_empty_long_name_uses_short_name() -> None:
-    factory = fake_ticker_factory(info={"longName": "", "shortName": "Apple"})
-    client = make_client(factory=factory)
-    assert client.get_company_profile("AAPL").name == "Apple"
+    assert len(calls) == 2
 
 
 def test_get_company_profile_dividends_below_cap_returns_all() -> None:

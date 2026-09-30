@@ -14,7 +14,7 @@ from fastmcp.exceptions import ToolError
 
 from finance_mcp.server import create_server
 from finance_mcp.tools._inputs import MAX_CASHFLOWS, MAX_COMPARE_TICKERS, TICKER_PATTERN
-from tests.fakes import fake_search_factory, fake_ticker_factory, make_client
+from tests.fakes import FakeSearch, fake_ticker_factory, make_client
 
 
 def recording_factory(calls: list[str], **kwargs: Any) -> Callable[[str], Any]:
@@ -37,9 +37,7 @@ async def fetches() -> AsyncIterator[tuple[Client[FastMCPTransport], list[str]]]
         info={"longName": "Some Instrument", "currency": "USD"},
         fast_info={"last_price": 190.0, "currency": "USD"},
     )
-    server = create_server(
-        make_client(factory=factory, search_factory=fake_search_factory(quotes=[]))
-    )
+    server = create_server(make_client(factory=factory, search_factory=FakeSearch(quotes=[])))
     async with Client(server) as client:
         yield client, calls
 

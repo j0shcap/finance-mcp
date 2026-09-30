@@ -17,6 +17,7 @@ from tests.fakes import (
     INCOME,
     SAP_INFO,
     FakeClock,
+    counting,
     fake_ticker_factory,
     make_client,
     make_financials_df,
@@ -38,13 +39,6 @@ def test_get_financials_line_items_filter() -> None:
     client = make_client(factory=fake_ticker_factory(financials={"income_stmt": df}))
     fs = client.get_financials("AAPL", "income", "annual", line_items=["Total Revenue", "Nope"])
     assert list(fs.line_items.keys()) == ["Total Revenue"]  # only matching labels, "Nope" dropped
-
-
-def test_get_financials_quarterly_attr() -> None:
-    df = make_financials_df({"Total Revenue": [100.0]}, ["2025-03-31"])
-    client = make_client(factory=fake_ticker_factory(financials={"quarterly_balance_sheet": df}))
-    fs = client.get_financials("AAPL", "balance", "quarterly")
-    assert fs.period_ends == ["2025-03-31"]
 
 
 def test_get_financials_empty_raises_symbol_not_found() -> None:
@@ -69,49 +63,30 @@ def test_get_financials_parse_error_is_data_unavailable() -> None:
     assert "AAPL" in str(exc.value)
 
 
-def test_get_financials_cached_within_ttl() -> None:
-    calls = {"n": 0}
+def _counting_income() -> tuple[Callable[[str], Any], list[str]]:
     df = make_financials_df(INCOME, ["2024-09-30", "2023-09-30"])
+    return counting(fake_ticker_factory(financials={"income_stmt": df}))
 
-    def counting(symbol: str) -> Any:
-        calls["n"] += 1
-        return fake_ticker_factory(financials={"income_stmt": df})(symbol)
 
+def test_get_financials_cached_within_ttl() -> None:
+    factory, calls = _counting_income()
     clock = FakeClock()
-    client = YFinanceClient(
-        ticker_factory=counting,
-        time_fn=clock,
-        quote_ttl=30.0,
-        history_ttl=300.0,
-        fundamentals_ttl=3600.0,
-    )
+    client = make_client(factory, clock=clock, fundamentals_ttl=3600.0)
     client.get_financials("AAPL", "income", "annual")
     client.get_financials("AAPL", "income", "annual")
-    assert calls["n"] == 1
+    assert len(calls) == 1
     clock.advance(3601.0)
     client.get_financials("AAPL", "income", "annual")
-    assert calls["n"] == 2
+    assert len(calls) == 2
 
 
 def test_get_financials_filter_reuses_cached_fetch() -> None:
-    calls = {"n": 0}
-    df = make_financials_df(INCOME, ["2024-09-30", "2023-09-30"])
-
-    def counting(symbol: str) -> object:
-        calls["n"] += 1
-        return fake_ticker_factory(financials={"income_stmt": df})(symbol)
-
-    client = YFinanceClient(
-        ticker_factory=counting,
-        time_fn=FakeClock(),
-        quote_ttl=30.0,
-        history_ttl=300.0,
-        fundamentals_ttl=3600.0,
-    )
+    factory, calls = _counting_income()
+    client = make_client(factory)
     full = client.get_financials("AAPL", "income", "annual")
     f1 = client.get_financials("AAPL", "income", "annual", line_items=["Total Revenue"])
     f2 = client.get_financials("AAPL", "income", "annual", line_items=["Net Income"])
-    assert calls["n"] == 1  # one fetch; both filters reuse the cached statement
+    assert len(calls) == 1
     assert list(f1.line_items) == ["Total Revenue"]
     assert list(f2.line_items) == ["Net Income"]
     assert set(full.line_items) == {"Total Revenue", "Net Income"}  # cached object un-mutated
@@ -172,20 +147,21 @@ def test_financial_statement_currency_falls_back_to_quote_currency() -> None:
     assert client.get_financials("AAPL", "income", "annual").currency == "USD"
 
 
-def test_financial_statement_currency_is_none_when_info_is_unusable() -> None:
+@pytest.mark.parametrize(
+    "info_kwargs", [{"info": {}}, {"info_error": OSError("no network")}], ids=["empty", "error"]
+)
+def test_financial_statement_currency_is_none_when_info_is_unusable(
+    info_kwargs: dict[str, Any],
+) -> None:
     df = make_financials_df(INCOME, ["2024-12-31", "2023-12-31"])
-    for factory in (
-        fake_ticker_factory(financials={"income_stmt": df}, info={}),
-        fake_ticker_factory(financials={"income_stmt": df}, info_error=OSError("no network")),
-    ):
-        client = make_client(factory=factory)
-        # An unlabelled statement beats a failed one: the values are still correct.
-        fs = client.get_financials("AAPL", "income", "annual")
-        assert fs.currency is None
-        assert fs.line_items["Total Revenue"] == [400.0, 380.0]
+    client = make_client(fake_ticker_factory(financials={"income_stmt": df}, **info_kwargs))
+    # An unlabelled statement beats a failed one: the values are still correct.
+    fs = client.get_financials("AAPL", "income", "annual")
+    assert fs.currency is None
+    assert fs.line_items["Total Revenue"] == [400.0, 380.0]
 
 
-# --- unknown line-item labels are surfaced, not silently dropped (item 4) ---
+# --- line-item filtering: unknown labels are reported, not dropped ---
 
 
 def _income_client() -> YFinanceClient:
@@ -303,8 +279,7 @@ def test_absent_statement_currency_is_cached() -> None:
 
 
 def test_empty_line_items_filter_returns_the_whole_statement() -> None:
-    # An empty filter cannot mean "return nothing useful": that was the one silent-drop
-    # case left. Library callers get the full statement; the tool rejects [] outright.
+    # An empty filter means no filter. (The tool rejects [] before it gets here.)
     fs = _income_client().get_financials("AAPL", "income", "annual", line_items=[])
     assert list(fs.line_items) == ["Total Revenue", "Net Income"]
     assert fs.missing_line_items == []

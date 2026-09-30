@@ -10,7 +10,7 @@ from finance_mcp.data.errors import DataUnavailable
 from finance_mcp.server import create_server
 from tests.fakes import (
     QUOTE_FI,
-    fake_search_factory,
+    FakeSearch,
     fake_symbol_ticker_factory,
     fake_ticker_factory,
     make_client,
@@ -225,7 +225,7 @@ async def test_search_symbols_tool() -> None:
     ]
     server = create_server(
         yf_client=make_client(
-            factory=fake_ticker_factory(), search_factory=fake_search_factory(quotes=quotes)
+            factory=fake_ticker_factory(), search_factory=FakeSearch(quotes=quotes)
         )
     )
     async with Client(server) as client:
@@ -236,9 +236,7 @@ async def test_search_symbols_tool() -> None:
 
 async def test_search_symbols_tool_empty_is_not_error() -> None:
     server = create_server(
-        yf_client=make_client(
-            factory=fake_ticker_factory(), search_factory=fake_search_factory(quotes=[])
-        )
+        yf_client=make_client(factory=fake_ticker_factory(), search_factory=FakeSearch(quotes=[]))
     )
     async with Client(server) as client:
         result = await client.call_tool("search_symbols", {"query": "zzzznope"})
@@ -249,7 +247,7 @@ async def test_search_symbols_tool_surfaces_error() -> None:
     server = create_server(
         yf_client=make_client(
             factory=fake_ticker_factory(),
-            search_factory=fake_search_factory(error=RuntimeError("yahoo: search down")),
+            search_factory=FakeSearch(error=RuntimeError("yahoo: search down")),
         )
     )
     async with Client(server) as client:
