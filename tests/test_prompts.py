@@ -4,6 +4,7 @@ import re
 
 import pytest
 from fastmcp import Client
+from mcp.shared.exceptions import McpError
 from mcp.types import TextContent
 
 from finance_mcp.conventions import CALCULATOR_CONVENTIONS, CONVENTIONS_URI, UNITS_GLOSSARY
@@ -175,6 +176,7 @@ REFERENCING_PROMPTS: dict[str, dict[str, str]] = {
     "investment_cashflows": {"cashflows": "-1000 now, then 300 a year for 5 years"},
     "bond_analysis": {"bond": "UST 4% due 2036-01-15, settles 2026-03-15, clean price 92.30"},
     "loan_planner": {"principal": "400000", "annual_rate": "6.5%", "term_months": "360"},
+    "compare_stocks": {"tickers": "aapl, msft  googl"},
 }
 
 
@@ -395,3 +397,70 @@ async def test_loan_planner_rejects_the_naive_refinance_break_even() -> None:
     assert "naive break-even" in text
     assert "wrong when the term resets" in text
     assert "same remaining term" in text  # isolates the rate effect
+
+
+# --- compare_stocks ------------------------------------------------------------------
+
+
+async def test_compare_stocks_arguments() -> None:
+    assert await _prompt_arguments("compare_stocks") == {"tickers": True, "horizon": False}
+
+
+async def test_compare_stocks_renders_the_parsed_ticker_list_into_the_tool_calls() -> None:
+    text = await _render("compare_stocks", REFERENCING_PROMPTS["compare_stocks"])
+    assert 'compare_tickers(tickers=["AAPL", "MSFT", "GOOGL"], period="1y"' in text
+    assert 'get_quote(tickers=["AAPL", "MSFT", "GOOGL"])' in text
+    assert "AAPL, MSFT, GOOGL" in text  # the readable list in the framing
+    assert "12mo" in text  # default horizon
+
+
+async def test_compare_stocks_uses_the_custom_horizon() -> None:
+    text = await _render("compare_stocks", {"tickers": "KO PEP", "horizon": "5y"})
+    assert "for a 5y investment horizon" in text
+
+
+@pytest.mark.parametrize(
+    ("tickers", "message"),
+    [("AAPL", "at least 2"), (",".join(f"T{i}" for i in range(11)), "at most 10")],
+)
+async def test_compare_stocks_rejects_a_ticker_count_compare_tickers_cannot_take(
+    tickers: str, message: str
+) -> None:
+    """The error reaches the client despite mask_error_details, naming the problem."""
+    with pytest.raises(McpError, match=message):
+        await _render("compare_stocks", {"tickers": tickers})
+
+
+async def test_compare_stocks_checks_rank_stability_across_two_windows() -> None:
+    text = await _render("compare_stocks", REFERENCING_PROMPTS["compare_stocks"])
+    assert 'period="1y"' in text
+    assert 'period="5y"' in text
+    assert "If the ranking flips between windows" in text
+
+
+async def test_compare_stocks_screens_comparability_and_fixes_the_rubric_first() -> None:
+    text = await _render("compare_stocks", REFERENCING_PROMPTS["compare_stocks"])
+    assert "Comparability screen (before any ranking)" in text
+    assert "split the list into comparable groups" in text
+    assert "Declare the rubric BEFORE reading the results" in text
+
+
+async def test_compare_stocks_derives_growth_adjustment_instead_of_trusting_peg() -> None:
+    text = await _render("compare_stocks", REFERENCING_PROMPTS["compare_stocks"])
+    assert "peg_ratio from Yahoo is often null or stale" in text
+    assert "trailing_pe / forward_pe - 1" in text
+    assert "ONLY when both are" in text
+    assert "Value-trap check" in text
+
+
+async def test_compare_stocks_reads_partial_results_calendars_and_currency() -> None:
+    text = await _render("compare_stocks", REFERENCING_PROMPTS["compare_stocks"])
+    for field in ("metrics_error", "periods_per_year", "currency_differs", "mixed_currencies"):
+        assert field in text
+
+
+async def test_compare_stocks_ranks_honestly() -> None:
+    text = await _render("compare_stocks", REFERENCING_PROMPTS["compare_stocks"])
+    assert '"insufficient data" bucket - not last place' in text
+    assert "call it a tie" in text
+    assert "what would change its rank" in text

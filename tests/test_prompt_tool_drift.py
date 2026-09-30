@@ -28,6 +28,7 @@ from mcp.types import TextContent, Tool
 #: prompt cannot bypass the guard by never being rendered.
 SAMPLE_ARGS: dict[str, dict[str, str]] = {
     "analyze_stock": {"ticker": "AAPL", "horizon": "3y"},
+    "compare_stocks": {"tickers": "KO, PEP, MDLZ", "horizon": "3y"},
     "investment_cashflows": {
         "cashflows": "-1000, 300, 300, 400",
         "discount_rate": "8%",
