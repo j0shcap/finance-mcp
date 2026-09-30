@@ -21,7 +21,11 @@ from finance_mcp.data.calculators import (
     bond_ytm_dated,
 )
 from finance_mcp.data.errors import InvalidInput
-from finance_mcp.data.models import BondDatedAnalytics, BondDayCount
+from finance_mcp.data.models import (
+    BondDatedAnalytics,
+    BondDayCount,
+    FirstPeriodDiscount,
+)
 from finance_mcp.tools._inputs import MAX_BOND_YEARS
 
 
@@ -720,3 +724,201 @@ def test_a_non_positive_clean_price_is_rejected(clean_price: float) -> None:
             coupon_rate=0.05,
             clean_price=clean_price,
         )
+
+
+# --------------------------------------------------------------------------------------
+# first_period_discount: the street convention compounds across the part period, while the
+# US Treasury's own regulation uses SIMPLE interest over it. The two are not interchangeable
+# -- on 31 CFR 356 appendix B example I.D they differ by 0.0077 per 100 -- so the Treasury
+# examples with a real part period can only be reproduced by asking for their convention.
+# --------------------------------------------------------------------------------------
+
+
+def test_treasury_simple_stub_reproduces_appendix_b_example_i_d() -> None:
+    """31 CFR 356 appendix B, example I.D: a 9-1/2% 10-year note accruing from 1985-11-15,
+    issued 1985-11-29, due 1995-11-15, coupons on May 15 and November 15, at a yield of
+    9.54%. The appendix gives r = 167, s = 181, n = 19, A = 0.367403 and P = 99.730918.
+
+    Its formula divides by [1 + (r/s)(i/2)] -- simple interest over the part period.
+
+    https://www.govinfo.gov/content/pkg/CFR-2025-title31-vol2/pdf/CFR-2025-title31-vol2-part356-appB.pdf
+    """
+    result = bond_price_dated(
+        settlement=d("1985-11-29"),
+        maturity=d("1995-11-15"),
+        coupon_rate=0.095,
+        ytm=0.0954,
+        face=100.0,
+        frequency=2,
+        first_period_discount="simple",
+    )
+    assert (result.accrued_days, result.period_days) == (14.0, 181.0)
+    assert result.periods_remaining == 20
+    assert result.accrued_interest == pytest.approx(0.367403, abs=1e-6)
+    assert result.clean_price == pytest.approx(99.730918, abs=1e-6)
+    assert result.first_period_discount == "simple"
+
+
+def test_an_odd_short_first_coupon_period_is_out_of_scope() -> None:
+    """31 CFR 356 appendix B, example I.B is an 8-1/2% 2-year note ISSUED 1990-04-02 and due
+    1992-03-31, whose first interest payment period is SHORT: it runs from the issue date to
+    1990-09-30, not a full six months, so its first coupon pays only (C/2)(r/s) of a full
+    coupon. The appendix prices it at 99.838183.
+
+    This module generates a regular schedule and pays a full coupon on every date, so it
+    prices a *different* bond -- a whole first coupon rather than a stub one -- and comes out
+    slightly higher. That gap is the documented limitation, asserted here so it cannot be
+    mistaken for a rounding difference and so the scope boundary is pinned by a test.
+
+    The schedule itself is right: the same example's published r = 181 / s = 183 day counts
+    are what test_coupon_schedule_matches_treasury_month_end_example checks. Only the odd
+    first coupon AMOUNT is unsupported.
+    """
+    result = bond_price_dated(
+        settlement=d("1990-04-02"),
+        maturity=d("1992-03-31"),
+        coupon_rate=0.085,
+        ytm=0.0859,
+        face=100.0,
+        frequency=2,
+        first_period_discount="simple",
+    )
+    assert (result.accrued_days, result.period_days) == (2.0, 183.0)
+    assert result.periods_remaining == 4
+    appendix_price = 99.838183
+    assert result.clean_price == pytest.approx(99.836290, abs=1e-6)
+    assert result.clean_price < appendix_price
+    # Small in absolute terms, but ~19x the 1e-6 tolerance the regular-period references
+    # are held to -- a real modelling difference, not noise.
+    assert appendix_price - result.clean_price == pytest.approx(0.001893, abs=1e-6)
+
+
+def test_the_two_first_period_conventions_disagree_by_a_material_amount() -> None:
+    """The reason this is an explicit choice and not an implementation detail: on the
+    appendix's own example the conventions differ in the third decimal of the price."""
+
+    def price(discount: FirstPeriodDiscount) -> float:
+        return bond_price_dated(
+            settlement=d("1985-11-29"),
+            maturity=d("1995-11-15"),
+            coupon_rate=0.095,
+            ytm=0.0954,
+            face=100.0,
+            frequency=2,
+            first_period_discount=discount,
+        ).clean_price
+
+    assert price("simple") == pytest.approx(99.730918, abs=1e-6)
+    assert price("compound") == pytest.approx(99.738573, abs=1e-6)
+    assert price("compound") - price("simple") == pytest.approx(0.007655, abs=1e-6)
+
+
+def test_compound_is_the_default() -> None:
+    """The task's 'standard street convention', and what Excel's PRICE implements."""
+    explicit = bond_price_dated(
+        settlement=d("1985-11-29"),
+        maturity=d("1995-11-15"),
+        coupon_rate=0.095,
+        ytm=0.0954,
+        first_period_discount="compound",
+    )
+    default = bond_price_dated(
+        settlement=d("1985-11-29"),
+        maturity=d("1995-11-15"),
+        coupon_rate=0.095,
+        ytm=0.0954,
+    )
+    assert default.first_period_discount == "compound"
+    assert default.clean_price == explicit.clean_price
+
+
+@pytest.mark.parametrize("first_period_discount", ["compound", "simple"])
+def test_the_conventions_agree_on_a_coupon_date(
+    first_period_discount: FirstPeriodDiscount,
+) -> None:
+    """With no part period the stub factor is (1 + y) either way, so both conventions must
+    collapse to the same price -- and to the on-coupon calculator."""
+    result = bond_price_dated(
+        settlement=d("2007-11-15"),
+        maturity=d("2017-11-15"),
+        coupon_rate=0.05,
+        ytm=0.06,
+        face=1000.0,
+        frequency=2,
+        first_period_discount=first_period_discount,
+    )
+    expected = bond_price(
+        face=1000.0, coupon_rate=0.05, years_to_maturity=10.0, ytm=0.06, frequency=2
+    )
+    assert result.clean_price == pytest.approx(expected.price, rel=1e-12)
+    assert result.macaulay_duration == pytest.approx(expected.macaulay_duration, rel=1e-12)
+    assert result.modified_duration == pytest.approx(expected.modified_duration, rel=1e-12)
+    assert result.convexity == pytest.approx(expected.convexity, rel=1e-12)
+
+
+@pytest.mark.parametrize(
+    ("settlement", "maturity", "coupon_rate", "ytm", "frequency", "day_count"),
+    DERIVATIVE_CASES,
+)
+def test_simple_stub_duration_and_convexity_are_also_derivatives(
+    settlement: str,
+    maturity: str,
+    coupon_rate: float,
+    ytm: float,
+    frequency: int,
+    day_count: BondDayCount,
+) -> None:
+    """The simple-stub branch has its own analytic derivatives (the stub factor depends on
+    the yield too), so they need the same finite-difference check as the compound ones."""
+
+    def dirty(rate: float) -> float:
+        return bond_price_dated(
+            settlement=d(settlement),
+            maturity=d(maturity),
+            coupon_rate=coupon_rate,
+            ytm=rate,
+            face=100.0,
+            frequency=frequency,
+            day_count=day_count,
+            first_period_discount="simple",
+        ).dirty_price
+
+    result = bond_price_dated(
+        settlement=d(settlement),
+        maturity=d(maturity),
+        coupon_rate=coupon_rate,
+        ytm=ytm,
+        face=100.0,
+        frequency=frequency,
+        day_count=day_count,
+        first_period_discount="simple",
+    )
+    h = 1e-5
+    price, up, down = dirty(ytm), dirty(ytm + h), dirty(ytm - h)
+    assert result.modified_duration == pytest.approx(-(up - down) / (2.0 * h * price), rel=1e-6)
+    assert result.convexity == pytest.approx((up - 2.0 * price + down) / (h * h * price), rel=1e-5)
+    assert result.macaulay_duration == pytest.approx(
+        result.modified_duration * (1.0 + ytm / frequency), rel=1e-12
+    )
+
+
+@pytest.mark.parametrize("ytm", [0.0, 0.0425, 0.11])
+def test_simple_stub_price_and_yield_round_trip(ytm: float) -> None:
+    priced = bond_price_dated(
+        settlement=d("1985-11-29"),
+        maturity=d("1995-11-15"),
+        coupon_rate=0.095,
+        ytm=ytm,
+        face=100.0,
+        first_period_discount="simple",
+    )
+    solved = bond_ytm_dated(
+        settlement=d("1985-11-29"),
+        maturity=d("1995-11-15"),
+        coupon_rate=0.095,
+        clean_price=priced.clean_price,
+        face=100.0,
+        first_period_discount="simple",
+    )
+    assert solved.yield_to_maturity == pytest.approx(ytm, abs=1e-9)
+    assert solved.first_period_discount == "simple"

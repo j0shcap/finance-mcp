@@ -24,6 +24,7 @@ from finance_mcp.data.models import (
     BondYTM,
     Compounding,
     DatedCashflow,
+    FirstPeriodDiscount,
     IRRResult,
     LoanSchedule,
     MIRRResult,
@@ -724,6 +725,63 @@ def _coupon_schedule(
     return previous, next_coupon, periods
 
 
+def _metrics_compound(
+    face: float, coupon: float, y: float, n: int, f: float
+) -> tuple[float, float, float]:
+    """Street convention: the part period is COMPOUNDED, so cashflow k is discounted over
+    ``w_k = (k - 1) + f`` periods. Returns ``(dirty, macaulay_periods, convexity_periods)``.
+    """
+    base = 1.0 + y
+    price = 0.0
+    weighted_time = 0.0
+    convexity_sum = 0.0
+    for k in range(1, n + 1):
+        cash = coupon + (face if k == n else 0.0)
+        w = (k - 1) + f
+        pv = cash / base**w
+        price += pv
+        weighted_time += w * pv
+        convexity_sum += cash * w * (w + 1.0) / base ** (w + 2.0)
+    return price, weighted_time / price, convexity_sum / price
+
+
+def _metrics_simple(
+    face: float, coupon: float, y: float, n: int, f: float
+) -> tuple[float, float, float]:
+    """US Treasury convention (31 CFR 356 appendix B): the part period earns SIMPLE interest.
+
+    The cashflows are discounted over whole periods and the whole present value is then
+    divided by a stub factor ``1 + f*y`` instead of ``(1+y)**f``:
+
+        X     = sum CF_k / (1+y)**(k-1)
+        dirty = X / (1 + f*y)
+
+    The stub factor depends on the yield, so duration and convexity are not the compound
+    formulas with a different exponent -- they need their own derivatives. Writing
+    ``u = 1/(1 + f*y)`` and using ``X' = -x_weighted/(1+y)``:
+
+        macaulay_periods  = x_weighted/X + (1+y)*f*u
+        convexity_periods = x_second/X + 2*f*u*x_weighted/((1+y)*X) + 2*(f*u)**2
+
+    At ``f == 1`` the stub factor is exactly ``1 + y``, so both branches reduce to the same
+    on-coupon-date numbers.
+    """
+    base = 1.0 + y
+    x = 0.0  # X       = sum CF_k v**(k-1)
+    x_weighted = 0.0  # sum (k-1) CF_k v**(k-1) = -(1+y) X'
+    x_second = 0.0  # X''     = sum (k-1) k CF_k v**(k+1)
+    for k in range(1, n + 1):
+        cash = coupon + (face if k == n else 0.0)
+        pv = cash / base ** (k - 1)
+        x += pv
+        x_weighted += (k - 1) * pv
+        x_second += (k - 1) * k * cash / base ** (k + 1)
+    u = 1.0 / (1.0 + f * y)
+    macaulay = x_weighted / x + base * f * u
+    convexity = x_second / x + 2.0 * f * u * x_weighted / (base * x) + 2.0 * (f * u) ** 2
+    return x * u, macaulay, convexity
+
+
 def _bond_metrics(
     face: float,
     coupon_rate: float,
@@ -731,6 +789,7 @@ def _bond_metrics(
     y: float,
     n: int,
     first_fraction: float = 1.0,
+    first_period_discount: FirstPeriodDiscount = "compound",
 ) -> tuple[float, float, float, float]:
     """Price a coupon stream and its risk metrics, allowing a fractional first period.
 
@@ -739,35 +798,23 @@ def _bond_metrics(
     ``y`` is the PERIODIC yield (annual / frequency) and ``n`` the number of coupons still
     to be paid. ``first_fraction`` is how much of the first coupon period is still to run:
     1.0 on a coupon date, and ``1 - accrued/period`` when settlement falls inside a period.
-    The k-th cashflow is therefore discounted over ``w_k = (k - 1) + first_fraction``
-    periods -- the standard street convention, which compounds across the part-period stub.
-
-    On the full set of cashflows:
-
-        dirty     = sum CF_k / (1+y)**w_k
-        macaulay  = (sum w_k * PV_k / dirty) / frequency          (years)
-        modified  = macaulay / (1 + y)                            (years)
-        convexity = (sum CF_k w_k (w_k+1) / (1+y)**(w_k+2) / dirty) / frequency**2
+    ``first_period_discount`` selects how that part period is discounted -- see
+    ``_metrics_compound`` (street/Excel) and ``_metrics_simple`` (US Treasury).
 
     The price returned is the DIRTY price: the present value of every remaining cashflow,
-    which is the cash a buyer pays. On a coupon date nothing has accrued, ``w_k == k``, and
-    these collapse exactly to the on-coupon formulas -- which is why ``bond_price`` can
-    delegate here without moving any of its numbers.
+    which is the cash a buyer pays. On a coupon date nothing has accrued and these collapse
+    exactly to the on-coupon formulas -- which is why ``bond_price`` can delegate here
+    without moving any of its numbers.
+
+    Macaulay duration is ``-(1+y)/P * dP/dy`` expressed in years and modified duration is
+    ``-(1/P) * dP/dY`` for the annual yield ``Y``, which is why ``modified = macaulay/(1+y)``
+    holds for both conventions.
     """
     coupon = face * coupon_rate / frequency
-    base = 1.0 + y
-    price = 0.0
-    weighted_time = 0.0
-    convexity_sum = 0.0
-    for k in range(1, n + 1):
-        cash = coupon + (face if k == n else 0.0)
-        w = (k - 1) + first_fraction
-        pv = cash / base**w
-        price += pv
-        weighted_time += w * pv
-        convexity_sum += cash * w * (w + 1.0) / base ** (w + 2.0)
-    macaulay = (weighted_time / price) / frequency
-    return price, macaulay, macaulay / base, (convexity_sum / price) / frequency**2
+    branch = _metrics_simple if first_period_discount == "simple" else _metrics_compound
+    dirty, macaulay_periods, convexity_periods = branch(face, coupon, y, n, first_fraction)
+    macaulay = macaulay_periods / frequency
+    return dirty, macaulay, macaulay / (1.0 + y), convexity_periods / frequency**2
 
 
 def bond_price(
@@ -895,6 +942,7 @@ def bond_price_dated(
     face: float = 100.0,
     frequency: int = 2,
     day_count: BondDayCount = "actual/actual",
+    first_period_discount: FirstPeriodDiscount = "compound",
 ) -> BondDatedAnalytics:
     """Price a fixed-coupon bond for a settlement date, which may fall between coupons.
 
@@ -929,6 +977,7 @@ def bond_price_dated(
         y=ytm / frequency,
         n=periods,
         first_fraction=1.0 - fraction,
+        first_period_discount=first_period_discount,
     )
     accrued = face * coupon_rate / frequency * fraction
     clean = dirty - accrued
@@ -941,6 +990,7 @@ def bond_price_dated(
         periods_remaining=periods,
         frequency=frequency,
         day_count=day_count,
+        first_period_discount=first_period_discount,
         accrued_days=accrued_days,
         period_days=period_days,
         accrued_fraction=fraction,
@@ -986,6 +1036,7 @@ def bond_ytm_dated(
     face: float = 100.0,
     frequency: int = 2,
     day_count: BondDayCount = "actual/actual",
+    first_period_discount: FirstPeriodDiscount = "compound",
 ) -> BondDatedYTM:
     """Solve the annual yield to maturity from a bond's CLEAN price at a settlement date.
 
@@ -1016,6 +1067,7 @@ def bond_ytm_dated(
             y=ytm / frequency,
             n=periods,
             first_fraction=first_fraction,
+            first_period_discount=first_period_discount,
         )
         return dirty - accrued
 
@@ -1025,4 +1077,5 @@ def bond_ytm_dated(
         clean_price=clean_price,
         accrued_interest=accrued,
         dirty_price=clean_price + accrued,
+        first_period_discount=first_period_discount,
     )

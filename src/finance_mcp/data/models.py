@@ -14,6 +14,7 @@ HistoryInterval = Literal["1m", "5m", "15m", "30m", "1h", "1d", "1wk", "1mo"]
 RateDirection = Literal["nominal_to_effective", "effective_to_nominal"]
 Compounding = Literal["discrete", "continuous"]
 BondDayCount = Literal["actual/actual", "30/360"]
+FirstPeriodDiscount = Literal["compound", "simple"]
 
 
 class TVMResult(BaseModel):
@@ -146,6 +147,11 @@ class BondDatedAnalytics(BaseModel):
     day_count: BondDayCount = Field(
         description="Day-count convention used to measure the accrued part of the coupon period."
     )
+    first_period_discount: FirstPeriodDiscount = Field(
+        description="How the part-period stub was discounted: 'compound' (the street/Excel "
+        "convention, (1+y)**(stub)) or 'simple' (the US Treasury convention in 31 CFR 356 "
+        "appendix B, 1 + stub*y). They differ by a few thousandths per 100 on a part period."
+    )
     accrued_days: float = Field(
         description="Days from previous_coupon_date to settlement, on this day count "
         "('A' in the market formulas). Zero on a coupon date."
@@ -218,6 +224,10 @@ class BondDatedYTM(BaseModel):
     )
     dirty_price: float = Field(
         description="clean_price + accrued_interest per 'face': the cash the buyer pays."
+    )
+    first_period_discount: FirstPeriodDiscount = Field(
+        description="Part-period discounting convention the yield was solved under: 'compound' "
+        "(street/Excel) or 'simple' (US Treasury)."
     )
 
 

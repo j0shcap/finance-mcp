@@ -15,6 +15,7 @@ from finance_mcp.data.models import (
     BondYTM,
     Compounding,
     DatedCashflow,
+    FirstPeriodDiscount,
     IRRResult,
     LoanSchedule,
     MIRRResult,
@@ -204,6 +205,16 @@ def register(mcp: FastMCP) -> None:
                 "and is what Excel uses by default (basis=0).",
             ),
         ] = "actual/actual",
+        first_period_discount: Annotated[
+            FirstPeriodDiscount,
+            Field(
+                description="How to discount the part period before the next coupon. "
+                "'compound' (the default) is the street convention, (1+y)**stub, and matches "
+                "Excel's PRICE/YIELD. 'simple' is the US Treasury convention in 31 CFR 356 "
+                "appendix B, 1 + stub*y. They differ by a few thousandths per 100, so use "
+                "'simple' only when matching Treasury's own published figures.",
+            ),
+        ] = "compound",
     ) -> BondDatedAnalytics:
         """Price a bond for a settlement date that may fall BETWEEN coupon dates.
 
@@ -230,6 +241,7 @@ def register(mcp: FastMCP) -> None:
                 face=face,
                 frequency=frequency,
                 day_count=day_count,
+                first_period_discount=first_period_discount,
             )
         )
 
@@ -290,6 +302,16 @@ def register(mcp: FastMCP) -> None:
                 "and is what Excel uses by default (basis=0).",
             ),
         ] = "actual/actual",
+        first_period_discount: Annotated[
+            FirstPeriodDiscount,
+            Field(
+                description="How to discount the part period before the next coupon. "
+                "'compound' (the default) is the street convention, (1+y)**stub, and matches "
+                "Excel's PRICE/YIELD. 'simple' is the US Treasury convention in 31 CFR 356 "
+                "appendix B, 1 + stub*y. They differ by a few thousandths per 100, so use "
+                "'simple' only when matching Treasury's own published figures.",
+            ),
+        ] = "compound",
     ) -> BondDatedYTM:
         """Solve the annual yield to maturity from a bond's CLEAN price at a settlement date.
 
@@ -307,6 +329,7 @@ def register(mcp: FastMCP) -> None:
                 face=face,
                 frequency=frequency,
                 day_count=day_count,
+                first_period_discount=first_period_discount,
             )
         )
 

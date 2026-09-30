@@ -421,3 +421,27 @@ async def test_bond_ytm_dated_tool_odd_frequency_errors(
                 "frequency": 5,
             },
         )
+
+
+async def test_bond_price_dated_tool_treasury_convention(
+    client: Client[FastMCPTransport],
+) -> None:
+    """31 CFR 356 appendix B example I.D over the protocol: P = 99.730918. The default
+    street convention prices the same bond differently, which is why the option exists."""
+    args = {
+        "settlement": "1985-11-29",
+        "maturity": "1995-11-15",
+        "coupon_rate": 0.095,
+        "ytm": 0.0954,
+        "face": 100.0,
+        "frequency": 2,
+    }
+    treasury = await client.call_tool(
+        "bond_price_dated", {**args, "first_period_discount": "simple"}
+    )
+    assert treasury.data.clean_price == pytest.approx(99.730918, abs=1e-6)
+    assert treasury.data.first_period_discount == "simple"
+
+    street = await client.call_tool("bond_price_dated", args)
+    assert street.data.first_period_discount == "compound"
+    assert street.data.clean_price == pytest.approx(99.738573, abs=1e-6)
