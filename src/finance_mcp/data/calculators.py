@@ -981,6 +981,16 @@ def bond_price_dated(
     )
     accrued = face * coupon_rate / frequency * fraction
     clean = dirty - accrued
+    if clean <= 0.0:
+        # At a high enough yield the discounted cashflows are worth less than the accrued
+        # interest already earned. Such a quote has no market interpretation, it makes
+        # current_yield negative (or a division by zero at clean == 0), and bond_ytm_dated
+        # rejects it -- so refuse it here rather than return a price that cannot round-trip.
+        raise InvalidInput(
+            f"ytm={ytm} leaves a non-positive clean price ({clean}) for this bond: the "
+            f"present value of the remaining cashflows ({dirty}) does not cover the accrued "
+            f"interest ({accrued}). Use a yield low enough to leave a positive clean price."
+        )
     per_100 = 100.0 / face
     return BondDatedAnalytics(
         settlement=settlement,

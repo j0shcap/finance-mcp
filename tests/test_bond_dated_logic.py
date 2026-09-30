@@ -715,6 +715,22 @@ def test_a_deeply_negative_yield_above_minus_frequency_still_prices() -> None:
     assert result.dirty_price > 0.0
 
 
+def test_a_yield_that_would_leave_a_non_positive_clean_price_is_rejected() -> None:
+    """Accrued interest is a fixed cash amount, but the discounted cashflows shrink with the
+    yield, so a high enough yield drives clean = dirty - accrued to zero and then negative.
+    bond_ytm_dated rejects such a quote, so bond_price_dated must not emit one: otherwise the
+    two tools stop being inverses and current_yield comes back negative (or divides by zero).
+    """
+    for ytm in (12.0, 20.0):
+        with pytest.raises(InvalidInput, match="non-positive clean price"):
+            bond_price_dated(
+                settlement=d("2024-04-01"),
+                maturity=d("2044-01-15"),
+                coupon_rate=0.05,
+                ytm=ytm,
+            )
+
+
 @pytest.mark.parametrize("clean_price", [0.0, -1.0])
 def test_a_non_positive_clean_price_is_rejected(clean_price: float) -> None:
     with pytest.raises(InvalidInput, match="clean_price must be positive"):
