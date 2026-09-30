@@ -47,6 +47,8 @@ and deterministic financial calculators.
 - `convert_rate` — nominal ↔ effective annual rate (discrete or continuous compounding).
 - `bond_price` — price plus Macaulay/modified duration and convexity at a given yield (priced on a coupon date).
 - `bond_ytm` — yield to maturity from a bond's market price.
+- `bond_price_dated` — price a bond for a settlement date that may fall **between** coupon dates: clean and dirty price, accrued interest, duration and convexity, per face and per 100 (Actual/Actual ICMA or 30/360 US). Defaults to the street convention for the part period; `first_period_discount="simple"` matches the US Treasury's own formulas, and also matches Excel inside the final coupon period.
+- `bond_ytm_dated` — yield to maturity from a clean price for a given settlement date.
 
 The calculators are pure and deterministic; the market-data and analytics tools fetch
 live data (briefly cached) and surface source errors clearly. All tools return typed,

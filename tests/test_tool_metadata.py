@@ -21,6 +21,8 @@ CALCULATOR_TOOLS = {
     "time_value_of_money",
     "bond_price",
     "bond_ytm",
+    "bond_price_dated",
+    "bond_ytm_dated",
     "loan_schedule",
     "npv",
     "irr",

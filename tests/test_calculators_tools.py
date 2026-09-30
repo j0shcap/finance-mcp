@@ -326,3 +326,122 @@ async def test_time_value_of_money_overflow_surfaces_as_tool_error(
             "time_value_of_money",
             {"solve_for": "fv", "pv": -1000.0, "pmt": 0.0, "rate": 1e5, "nper": 1e5},
         )
+
+
+async def test_dated_bond_tools_registered(client: Client[FastMCPTransport]) -> None:
+    names = {t.name for t in await client.list_tools()}
+    assert {"bond_price_dated", "bond_ytm_dated"} <= names
+
+
+async def test_bond_price_dated_tool(client: Client[FastMCPTransport]) -> None:
+    """The Excel PRICE documentation example, over the protocol. Dates cross the wire as
+    ISO 8601 strings in both directions."""
+    result = await client.call_tool(
+        "bond_price_dated",
+        {
+            "settlement": "2008-02-15",
+            "maturity": "2017-11-15",
+            "coupon_rate": 0.0575,
+            "ytm": 0.065,
+            "face": 100.0,
+            "frequency": 2,
+            "day_count": "30/360",
+        },
+    )
+    assert result.data.clean_price == pytest.approx(94.634362, abs=1e-6)
+    assert result.data.accrued_interest == pytest.approx(1.4375, abs=1e-9)
+    assert result.data.dirty_price == pytest.approx(96.071862, abs=1e-6)
+    assert result.data.previous_coupon_date == "2007-11-15"
+    assert result.data.next_coupon_date == "2008-05-15"
+    assert result.data.periods_remaining == 20
+
+
+async def test_bond_price_dated_tool_defaults_to_actual_actual(
+    client: Client[FastMCPTransport],
+) -> None:
+    result = await client.call_tool(
+        "bond_price_dated",
+        {
+            "settlement": "2008-02-15",
+            "maturity": "2017-11-15",
+            "coupon_rate": 0.0575,
+            "ytm": 0.065,
+        },
+    )
+    assert result.data.day_count == "actual/actual"
+    assert result.data.period_days == 182.0
+
+
+async def test_bond_ytm_dated_tool(client: Client[FastMCPTransport]) -> None:
+    """The Excel YIELD documentation example, over the protocol."""
+    result = await client.call_tool(
+        "bond_ytm_dated",
+        {
+            "settlement": "2008-02-15",
+            "maturity": "2016-11-15",
+            "coupon_rate": 0.0575,
+            "clean_price": 95.04287,
+            "face": 100.0,
+            "frequency": 2,
+            "day_count": "30/360",
+        },
+    )
+    assert result.data.yield_to_maturity == pytest.approx(0.065, abs=1e-6)
+    assert result.data.dirty_price == pytest.approx(96.48037, abs=1e-5)
+
+
+async def test_bond_price_dated_tool_settlement_after_maturity_errors(
+    client: Client[FastMCPTransport],
+) -> None:
+    # A two-argument relationship no Field bound can express, so it reaches the data
+    # layer and surfaces as a ToolError carrying the calculator's message.
+    with pytest.raises(ToolError, match="strictly before maturity"):
+        await client.call_tool(
+            "bond_price_dated",
+            {
+                "settlement": "2018-02-15",
+                "maturity": "2017-11-15",
+                "coupon_rate": 0.0575,
+                "ytm": 0.065,
+            },
+        )
+
+
+async def test_bond_ytm_dated_tool_odd_frequency_errors(
+    client: Client[FastMCPTransport],
+) -> None:
+    with pytest.raises(ToolError, match="divide 12 evenly"):
+        await client.call_tool(
+            "bond_ytm_dated",
+            {
+                "settlement": "2008-02-15",
+                "maturity": "2017-11-15",
+                "coupon_rate": 0.0575,
+                "clean_price": 95.0,
+                "frequency": 5,
+            },
+        )
+
+
+async def test_bond_price_dated_tool_treasury_convention(
+    client: Client[FastMCPTransport],
+) -> None:
+    """31 CFR 356 appendix B example I.D over the protocol: P = 99.730918. The default
+    street convention prices the same bond differently, which is why the option exists."""
+    args = {
+        "settlement": "1985-11-29",
+        "maturity": "1995-11-15",
+        "coupon_rate": 0.095,
+        "ytm": 0.0954,
+        "face": 100.0,
+        "frequency": 2,
+    }
+    treasury = await client.call_tool(
+        "bond_price_dated", {**args, "first_period_discount": "simple"}
+    )
+    assert treasury.data.clean_price == pytest.approx(99.730918, abs=1e-6)
+    assert treasury.data.first_period_discount == "simple"
+
+    street = await client.call_tool("bond_price_dated", args)
+    assert street.data.first_period_discount == "compound"
+    assert street.data.clean_price == pytest.approx(99.738573, abs=1e-6)

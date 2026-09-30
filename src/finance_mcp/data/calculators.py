@@ -8,6 +8,8 @@ is negative):
     PV + PMT*n + FV = 0                            (r == 0)
 """
 
+import calendar
+import datetime
 import math
 from collections.abc import Callable, Iterable
 from typing import Literal
@@ -16,9 +18,13 @@ from finance_mcp.data.errors import InvalidInput
 from finance_mcp.data.models import (
     AmortizationRow,
     BondAnalytics,
+    BondDatedAnalytics,
+    BondDatedYTM,
+    BondDayCount,
     BondYTM,
     Compounding,
     DatedCashflow,
+    FirstPeriodDiscount,
     IRRResult,
     LoanSchedule,
     MIRRResult,
@@ -631,6 +637,186 @@ def convert_rate(
     )
 
 
+#: Longest settlement-to-maturity span the dated bond calculators will price. Mirrors
+#: ``tools/_inputs.MAX_BOND_YEARS``, which bounds the on-coupon tools' ``years_to_maturity``
+#: field; the dated span cannot be a static Field bound because it spans two arguments.
+#: ``tests/test_bond_dated_logic.py`` pins the two to the same value so they cannot drift.
+MAX_BOND_SPAN_YEARS = 100
+
+#: Average calendar year, used only to turn a settlement-to-maturity span into years for
+#: the bound above. Nothing priced depends on it; the day counts use exact dates.
+_DAYS_PER_YEAR = 365.25
+
+
+def _is_month_end(d: datetime.date) -> bool:
+    return d.day == calendar.monthrange(d.year, d.month)[1]
+
+
+def _add_months(d: datetime.date, months: int) -> datetime.date:
+    """Shift ``d`` by whole ``months``, preserving month-end and clamping short months.
+
+    Bond schedules roll by month, not by day, so the arithmetic has to answer two
+    questions the calendar leaves open. A month-end date stays at month-end (a 31 March
+    maturity pays on 30 September, which is what the Treasury schedules do), and a day
+    number the target month does not have is clamped to its last day (31 January + 1
+    month is 28 or 29 February, never 3 March).
+    """
+    total = d.year * 12 + (d.month - 1) + months
+    year, month = divmod(total, 12)
+    month += 1
+    last = calendar.monthrange(year, month)[1]
+    day = last if _is_month_end(d) else min(d.day, last)
+    return datetime.date(year, month, day)
+
+
+def _days_30_360_us(start: datetime.date, end: datetime.date) -> int:
+    """Days between two dates on the US (NASD) 30/360 day count -- Excel's ``basis=0``.
+
+    Every month counts as 30 days and every year as 360, after four adjustments applied
+    in this order (the order matters: the February rules feed the day-31 rules):
+
+    1. both dates are the last day of February -> the end day becomes 30;
+    2. the start date is the last day of February -> the start day becomes 30;
+    3. the end day is 31 and the start day is 30 or 31 -> the end day becomes 30;
+    4. the start day is 31 -> the start day becomes 30.
+    """
+    start_day, end_day = start.day, end.day
+    if start.month == 2 and _is_month_end(start):
+        if end.month == 2 and _is_month_end(end):
+            end_day = 30
+        start_day = 30
+    if end_day == 31 and start_day >= 30:
+        end_day = 30
+    if start_day == 31:
+        start_day = 30
+    return 360 * (end.year - start.year) + 30 * (end.month - start.month) + (end_day - start_day)
+
+
+def _coupon_schedule(
+    settlement: datetime.date, maturity: datetime.date, frequency: int
+) -> tuple[datetime.date, datetime.date, int]:
+    """Resolve the coupon period containing ``settlement``, working back from maturity.
+
+    Returns ``(previous_coupon, next_coupon, periods_remaining)``. Coupon dates are
+    generated backward from ``maturity`` in steps of ``12 // frequency`` months, so the
+    schedule is anchored on the maturity day-of-month -- the market convention, and the
+    only end that is always a real payment date. ``periods_remaining`` counts the coupons
+    still to be paid, ``next_coupon`` through ``maturity`` inclusive.
+
+    Settlement exactly on a coupon date yields that date as ``previous_coupon``: a fresh
+    period has just begun, so nothing has accrued yet.
+
+    Each date is recomputed from ``maturity`` rather than from the previous step, so the
+    month-end rule cannot ratchet a schedule off its anchor day (stepping 31 March back
+    one month at a time would reach 28 February and stay there).
+
+    Assumes a regular schedule: every period is a whole ``12 // frequency`` months. Odd
+    (long or short) first or last coupon periods are out of scope. Requires
+    ``settlement < maturity``; callers validate that first.
+    """
+    step = 12 // frequency
+    periods = 1
+    next_coupon = maturity
+    previous = _add_months(maturity, -step)
+    while previous > settlement:
+        periods += 1
+        next_coupon = previous
+        previous = _add_months(maturity, -step * periods)
+    return previous, next_coupon, periods
+
+
+def _metrics_compound(
+    face: float, coupon: float, y: float, n: int, f: float
+) -> tuple[float, float, float]:
+    """Street convention: the part period is COMPOUNDED, so cashflow k is discounted over
+    ``w_k = (k - 1) + f`` periods. Returns ``(dirty, macaulay_periods, convexity_periods)``.
+    """
+    base = 1.0 + y
+    price = 0.0
+    weighted_time = 0.0
+    convexity_sum = 0.0
+    for k in range(1, n + 1):
+        cash = coupon + (face if k == n else 0.0)
+        w = (k - 1) + f
+        pv = cash / base**w
+        price += pv
+        weighted_time += w * pv
+        convexity_sum += cash * w * (w + 1.0) / base ** (w + 2.0)
+    return price, weighted_time / price, convexity_sum / price
+
+
+def _metrics_simple(
+    face: float, coupon: float, y: float, n: int, f: float
+) -> tuple[float, float, float]:
+    """US Treasury convention (31 CFR 356 appendix B): the part period earns SIMPLE interest.
+
+    The cashflows are discounted over whole periods and the whole present value is then
+    divided by a stub factor ``1 + f*y`` instead of ``(1+y)**f``:
+
+        X     = sum CF_k / (1+y)**(k-1)
+        dirty = X / (1 + f*y)
+
+    The stub factor depends on the yield, so duration and convexity are not the compound
+    formulas with a different exponent -- they need their own derivatives. Writing
+    ``u = 1/(1 + f*y)`` and using ``X' = -x_weighted/(1+y)``:
+
+        macaulay_periods  = x_weighted/X + (1+y)*f*u
+        convexity_periods = x_second/X + 2*f*u*x_weighted/((1+y)*X) + 2*(f*u)**2
+
+    At ``f == 1`` the stub factor is exactly ``1 + y``, so both branches reduce to the same
+    on-coupon-date numbers.
+    """
+    base = 1.0 + y
+    x = 0.0  # X       = sum CF_k v**(k-1)
+    x_weighted = 0.0  # sum (k-1) CF_k v**(k-1) = -(1+y) X'
+    x_second = 0.0  # X''     = sum (k-1) k CF_k v**(k+1)
+    for k in range(1, n + 1):
+        cash = coupon + (face if k == n else 0.0)
+        pv = cash / base ** (k - 1)
+        x += pv
+        x_weighted += (k - 1) * pv
+        x_second += (k - 1) * k * cash / base ** (k + 1)
+    u = 1.0 / (1.0 + f * y)
+    macaulay = x_weighted / x + base * f * u
+    convexity = x_second / x + 2.0 * f * u * x_weighted / (base * x) + 2.0 * (f * u) ** 2
+    return x * u, macaulay, convexity
+
+
+def _bond_metrics(
+    face: float,
+    coupon_rate: float,
+    frequency: int,
+    y: float,
+    n: int,
+    first_fraction: float = 1.0,
+    first_period_discount: FirstPeriodDiscount = "compound",
+) -> tuple[float, float, float, float]:
+    """Price a coupon stream and its risk metrics, allowing a fractional first period.
+
+    Returns ``(dirty_price, macaulay_years, modified_years, convexity_years_squared)``.
+
+    ``y`` is the PERIODIC yield (annual / frequency) and ``n`` the number of coupons still
+    to be paid. ``first_fraction`` is how much of the first coupon period is still to run:
+    1.0 on a coupon date, and ``1 - accrued/period`` when settlement falls inside a period.
+    ``first_period_discount`` selects how that part period is discounted -- see
+    ``_metrics_compound`` (street/Excel) and ``_metrics_simple`` (US Treasury).
+
+    The price returned is the DIRTY price: the present value of every remaining cashflow,
+    which is the cash a buyer pays. On a coupon date nothing has accrued and these collapse
+    exactly to the on-coupon formulas -- which is why ``bond_price`` can delegate here
+    without moving any of its numbers.
+
+    Macaulay duration is ``-(1+y)/P * dP/dy`` expressed in years and modified duration is
+    ``-(1/P) * dP/dY`` for the annual yield ``Y``, which is why ``modified = macaulay/(1+y)``
+    holds for both conventions.
+    """
+    coupon = face * coupon_rate / frequency
+    branch = _metrics_simple if first_period_discount == "simple" else _metrics_compound
+    dirty, macaulay_periods, convexity_periods = branch(face, coupon, y, n, first_fraction)
+    macaulay = macaulay_periods / frequency
+    return dirty, macaulay, macaulay / (1.0 + y), convexity_periods / frequency**2
+
+
 def bond_price(
     face: float,
     coupon_rate: float,
@@ -672,25 +858,161 @@ def bond_price(
         )
     if n < 1:
         raise InvalidInput("years_to_maturity * frequency must be at least one period.")
-    periodic_coupon = face * coupon_rate / frequency
-    y = ytm / frequency
-
-    price = 0.0
-    weighted_time = 0.0
-    convexity_sum = 0.0
-    for k in range(1, n + 1):
-        cash = periodic_coupon + (face if k == n else 0.0)
-        pv = cash / (1.0 + y) ** k
-        price += pv
-        weighted_time += k * pv
-        convexity_sum += cash * k * (k + 1) / (1.0 + y) ** (k + 2)
-
-    macaulay = (weighted_time / price) / frequency
-    modified = macaulay / (1.0 + y)
-    convexity = (convexity_sum / price) / (frequency**2)
+    price, macaulay, modified, convexity = _bond_metrics(
+        face=face, coupon_rate=coupon_rate, frequency=frequency, y=ytm / frequency, n=n
+    )
     return BondAnalytics(
         price=price,
         current_yield=face * coupon_rate / price,
+        macaulay_duration=macaulay,
+        modified_duration=modified,
+        convexity=convexity,
+    )
+
+
+def _accrual(
+    day_count: BondDayCount,
+    previous: datetime.date,
+    settlement: datetime.date,
+    next_coupon: datetime.date,
+    frequency: int,
+) -> tuple[float, float]:
+    """Days accrued and days in the coupon period, on ``day_count``: market ``(A, E)``.
+
+    * ``"30/360"`` -- the US (NASD) count Excel calls ``basis=0``. ``E`` is the NOMINAL
+      ``360/frequency``, not a measured span: that is what Excel's PRICE uses for the
+      30/360 bases, and it is what makes accrued interest exactly half a coupon at the
+      mid-point of a semiannual period.
+    * ``"actual/actual"`` -- ICMA (the convention for US Treasuries and most sovereigns).
+      Both sides are real elapsed days, so ``E`` is the true length of THIS coupon period
+      and a coupon always accrues to exactly its full amount by the next coupon date.
+    """
+    if day_count == "30/360":
+        return float(_days_30_360_us(previous, settlement)), 360.0 / frequency
+    return float((settlement - previous).days), float((next_coupon - previous).days)
+
+
+def _dated_terms(
+    settlement: datetime.date,
+    maturity: datetime.date,
+    face: float,
+    frequency: int,
+    day_count: BondDayCount,
+) -> tuple[datetime.date, datetime.date, int, float, float]:
+    """Validate dated-bond inputs and resolve the schedule; shared by price and yield.
+
+    Returns ``(previous_coupon, next_coupon, periods_remaining, accrued_days, period_days)``.
+    """
+    if face <= 0.0:
+        raise InvalidInput("face must be positive.")
+    if frequency < 1 or 12 % frequency != 0:
+        raise InvalidInput(
+            "frequency must divide 12 evenly (1, 2, 3, 4, 6 or 12) so that coupon dates fall a "
+            f"whole number of months apart; got {frequency}."
+        )
+    if settlement >= maturity:
+        raise InvalidInput(
+            f"settlement ({settlement}) must be strictly before maturity ({maturity})."
+        )
+    if (maturity - settlement).days / _DAYS_PER_YEAR > MAX_BOND_SPAN_YEARS:
+        raise InvalidInput(
+            f"settlement to maturity must span at most {MAX_BOND_SPAN_YEARS} years "
+            f"(got {settlement} to {maturity})."
+        )
+    previous, next_coupon, periods = _coupon_schedule(settlement, maturity, frequency)
+    accrued_days, period_days = _accrual(day_count, previous, settlement, next_coupon, frequency)
+    return previous, next_coupon, periods, accrued_days, period_days
+
+
+def _require_bond_yield(ytm: float, frequency: int) -> float:
+    """Reject yields the periodic discount base cannot express (same rule as bond_price)."""
+    if 1.0 + ytm / frequency <= 0.0:
+        raise InvalidInput(
+            "ytm must be greater than -frequency so that 1 + ytm/frequency is positive "
+            f"(got ytm={ytm} with frequency={frequency})."
+        )
+    return ytm
+
+
+def bond_price_dated(
+    settlement: datetime.date,
+    maturity: datetime.date,
+    coupon_rate: float,
+    ytm: float,
+    face: float = 100.0,
+    frequency: int = 2,
+    day_count: BondDayCount = "actual/actual",
+    first_period_discount: FirstPeriodDiscount = "compound",
+) -> BondDatedAnalytics:
+    """Price a fixed-coupon bond for a settlement date, which may fall between coupons.
+
+    The dated counterpart to ``bond_price``, which prices on a coupon date only. Coupon
+    dates are generated backward from ``maturity`` every ``12 / frequency`` months, so the
+    schedule is anchored on the maturity day-of-month and month-ends are preserved (a 31
+    March maturity pays on 30 September).
+
+    ``coupon_rate`` and ``ytm`` are annual decimals. ``day_count`` measures the elapsed
+    part of the current coupon period and defaults to Actual/Actual ICMA -- the convention
+    for US Treasuries and most sovereigns. Pass ``"30/360"`` for the US corporate/municipal
+    convention, which is also Excel's default (``basis=0``) and reproduces its PRICE -- except
+    in the final coupon period, where Excel discounts the stub with SIMPLE interest, which is
+    ``first_period_discount="simple"`` here.
+
+    Returns the clean and dirty prices (per ``face`` and per 100), the accrued interest,
+    and duration/convexity computed with the fractional first period under the standard
+    street convention -- the part period is compounded, ``(1+y)**(DSC/E)``.
+
+    Assumes a regular schedule: every coupon period is a whole ``12 / frequency`` months.
+    Bonds with an odd (long or short) first or last coupon period are out of scope, and
+    pricing one here would silently use the wrong first period.
+    """
+    previous, next_coupon, periods, accrued_days, period_days = _dated_terms(
+        settlement, maturity, face, frequency, day_count
+    )
+    _require_bond_yield(ytm, frequency)
+
+    fraction = accrued_days / period_days
+    dirty, macaulay, modified, convexity = _bond_metrics(
+        face=face,
+        coupon_rate=coupon_rate,
+        frequency=frequency,
+        y=ytm / frequency,
+        n=periods,
+        first_fraction=1.0 - fraction,
+        first_period_discount=first_period_discount,
+    )
+    accrued = face * coupon_rate / frequency * fraction
+    clean = dirty - accrued
+    if clean <= 0.0:
+        # At a high enough yield the discounted cashflows are worth less than the accrued
+        # interest already earned. Such a quote has no market interpretation, it makes
+        # current_yield negative (or a division by zero at clean == 0), and bond_ytm_dated
+        # rejects it -- so refuse it here rather than return a price that cannot round-trip.
+        raise InvalidInput(
+            f"ytm={ytm} leaves a non-positive clean price ({clean}) for this bond: the "
+            f"present value of the remaining cashflows ({dirty}) does not cover the accrued "
+            f"interest ({accrued}). Use a yield low enough to leave a positive clean price."
+        )
+    per_100 = 100.0 / face
+    return BondDatedAnalytics(
+        settlement=settlement,
+        maturity=maturity,
+        previous_coupon_date=previous,
+        next_coupon_date=next_coupon,
+        periods_remaining=periods,
+        frequency=frequency,
+        day_count=day_count,
+        first_period_discount=first_period_discount,
+        accrued_days=accrued_days,
+        period_days=period_days,
+        accrued_fraction=fraction,
+        accrued_interest=accrued,
+        accrued_interest_per_100=accrued * per_100,
+        clean_price=clean,
+        dirty_price=dirty,
+        clean_price_per_100=clean * per_100,
+        dirty_price_per_100=dirty * per_100,
+        current_yield=face * coupon_rate / clean,
         macaulay_duration=macaulay,
         modified_duration=modified,
         convexity=convexity,
@@ -716,3 +1038,56 @@ def bond_ytm(
         lambda y: bond_price(face, coupon_rate, years_to_maturity, y, frequency).price - price
     )
     return BondYTM(yield_to_maturity=rate)
+
+
+def bond_ytm_dated(
+    settlement: datetime.date,
+    maturity: datetime.date,
+    coupon_rate: float,
+    clean_price: float,
+    face: float = 100.0,
+    frequency: int = 2,
+    day_count: BondDayCount = "actual/actual",
+    first_period_discount: FirstPeriodDiscount = "compound",
+) -> BondDatedYTM:
+    """Solve the annual yield to maturity from a bond's CLEAN price at a settlement date.
+
+    The dated counterpart to ``bond_ytm``, and the inverse of ``bond_price_dated``. The
+    price is the clean (quoted) one, which is how bonds are quoted; the accrued interest
+    implied by the coupon schedule is returned alongside, so the caller also sees the dirty
+    price -- the cash actually paid.
+
+    As with ``bond_ytm``, the search starts just above -100%, so this finds yields > -1 only
+    -- narrower than the range ``bond_price_dated`` can price (ytm > -frequency). Yields
+    that deeply negative have no market interpretation, and restricting the bracket keeps
+    the solve robust.
+    """
+    if clean_price <= 0.0:
+        raise InvalidInput("clean_price must be positive.")
+    _, _, periods, accrued_days, period_days = _dated_terms(
+        settlement, maturity, face, frequency, day_count
+    )
+    fraction = accrued_days / period_days
+    accrued = face * coupon_rate / frequency * fraction
+    first_fraction = 1.0 - fraction
+
+    def clean_at(ytm: float) -> float:
+        dirty, _, _, _ = _bond_metrics(
+            face=face,
+            coupon_rate=coupon_rate,
+            frequency=frequency,
+            y=ytm / frequency,
+            n=periods,
+            first_fraction=first_fraction,
+            first_period_discount=first_period_discount,
+        )
+        return dirty - accrued
+
+    rate = _bisect(lambda ytm: clean_at(ytm) - clean_price)
+    return BondDatedYTM(
+        yield_to_maturity=rate,
+        clean_price=clean_price,
+        accrued_interest=accrued,
+        dirty_price=clean_price + accrued,
+        first_period_discount=first_period_discount,
+    )
