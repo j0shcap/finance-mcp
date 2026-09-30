@@ -118,6 +118,11 @@ class YFinanceClient:
         # get_quote fetches concurrently, so cache bookkeeping is guarded. Fetches run
         # OUTSIDE the lock: two threads racing on one uncached key just fetch it twice.
         self._cache_lock = threading.Lock()
+        # By default yfinance's price and statement fetches swallow a transport failure and
+        # return an empty frame -- which reads exactly like an unknown symbol. Every
+        # classification below assumes failures arrive as exceptions, so turn that off.
+        # Process-wide, but this server is the only yfinance user in its process.
+        yf.config.debug.hide_exceptions = False
 
     def _cached[T](
         self,
@@ -260,8 +265,14 @@ class YFinanceClient:
         """Fetch and parse the FULL (untruncated) OHLCV bars, dropping non-finite rows."""
         intraday = interval in _INTRADAY_INTERVALS
         no_history = f"No price history for '{symbol}'. Check the symbol/period/interval."
-        with _unavailable_on_error(f"Failed to fetch history for '{symbol}'"):
+        try:
             df = self._ticker(symbol).history(period=period, interval=interval, auto_adjust=True)
+        except Exception as exc:
+            # Unhidden, an unknown symbol raises (a 404, YFPricesMissingError) rather than
+            # returning an empty frame; the no-data signals keep the history wording.
+            if _is_no_data_error(exc):
+                raise SymbolNotFound(no_history) from exc
+            raise DataUnavailable(f"Failed to fetch history for '{symbol}': {exc}") from exc
         if df is None or df.empty:
             raise SymbolNotFound(no_history)
         all_bars: list[PriceBar] = []

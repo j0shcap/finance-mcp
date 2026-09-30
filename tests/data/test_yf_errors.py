@@ -1,6 +1,7 @@
 """Which yfinance failures become SymbolNotFound and which stay DataUnavailable."""
 
 import pytest
+import yfinance as yf
 from yfinance.exceptions import (
     YFPricesMissingError,
     YFRateLimitError,
@@ -89,3 +90,34 @@ def test_rate_limit_error_stays_data_unavailable() -> None:
         client._fetch_quote("AAPL")
     assert not isinstance(raised.value, SymbolNotFound)
     assert "Rate limited" in str(raised.value)
+
+
+@pytest.mark.parametrize("exc", TRANSPORT_ERRORS, ids=lambda e: type(e).__name__ + str(e)[:12])
+def test_history_transport_failure_is_data_unavailable_not_symbol_not_found(
+    exc: Exception,
+) -> None:
+    client = make_client(factory=fake_ticker_factory(history_error=exc))
+    with pytest.raises(DataUnavailable) as raised:
+        client.get_price_history("AAPL", period="1mo", interval="1d")
+    assert not isinstance(raised.value, SymbolNotFound)
+    assert str(exc) in str(raised.value)
+
+
+@pytest.mark.parametrize("exc", NO_DATA_ERRORS, ids=lambda e: type(e).__name__ + str(e)[:12])
+def test_history_no_data_signals_are_symbol_not_found(exc: Exception) -> None:
+    """With exceptions unhidden, Yahoo's 404 for an unknown symbol raises out of history()
+    instead of arriving as an empty frame, so it must be classified, not wrapped."""
+    client = make_client(factory=fake_ticker_factory(history_error=exc))
+    with pytest.raises(SymbolNotFound, match="No price history for 'NOPE'"):
+        client.get_price_history("NOPE", period="1mo", interval="1d")
+
+
+def test_client_makes_yfinance_raise_instead_of_hiding_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """yfinance's price and statement fetches swallow a transport error by default and
+    return an empty result, which is indistinguishable from an unknown symbol. The client
+    only classifies failures correctly if they reach it as exceptions."""
+    monkeypatch.setattr(yf.config.debug, "hide_exceptions", True)
+    make_client(factory=fake_ticker_factory())
+    assert yf.config.debug.hide_exceptions is False
