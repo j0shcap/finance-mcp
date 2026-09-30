@@ -4,7 +4,7 @@ from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
 from finance_mcp.server import create_server
-from tests.conftest import (
+from tests.fakes import (
     fake_multi_ticker_factory,
     fake_ticker_factory,
     make_client,

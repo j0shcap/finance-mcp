@@ -41,7 +41,8 @@ from finance_mcp.data.yfinance_client import (
     YFinanceClient,
     _recommendation_trend,
 )
-from tests.conftest import (
+from tests.fakes import (
+    QUOTE_FI,
     FakeClock,
     fake_search_factory,
     fake_symbol_ticker_factory,
@@ -124,27 +125,8 @@ def test_fundamentals_and_profile_models() -> None:
     assert empty.name is None
 
 
-QUOTE_FI = {
-    "last_price": 190.0,
-    "previous_close": 188.0,
-    "day_high": 191.0,
-    "day_low": 187.0,
-    "year_high": 200.0,
-    "year_low": 150.0,
-    "market_cap": 3.0e12,
-    "currency": "USD",
-    "last_volume": 50_000_000,
-}
-
-
-def _client(**kw: Any) -> YFinanceClient:
-    clock = kw.pop("clock", FakeClock())
-    factory = kw.pop("factory", fake_ticker_factory(fast_info=QUOTE_FI))
-    return YFinanceClient(ticker_factory=factory, time_fn=clock, quote_ttl=30.0, history_ttl=300.0)
-
-
 def test_get_quote_parses_and_computes_change() -> None:
-    [q] = _client().get_quote(["AAPL"]).quotes
+    [q] = make_client().get_quote(["AAPL"]).quotes
     assert q.symbol == "AAPL"
     assert q.price == 190.0
     assert q.change == pytest.approx(2.0)
@@ -189,13 +171,13 @@ def test_get_quote_cache_expires_exactly_at_ttl() -> None:
 
 
 def test_get_quote_missing_price_raises_symbol_not_found() -> None:
-    client = _client(factory=fake_ticker_factory(fast_info={"last_price": None}))
+    client = make_client(factory=fake_ticker_factory(fast_info={"last_price": None}))
     with pytest.raises(SymbolNotFound):
         client._fetch_quote("BADSYM")
 
 
 def test_get_quote_surfaces_yfinance_error_message() -> None:
-    client = _client(
+    client = make_client(
         factory=fake_ticker_factory(fast_info_error=YFException("yahoo says: rate limited"))
     )
     with pytest.raises(DataUnavailable) as exc:
@@ -204,7 +186,9 @@ def test_get_quote_surfaces_yfinance_error_message() -> None:
 
 
 def test_get_quote_invalid_symbol_returns_clean_symbol_not_found() -> None:
-    client = _client(factory=fake_ticker_factory(fast_info_error=KeyError("exchangeTimezoneName")))
+    client = make_client(
+        factory=fake_ticker_factory(fast_info_error=KeyError("exchangeTimezoneName"))
+    )
     with pytest.raises(SymbolNotFound) as exc:
         client._fetch_quote("BAD")
     assert "No quote data for 'BAD'" in str(exc.value)
@@ -212,7 +196,7 @@ def test_get_quote_invalid_symbol_returns_clean_symbol_not_found() -> None:
 
 
 def test_get_quote_none_price_is_symbol_not_found() -> None:
-    client = _client(factory=fake_ticker_factory(fast_info={"last_price": None}))
+    client = make_client(factory=fake_ticker_factory(fast_info={"last_price": None}))
     with pytest.raises(SymbolNotFound) as exc:
         client._fetch_quote("BAD")
     assert "No quote data for" in str(exc.value)
@@ -233,7 +217,7 @@ def test_get_quote_no_second_network_call_on_failure() -> None:
     def factory(_symbol: str) -> Any:
         return _Ticker()
 
-    client = _client(factory=factory)
+    client = make_client(factory=factory)
     with pytest.raises(SymbolNotFound):
         client._fetch_quote("BAD")
     assert calls["history"] == 0
@@ -241,7 +225,7 @@ def test_get_quote_no_second_network_call_on_failure() -> None:
 
 def test_get_price_history_parses_bars_and_summary() -> None:
     df = make_history_df([100.0, 101.0, 102.0, 103.0])
-    client = _client(factory=fake_ticker_factory(history_df=df))
+    client = make_client(factory=fake_ticker_factory(history_df=df))
     hist = client.get_price_history("AAPL", period="1mo", interval="1d")
     assert hist.summary.bars == 4
     assert hist.summary.start_close == 100.0
@@ -253,7 +237,7 @@ def test_get_price_history_parses_bars_and_summary() -> None:
 
 
 def test_get_price_history_empty_raises_symbol_not_found() -> None:
-    client = _client(factory=fake_ticker_factory(history_df=make_history_df([])))
+    client = make_client(factory=fake_ticker_factory(history_df=make_history_df([])))
     with pytest.raises(SymbolNotFound):
         client.get_price_history("BADSYM", period="1mo", interval="1d")
 
@@ -274,7 +258,7 @@ def test_get_price_history_truncates_to_max_bars() -> None:
 
 
 def test_get_quote_nan_price_raises_symbol_not_found() -> None:
-    client = _client(
+    client = make_client(
         factory=fake_ticker_factory(fast_info={"last_price": float("nan"), "previous_close": 188.0})
     )
     with pytest.raises(SymbolNotFound):
@@ -283,7 +267,7 @@ def test_get_quote_nan_price_raises_symbol_not_found() -> None:
 
 def test_get_quote_nan_previous_close_yields_none_change() -> None:
     fi = {**QUOTE_FI, "previous_close": float("nan")}
-    client = _client(factory=fake_ticker_factory(fast_info=fi))
+    client = make_client(factory=fake_ticker_factory(fast_info=fi))
     [q] = client.get_quote(["AAPL"]).quotes
     assert q.price == 190.0
     assert q.change is None
@@ -293,7 +277,7 @@ def test_get_quote_nan_previous_close_yields_none_change() -> None:
 def test_get_price_history_drops_nan_rows() -> None:
     df = make_history_df([100.0, 101.0, 102.0])
     df.loc[df.index[1], "Close"] = float("nan")
-    client = _client(factory=fake_ticker_factory(history_df=df))
+    client = make_client(factory=fake_ticker_factory(history_df=df))
     hist = client.get_price_history("AAPL", period="1mo", interval="1d")
     assert hist.summary.bars == 2
     assert all(math.isfinite(b.close) for b in hist.bars)
@@ -302,20 +286,20 @@ def test_get_price_history_drops_nan_rows() -> None:
 def test_get_price_history_all_nan_raises() -> None:
     df = make_history_df([100.0])
     df.loc[df.index[0], "Close"] = float("nan")
-    client = _client(factory=fake_ticker_factory(history_df=df))
+    client = make_client(factory=fake_ticker_factory(history_df=df))
     with pytest.raises(SymbolNotFound):
         client.get_price_history("AAPL", period="1mo", interval="1d")
 
 
 def test_get_price_history_zero_start_close_no_crash() -> None:
     df = make_history_df([0.0, 5.0])
-    client = _client(factory=fake_ticker_factory(history_df=df))
+    client = make_client(factory=fake_ticker_factory(history_df=df))
     hist = client.get_price_history("AAPL", period="1mo", interval="1d")
     assert hist.summary.total_return_percent == 0.0
 
 
 def test_get_quote_inf_price_raises_symbol_not_found() -> None:
-    client = _client(
+    client = make_client(
         factory=fake_ticker_factory(fast_info={"last_price": float("inf"), "previous_close": 188.0})
     )
     with pytest.raises(SymbolNotFound):
@@ -325,7 +309,7 @@ def test_get_quote_inf_price_raises_symbol_not_found() -> None:
 def test_get_price_history_drops_inf_rows() -> None:
     df = make_history_df([100.0, 101.0, 102.0])
     df.loc[df.index[1], "Close"] = float("inf")
-    client = _client(factory=fake_ticker_factory(history_df=df))
+    client = make_client(factory=fake_ticker_factory(history_df=df))
     hist = client.get_price_history("AAPL", period="1mo", interval="1d")
     assert hist.summary.bars == 2
 
@@ -333,7 +317,7 @@ def test_get_price_history_drops_inf_rows() -> None:
 def test_get_price_history_all_inf_raises() -> None:
     df = make_history_df([100.0])
     df.loc[df.index[0], "Close"] = float("inf")
-    client = _client(factory=fake_ticker_factory(history_df=df))
+    client = make_client(factory=fake_ticker_factory(history_df=df))
     with pytest.raises(SymbolNotFound):
         client.get_price_history("AAPL", period="1mo", interval="1d")
 
@@ -355,7 +339,7 @@ def test_get_quote_fast_info_attr_error_becomes_data_unavailable() -> None:
     def factory(_symbol: str) -> Any:
         return SimpleNamespace(fast_info=_RaisingCurrencyFastInfo(), history=lambda **_k: df)
 
-    client = _client(factory=factory)
+    client = make_client(factory=factory)
     with pytest.raises(DataUnavailable) as exc:
         client._fetch_quote("X")
     assert "boom" in str(exc.value)
@@ -363,7 +347,7 @@ def test_get_quote_fast_info_attr_error_becomes_data_unavailable() -> None:
 
 def test_get_price_history_parse_error_becomes_data_unavailable() -> None:
     df = make_history_df([100.0, 101.0]).drop(columns=["Volume"])
-    client = _client(factory=fake_ticker_factory(history_df=df))
+    client = make_client(factory=fake_ticker_factory(history_df=df))
     with pytest.raises(DataUnavailable) as exc:
         client.get_price_history("AAPL", period="1mo", interval="1d")
     assert "AAPL" in str(exc.value)
@@ -390,20 +374,9 @@ INCOME = {  # rows: label -> [most-recent, prior]
 }
 
 
-def _fin_client(**kw: Any) -> YFinanceClient:
-    factory = kw.pop("factory")
-    return YFinanceClient(
-        ticker_factory=factory,
-        time_fn=FakeClock(),
-        quote_ttl=30.0,
-        history_ttl=300.0,
-        fundamentals_ttl=3600.0,
-    )
-
-
 def test_get_financials_parses_periods_and_line_items() -> None:
     df = make_financials_df(INCOME, ["2024-09-30", "2023-09-30"])
-    client = _fin_client(factory=fake_ticker_factory(financials={"income_stmt": df}))
+    client = make_client(factory=fake_ticker_factory(financials={"income_stmt": df}))
     fs = client.get_financials("AAPL", "income", "annual")
     assert fs.symbol == "AAPL" and fs.statement == "income" and fs.period == "annual"
     assert fs.period_ends == ["2024-09-30", "2023-09-30"]
@@ -413,26 +386,26 @@ def test_get_financials_parses_periods_and_line_items() -> None:
 
 def test_get_financials_line_items_filter() -> None:
     df = make_financials_df(INCOME, ["2024-09-30", "2023-09-30"])
-    client = _fin_client(factory=fake_ticker_factory(financials={"income_stmt": df}))
+    client = make_client(factory=fake_ticker_factory(financials={"income_stmt": df}))
     fs = client.get_financials("AAPL", "income", "annual", line_items=["Total Revenue", "Nope"])
     assert list(fs.line_items.keys()) == ["Total Revenue"]  # only matching labels, "Nope" dropped
 
 
 def test_get_financials_quarterly_attr() -> None:
     df = make_financials_df({"Total Revenue": [100.0]}, ["2025-03-31"])
-    client = _fin_client(factory=fake_ticker_factory(financials={"quarterly_balance_sheet": df}))
+    client = make_client(factory=fake_ticker_factory(financials={"quarterly_balance_sheet": df}))
     fs = client.get_financials("AAPL", "balance", "quarterly")
     assert fs.period_ends == ["2025-03-31"]
 
 
 def test_get_financials_empty_raises_symbol_not_found() -> None:
-    client = _fin_client(factory=fake_ticker_factory(financials={"income_stmt": pd.DataFrame()}))
+    client = make_client(factory=fake_ticker_factory(financials={"income_stmt": pd.DataFrame()}))
     with pytest.raises(SymbolNotFound):
         client.get_financials("BAD", "income", "annual")
 
 
 def test_get_financials_fetch_error_is_data_unavailable() -> None:
-    client = _fin_client(factory=fake_ticker_factory(financials_error=RuntimeError("yahoo down")))
+    client = make_client(factory=fake_ticker_factory(financials_error=RuntimeError("yahoo down")))
     with pytest.raises(DataUnavailable) as exc:
         client.get_financials("AAPL", "income", "annual")
     assert "yahoo down" in str(exc.value)
@@ -441,7 +414,7 @@ def test_get_financials_fetch_error_is_data_unavailable() -> None:
 def test_get_financials_parse_error_is_data_unavailable() -> None:
     # Non-datetime columns make `col.date()` raise inside the parse block.
     df = pd.DataFrame({"a": [1.0], "b": [2.0]}, index=["Total Revenue"])
-    client = _fin_client(factory=fake_ticker_factory(financials={"income_stmt": df}))
+    client = make_client(factory=fake_ticker_factory(financials={"income_stmt": df}))
     with pytest.raises(DataUnavailable) as exc:
         client.get_financials("AAPL", "income", "annual")
     assert "AAPL" in str(exc.value)
@@ -489,19 +462,8 @@ FULL_INFO = {
 }
 
 
-def _profile_client(**kw: Any) -> YFinanceClient:
-    factory = kw.pop("factory")
-    return YFinanceClient(
-        ticker_factory=factory,
-        time_fn=FakeClock(),
-        quote_ttl=30.0,
-        history_ttl=300.0,
-        fundamentals_ttl=3600.0,
-    )
-
-
 def test_get_company_profile_maps_fields() -> None:
-    client = _profile_client(factory=fake_ticker_factory(info=FULL_INFO))
+    client = make_client(factory=fake_ticker_factory(info=FULL_INFO))
     p = client.get_company_profile("AAPL")
     assert p.symbol == "AAPL"
     assert p.name == "Apple Inc." and p.sector == "Technology"
@@ -513,14 +475,14 @@ def test_get_company_profile_maps_fields() -> None:
 
 def test_get_company_profile_name_falls_back_to_short_name() -> None:
     info = {"shortName": "Apple", "sector": "Tech"}
-    client = _profile_client(factory=fake_ticker_factory(info=info))
+    client = make_client(factory=fake_ticker_factory(info=info))
     assert client.get_company_profile("AAPL").name == "Apple"
 
 
 def test_get_company_profile_recent_dividends_capped_at_8() -> None:
     dates = [f"2023-{m:02d}-01" for m in range(1, 13)]  # 12 dividends
     div = make_series(dates, [0.20 + i * 0.01 for i in range(12)])
-    client = _profile_client(factory=fake_ticker_factory(info=FULL_INFO, dividends=div))
+    client = make_client(factory=fake_ticker_factory(info=FULL_INFO, dividends=div))
     p = client.get_company_profile("AAPL")
     assert len(p.recent_dividends) == 8  # only most recent 8
     assert p.recent_dividends[-1].date == "2023-12-01"  # newest last
@@ -529,33 +491,33 @@ def test_get_company_profile_recent_dividends_capped_at_8() -> None:
 
 def test_get_company_profile_all_splits() -> None:
     spl = make_series(["1987-06-16", "2000-06-21", "2020-08-31"], [2.0, 2.0, 4.0])
-    client = _profile_client(factory=fake_ticker_factory(info=FULL_INFO, splits=spl))
+    client = make_client(factory=fake_ticker_factory(info=FULL_INFO, splits=spl))
     p = client.get_company_profile("AAPL")
     assert len(p.splits) == 3 and p.splits[-1].ratio == 4.0 and p.splits[-1].date == "2020-08-31"
 
 
 def test_get_company_profile_missing_fields_are_none_and_empty() -> None:
-    client = _profile_client(factory=fake_ticker_factory(info={"longName": "X Corp"}))
+    client = make_client(factory=fake_ticker_factory(info={"longName": "X Corp"}))
     p = client.get_company_profile("X")
     assert p.name == "X Corp" and p.sector is None and p.market_cap is None
     assert p.recent_dividends == [] and p.splits == []
 
 
 def test_get_company_profile_no_name_raises_symbol_not_found() -> None:
-    client = _profile_client(factory=fake_ticker_factory(info={"trailingPegRatio": None}))
+    client = make_client(factory=fake_ticker_factory(info={"trailingPegRatio": None}))
     with pytest.raises(SymbolNotFound):
         client.get_company_profile("BAD")
 
 
 def test_get_company_profile_typed_error_is_data_unavailable() -> None:
-    client = _profile_client(factory=fake_ticker_factory(info_error=YFException("rate limited")))
+    client = make_client(factory=fake_ticker_factory(info_error=YFException("rate limited")))
     with pytest.raises(DataUnavailable) as exc:
         client.get_company_profile("AAPL")
     assert "rate limited" in str(exc.value)
 
 
 def test_get_company_profile_raw_error_is_symbol_not_found() -> None:
-    client = _profile_client(factory=fake_ticker_factory(info_error=KeyError("boom")))
+    client = make_client(factory=fake_ticker_factory(info_error=KeyError("boom")))
     with pytest.raises(SymbolNotFound):
         client.get_company_profile("AAPL")
 
@@ -563,7 +525,7 @@ def test_get_company_profile_raw_error_is_symbol_not_found() -> None:
 def test_get_company_profile_skips_non_finite_dividends_and_splits() -> None:
     div = make_series(["2023-01-01", "2023-06-01"], [0.20, float("nan")])
     spl = make_series(["2000-06-21", "2020-08-31"], [float("inf"), 4.0])
-    client = _profile_client(factory=fake_ticker_factory(info=FULL_INFO, dividends=div, splits=spl))
+    client = make_client(factory=fake_ticker_factory(info=FULL_INFO, dividends=div, splits=spl))
     p = client.get_company_profile("AAPL")
     assert [d.date for d in p.recent_dividends] == ["2023-01-01"]  # NaN dropped
     assert [s.date for s in p.splits] == ["2020-08-31"]  # inf dropped
@@ -572,7 +534,7 @@ def test_get_company_profile_skips_non_finite_dividends_and_splits() -> None:
 def test_get_company_profile_parse_error_is_data_unavailable() -> None:
     # A non-datetime index makes `ts.date()` raise inside the parse block.
     bad_div = pd.Series([0.25], index=["not-a-date"], dtype=float)
-    client = _profile_client(factory=fake_ticker_factory(info=FULL_INFO, dividends=bad_div))
+    client = make_client(factory=fake_ticker_factory(info=FULL_INFO, dividends=bad_div))
     with pytest.raises(DataUnavailable) as exc:
         client.get_company_profile("AAPL")
     assert "AAPL" in str(exc.value)
@@ -582,7 +544,7 @@ def test_get_company_profile_dividends_read_error_is_data_unavailable() -> None:
     # .info already identified the instrument, so a failing dividends READ is a data
     # availability issue (DataUnavailable), NOT SymbolNotFound. Guards the refactor that
     # moved this read out of the SymbolNotFound try block.
-    client = _profile_client(
+    client = make_client(
         factory=fake_ticker_factory(info=FULL_INFO, dividends_error=YFException("divs down"))
     )
     with pytest.raises(DataUnavailable) as exc:
@@ -592,7 +554,7 @@ def test_get_company_profile_dividends_read_error_is_data_unavailable() -> None:
 
 
 def test_get_company_profile_splits_read_error_is_data_unavailable() -> None:
-    client = _profile_client(
+    client = make_client(
         factory=fake_ticker_factory(info=FULL_INFO, splits_error=YFException("splits down"))
     )
     with pytest.raises(DataUnavailable) as exc:
@@ -627,7 +589,7 @@ def test_get_financials_filter_reuses_cached_fetch() -> None:
 
 def test_get_company_profile_nan_employees_nulled_not_fatal() -> None:
     info = {**FULL_INFO, "fullTimeEmployees": float("nan")}
-    client = _profile_client(factory=fake_ticker_factory(info=info))
+    client = make_client(factory=fake_ticker_factory(info=info))
     p = client.get_company_profile("AAPL")
     assert p.employees is None  # junk field nulls; profile still returned
     assert p.name == "Apple Inc."
@@ -635,7 +597,7 @@ def test_get_company_profile_nan_employees_nulled_not_fatal() -> None:
 
 def test_get_company_profile_float_employees_coerced_to_int() -> None:
     info = {**FULL_INFO, "fullTimeEmployees": 166000.0}
-    client = _profile_client(factory=fake_ticker_factory(info=info))
+    client = make_client(factory=fake_ticker_factory(info=info))
     assert client.get_company_profile("AAPL").employees == 166000
 
 
@@ -656,7 +618,7 @@ def test_get_financials_all_statement_period_combos(
     attr: str,
 ) -> None:
     df = make_financials_df({"X": [1.0]}, ["2024-12-31"])
-    client = _fin_client(factory=fake_ticker_factory(financials={attr: df}))
+    client = make_client(factory=fake_ticker_factory(financials={attr: df}))
     fs = client.get_financials("AAPL", statement, period)
     assert fs.statement == statement and fs.period == period
     assert fs.period_ends == ["2024-12-31"] and fs.line_items["X"] == [1.0]
@@ -664,7 +626,7 @@ def test_get_financials_all_statement_period_combos(
 
 def test_get_quote_zero_previous_close_change_pct_none() -> None:
     fi = {**QUOTE_FI, "previous_close": 0.0}
-    [q] = _client(factory=fake_ticker_factory(fast_info=fi)).get_quote(["AAPL"]).quotes
+    [q] = make_client(factory=fake_ticker_factory(fast_info=fi)).get_quote(["AAPL"]).quotes
     assert q.change == pytest.approx(190.0) and q.change_percent is None and q.previous_close == 0.0
 
 
@@ -723,13 +685,13 @@ def test_get_quote_batch_keeps_good_tickers_when_one_is_missing() -> None:
             return fake_ticker_factory(fast_info=QUOTE_FI)(symbol)
         return fake_ticker_factory(fast_info_error=KeyError("exchangeTimezoneName"))(symbol)
 
-    result = _client(factory=factory).get_quote(["AAPL", "MSFT"])
+    result = make_client(factory=factory).get_quote(["AAPL", "MSFT"])
     assert [q.symbol for q in result.quotes] == ["AAPL"]
     assert [e.symbol for e in result.errors] == ["MSFT"]
 
 
 def test_get_price_history_single_bar() -> None:
-    client = _client(factory=fake_ticker_factory(history_df=make_history_df([100.0])))
+    client = make_client(factory=fake_ticker_factory(history_df=make_history_df([100.0])))
     h = client.get_price_history("AAPL", "1d", "1d")
     assert h.summary.bars == 1 and h.summary.total_return_percent == 0.0
     assert h.summary.start_date == h.summary.end_date and h.truncated is False
@@ -737,19 +699,19 @@ def test_get_price_history_single_bar() -> None:
 
 def test_get_quote_non_price_nan_fields_nulled() -> None:
     fi = {**QUOTE_FI, "market_cap": float("nan"), "last_volume": float("nan")}
-    [q] = _client(factory=fake_ticker_factory(fast_info=fi)).get_quote(["AAPL"]).quotes
+    [q] = make_client(factory=fake_ticker_factory(fast_info=fi)).get_quote(["AAPL"]).quotes
     assert q.price == 190.0 and q.market_cap is None and q.volume is None
 
 
 def test_get_company_profile_empty_long_name_uses_short_name() -> None:
     factory = fake_ticker_factory(info={"longName": "", "shortName": "Apple"})
-    client = _profile_client(factory=factory)
+    client = make_client(factory=factory)
     assert client.get_company_profile("AAPL").name == "Apple"
 
 
 def test_get_financials_line_items_preserve_order() -> None:
     df = make_financials_df(INCOME, ["2024-09-30", "2023-09-30"])
-    client = _fin_client(factory=fake_ticker_factory(financials={"income_stmt": df}))
+    client = make_client(factory=fake_ticker_factory(financials={"income_stmt": df}))
     fs = client.get_financials(
         "AAPL", "income", "annual", line_items=["Net Income", "Total Revenue"]
     )
@@ -758,14 +720,14 @@ def test_get_financials_line_items_preserve_order() -> None:
 
 def test_get_financials_line_items_all_miss_empty() -> None:
     df = make_financials_df(INCOME, ["2024-09-30", "2023-09-30"])
-    client = _fin_client(factory=fake_ticker_factory(financials={"income_stmt": df}))
+    client = make_client(factory=fake_ticker_factory(financials={"income_stmt": df}))
     fs = client.get_financials("AAPL", "income", "annual", line_items=["Nonexistent"])
     assert fs.line_items == {}
 
 
 def test_get_company_profile_dividends_below_cap_returns_all() -> None:
     div = make_series(["2023-02-01", "2023-05-01", "2023-08-01"], [0.23, 0.24, 0.25])
-    client = _profile_client(factory=fake_ticker_factory(info=FULL_INFO, dividends=div))
+    client = make_client(factory=fake_ticker_factory(info=FULL_INFO, dividends=div))
     p = client.get_company_profile("AAPL")
     assert [d.date for d in p.recent_dividends] == ["2023-02-01", "2023-05-01", "2023-08-01"]
 
@@ -800,19 +762,8 @@ METRICS_INFO = {
 }
 
 
-def _metrics_client(**kw: Any) -> YFinanceClient:
-    factory = kw.pop("factory")
-    return YFinanceClient(
-        ticker_factory=factory,
-        time_fn=FakeClock(),
-        quote_ttl=30.0,
-        history_ttl=300.0,
-        fundamentals_ttl=3600.0,
-    )
-
-
 def test_get_key_metrics_maps_fields() -> None:
-    m = _metrics_client(factory=fake_ticker_factory(info=METRICS_INFO)).get_key_metrics("AAPL")
+    m = make_client(factory=fake_ticker_factory(info=METRICS_INFO)).get_key_metrics("AAPL")
     assert isinstance(m, KeyMetrics)
     assert m.symbol == "AAPL"
     assert m.trailing_pe == 37.73 and m.forward_pe == 32.48 and m.price_to_book == 42.98
@@ -831,26 +782,26 @@ def test_get_key_metrics_maps_fields() -> None:
 
 def test_get_key_metrics_missing_and_nan_are_none() -> None:
     info = {"longName": "X Corp", "trailingPE": float("nan")}
-    m = _metrics_client(factory=fake_ticker_factory(info=info)).get_key_metrics("X")
+    m = make_client(factory=fake_ticker_factory(info=info)).get_key_metrics("X")
     assert m.symbol == "X" and m.trailing_pe is None
     assert m.ebitda is None and m.profit_margins is None
 
 
 def test_get_key_metrics_no_name_raises_symbol_not_found() -> None:
-    client = _metrics_client(factory=fake_ticker_factory(info={"trailingPegRatio": None}))
+    client = make_client(factory=fake_ticker_factory(info={"trailingPegRatio": None}))
     with pytest.raises(SymbolNotFound):
         client.get_key_metrics("BAD")
 
 
 def test_get_key_metrics_typed_error_is_data_unavailable() -> None:
-    client = _metrics_client(factory=fake_ticker_factory(info_error=YFException("rate limited")))
+    client = make_client(factory=fake_ticker_factory(info_error=YFException("rate limited")))
     with pytest.raises(DataUnavailable) as exc:
         client.get_key_metrics("AAPL")
     assert "rate limited" in str(exc.value)
 
 
 def test_get_key_metrics_raw_error_is_symbol_not_found() -> None:
-    client = _metrics_client(factory=fake_ticker_factory(info_error=KeyError("boom")))
+    client = make_client(factory=fake_ticker_factory(info_error=KeyError("boom")))
     with pytest.raises(SymbolNotFound):
         client.get_key_metrics("AAPL")
 
@@ -858,7 +809,7 @@ def test_get_key_metrics_raw_error_is_symbol_not_found() -> None:
 def test_get_key_metrics_mapping_failure_is_data_unavailable() -> None:
     # A value that survives the name check but fails float() coercion in mapping.
     info = {"longName": "Apple Inc.", "trailingPE": object()}
-    client = _metrics_client(factory=fake_ticker_factory(info=info))
+    client = make_client(factory=fake_ticker_factory(info=info))
     with pytest.raises(DataUnavailable) as exc:
         client.get_key_metrics("AAPL")
     assert "Failed to parse metrics for 'AAPL'" in str(exc.value)
@@ -887,20 +838,9 @@ def test_get_key_metrics_caches_within_ttl() -> None:
     assert calls["n"] == 2
 
 
-def _perf_client(**kw: Any) -> YFinanceClient:
-    factory = kw.pop("factory")
-    return YFinanceClient(
-        ticker_factory=factory,
-        time_fn=FakeClock(),
-        quote_ttl=30.0,
-        history_ttl=300.0,
-        fundamentals_ttl=3600.0,
-    )
-
-
 def test_analyze_performance_computes_stats() -> None:
     closes = [100.0 + i for i in range(120)]  # 120 calendar days -> past the annualization gate
-    client = _perf_client(factory=fake_ticker_factory(history_df=make_history_df(closes)))
+    client = make_client(factory=fake_ticker_factory(history_df=make_history_df(closes)))
     p = client.analyze_performance("AAPL", "6mo")
     assert isinstance(p, PerformanceStats)
     assert p.symbol == "AAPL" and p.period == "6mo" and p.bars == 120
@@ -917,7 +857,7 @@ def test_analyze_performance_computes_stats() -> None:
 
 def test_analyze_performance_reports_risk_adjusted_stats() -> None:
     closes = [100.0 + i for i in range(120)]  # 120 calendar days: past the annualization gate
-    p = _perf_client(
+    p = make_client(
         factory=fake_ticker_factory(history_df=make_history_df(closes))
     ).analyze_performance("AAPL", "6mo")
     assert p.periods_per_year is not None
@@ -930,7 +870,7 @@ def test_analyze_performance_reports_risk_adjusted_stats() -> None:
 
 def test_analyze_performance_risk_free_rate_is_echoed_and_applied() -> None:
     closes = [100.0 + (i % 7) - (i % 3) + i * 0.2 for i in range(120)]
-    client = _perf_client(factory=fake_ticker_factory(history_df=make_history_df(closes)))
+    client = make_client(factory=fake_ticker_factory(history_df=make_history_df(closes)))
     raw = client.analyze_performance("AAPL", "6mo")
     excess = client.analyze_performance("AAPL", "6mo", risk_free_rate=0.05)
     assert excess.risk_free_rate == 0.05
@@ -940,7 +880,7 @@ def test_analyze_performance_risk_free_rate_is_echoed_and_applied() -> None:
 
 def test_analyze_performance_computes_calmar_from_its_own_figures() -> None:
     closes = [100.0, 130.0, 90.0] + [100.0 + i for i in range(117)]
-    p = _perf_client(
+    p = make_client(
         factory=fake_ticker_factory(history_df=make_history_df(closes))
     ).analyze_performance("AAPL", "6mo")
     assert p.annualized_return_percent is not None
@@ -956,7 +896,7 @@ def test_analyze_performance_nulls_risk_adjusted_stats_on_a_short_window() -> No
     withholds; computing one anyway would silently re-introduce the fixed 252 convention
     the calendar-annualization work removed.
     """
-    p = _perf_client(
+    p = make_client(
         factory=fake_ticker_factory(history_df=make_history_df([100.0, 101.0, 99.0, 103.0]))
     ).analyze_performance("AAPL", "5d", risk_free_rate=0.05)
     assert p.risk_free_rate == 0.05  # echoed even when unused, so the caller can see it
@@ -969,7 +909,7 @@ def test_analyze_performance_nulls_risk_adjusted_stats_on_a_short_window() -> No
 
 def test_analyze_performance_rejects_a_risk_free_rate_of_minus_one() -> None:
     """The tool bounds this, but the data layer is reachable directly."""
-    client = _perf_client(
+    client = make_client(
         factory=fake_ticker_factory(history_df=make_history_df([100.0 + i for i in range(120)]))
     )
     with pytest.raises(InvalidInput):
@@ -978,7 +918,7 @@ def test_analyze_performance_rejects_a_risk_free_rate_of_minus_one() -> None:
 
 def _perf_stats(closes: list[float], **df_kw: Any) -> PerformanceStats:
     df = make_history_df(closes, **df_kw)
-    return _perf_client(factory=fake_ticker_factory(history_df=df)).analyze_performance("X", "1y")
+    return make_client(factory=fake_ticker_factory(history_df=df)).analyze_performance("X", "1y")
 
 
 def test_analyze_performance_one_year_annualized_equals_total_return() -> None:
@@ -1106,7 +1046,7 @@ def test_oversized_bar_lists_are_not_retained_in_the_cache() -> None:
     # ~787 B each (~9 MB), so 256 such entries would retain gigabytes. Lists past the limit
     # are still returned in full -- they are just not kept.
     closes = [100.0 + i for i in range(MAX_CACHEABLE_BARS + 1)]
-    client = _perf_client(factory=fake_ticker_factory(history_df=make_history_df(closes)))
+    client = make_client(factory=fake_ticker_factory(history_df=make_history_df(closes)))
     bars = client._all_bars("AAPL", "max", "1d")
     assert len(bars) == MAX_CACHEABLE_BARS + 1  # returned whole
     assert ("bars", "AAPL", "max", "1d") not in client._cache
@@ -1114,7 +1054,7 @@ def test_oversized_bar_lists_are_not_retained_in_the_cache() -> None:
 
 def test_bar_lists_at_the_limit_are_retained() -> None:
     closes = [100.0 + i for i in range(MAX_CACHEABLE_BARS)]
-    client = _perf_client(factory=fake_ticker_factory(history_df=make_history_df(closes)))
+    client = make_client(factory=fake_ticker_factory(history_df=make_history_df(closes)))
     client._all_bars("AAPL", "10y", "1d")
     assert ("bars", "AAPL", "10y", "1d") in client._cache
 
@@ -1122,7 +1062,7 @@ def test_bar_lists_at_the_limit_are_retained() -> None:
 def test_dedupe_still_holds_below_the_cache_limit() -> None:
     calls = {"n": 0}
     df = make_history_df([100.0 + i for i in range(120)])
-    client = _perf_client(factory=_counting_factory(df, calls))
+    client = make_client(factory=_counting_factory(df, calls))
     client.get_price_history("AAPL", period="6mo", interval="1d")
     client.analyze_performance("AAPL", "6mo")
     assert calls["n"] == 1  # one fetch still feeds both views
@@ -1133,7 +1073,7 @@ def test_repeated_analysis_of_an_oversized_history_does_not_refetch() -> None:
     # would go back to the network. The derived result is tiny; cache that instead.
     calls = {"n": 0}
     df = make_history_df([100.0 + i for i in range(MAX_CACHEABLE_BARS + 1)])
-    client = _perf_client(factory=_counting_factory(df, calls))
+    client = make_client(factory=_counting_factory(df, calls))
     first = client.analyze_performance("AAPL", "max")
     second = client.analyze_performance("AAPL", "max")
     assert calls["n"] == 1
@@ -1143,7 +1083,7 @@ def test_repeated_analysis_of_an_oversized_history_does_not_refetch() -> None:
 def test_oversized_price_history_still_caches_its_derived_view() -> None:
     calls = {"n": 0}
     df = make_history_df([100.0 + i for i in range(MAX_CACHEABLE_BARS + 1)])
-    client = _perf_client(factory=_counting_factory(df, calls))
+    client = make_client(factory=_counting_factory(df, calls))
     client.get_price_history("AAPL", period="max", interval="1d")
     client.get_price_history("AAPL", period="max", interval="1d")
     assert calls["n"] == 1
@@ -1157,7 +1097,7 @@ def test_analyze_performance_shares_the_bars_cache_with_get_price_history() -> N
         calls["n"] += 1
         return fake_ticker_factory(history_df=df)(symbol)
 
-    client = _perf_client(factory=counting)
+    client = make_client(factory=counting)
     client.get_price_history("AAPL", period="6mo", interval="1d")
     client.analyze_performance("AAPL", "6mo")
     assert calls["n"] == 1  # one fetch feeds both derived views
@@ -1171,7 +1111,7 @@ def test_get_price_history_reuses_bars_fetched_by_analyze_performance() -> None:
         calls["n"] += 1
         return fake_ticker_factory(history_df=df)(symbol)
 
-    client = _perf_client(factory=counting)
+    client = make_client(factory=counting)
     client.analyze_performance("AAPL", "6mo")
     client.get_price_history("AAPL", period="6mo", interval="1d")
     assert calls["n"] == 1  # the dedupe works in either order
@@ -1179,7 +1119,7 @@ def test_get_price_history_reuses_bars_fetched_by_analyze_performance() -> None:
 
 def test_analyze_performance_sma_when_enough_bars() -> None:
     closes = [100.0 + i for i in range(60)]  # 60 daily bars
-    client = _perf_client(factory=fake_ticker_factory(history_df=make_history_df(closes)))
+    client = make_client(factory=fake_ticker_factory(history_df=make_history_df(closes)))
     p = client.analyze_performance("AAPL", "3mo")
     assert p.sma_50 == pytest.approx(analytics.sma(closes, 50))
     assert p.sma_200 is None  # still < 200
@@ -1188,20 +1128,20 @@ def test_analyze_performance_sma_when_enough_bars() -> None:
 def test_analyze_performance_smas_survive_a_short_window() -> None:
     # SMAs do not annualize, so the 90-day gate must not blank them.
     closes = [100.0 + i for i in range(60)]  # 59 elapsed days, under the gate
-    client = _perf_client(factory=fake_ticker_factory(history_df=make_history_df(closes)))
+    client = make_client(factory=fake_ticker_factory(history_df=make_history_df(closes)))
     p = client.analyze_performance("AAPL", "3mo")
     assert p.annualized_return_percent is None
     assert p.sma_50 == pytest.approx(analytics.sma(closes, 50))
 
 
 def test_analyze_performance_too_few_bars_raises() -> None:
-    client = _perf_client(factory=fake_ticker_factory(history_df=make_history_df([100.0])))
+    client = make_client(factory=fake_ticker_factory(history_df=make_history_df([100.0])))
     with pytest.raises(DataUnavailable):
         client.analyze_performance("AAPL", "1d")
 
 
 def test_analyze_performance_invalid_symbol_raises() -> None:
-    client = _perf_client(factory=fake_ticker_factory(history_df=pd.DataFrame()))
+    client = make_client(factory=fake_ticker_factory(history_df=pd.DataFrame()))
     with pytest.raises(SymbolNotFound):
         client.analyze_performance("BAD", "1y")
 
@@ -1260,7 +1200,7 @@ def test_analyze_performance_cache_keys_on_the_risk_free_rate() -> None:
     whichever rate happened to be asked for first.
     """
     df = make_history_df([100.0 + i for i in range(300)])
-    client = _perf_client(factory=fake_ticker_factory(history_df=df))
+    client = make_client(factory=fake_ticker_factory(history_df=df))
 
     raw = client.analyze_performance("AAPL", "1y")
     excess = client.analyze_performance("AAPL", "1y", 0.05)
@@ -1275,13 +1215,13 @@ def test_analyze_performance_cache_keys_on_the_risk_free_rate() -> None:
 
 def test_analyze_performance_period_propagates() -> None:
     df = make_history_df([100.0, 110.0, 99.0])
-    p = _perf_client(factory=fake_ticker_factory(history_df=df)).analyze_performance("AAPL", "5y")
+    p = make_client(factory=fake_ticker_factory(history_df=df)).analyze_performance("AAPL", "5y")
     assert p.period == "5y"
 
 
 def test_analyze_performance_sma_200_populated() -> None:
     closes = [100.0 + i for i in range(250)]
-    p = _perf_client(
+    p = make_client(
         factory=fake_ticker_factory(history_df=make_history_df(closes))
     ).analyze_performance("AAPL", "1y")
     assert p.sma_200 == pytest.approx(analytics.sma(closes, 200)) and p.sma_200 is not None
@@ -1633,23 +1573,6 @@ def test_search_symbols_parse_error_is_data_unavailable() -> None:
     assert "Failed to parse search results for 'apple'" in str(exc.value)
 
 
-def _news_client(**kw: Any) -> YFinanceClient:
-    factory = kw.pop("factory")
-    clock = kw.pop("clock", FakeClock())
-    # get_news falls back to search on an empty stream, so every news client needs a search
-    # factory. Defaulting to an empty fake keeps a test that does not care about the
-    # fallback off the network -- the real yf.Search would otherwise be called.
-    kw.setdefault("search_factory", fake_search_factory())
-    return YFinanceClient(
-        ticker_factory=factory,
-        time_fn=clock,
-        quote_ttl=30.0,
-        history_ttl=300.0,
-        fundamentals_ttl=3600.0,
-        **kw,
-    )
-
-
 NEWS_ITEMS = [
     make_news_item(
         "Apple hits record high",
@@ -1676,7 +1599,7 @@ NEWS_ITEMS = [
 
 
 def test_get_news_happy_path_maps_fields_newest_first() -> None:
-    client = _news_client(factory=fake_ticker_factory(news=NEWS_ITEMS))
+    client = make_client(factory=fake_ticker_factory(news=NEWS_ITEMS))
     result = client.get_news("AAPL")
     assert isinstance(result, NewsResult)
     assert result.symbol == "AAPL"
@@ -1693,7 +1616,7 @@ def test_get_news_happy_path_maps_fields_newest_first() -> None:
 
 
 def test_get_news_empty_returns_empty_no_raise() -> None:
-    client = _news_client(factory=fake_ticker_factory(news=[]))
+    client = make_client(factory=fake_ticker_factory(news=[]))
     result = client.get_news("ZZZZ")
     assert result.symbol == "ZZZZ" and result.articles == []
 
@@ -1712,7 +1635,7 @@ def test_get_news_falls_back_to_search_when_the_ticker_stream_is_empty() -> None
             make_search_news_item("Apple ships", "AP", "https://x/b", 1790647000),
         ]
     )
-    client = _news_client(factory=fake_ticker_factory(news=[]), search_factory=search)
+    client = make_client(factory=fake_ticker_factory(news=[]), search_factory=search)
 
     result = client.get_news("AAPL")
 
@@ -1726,7 +1649,7 @@ def test_get_news_search_fallback_maps_the_flat_payload_shape() -> None:
     search = fake_search_factory(
         news=[make_search_news_item("Apple beats", "Reuters", "https://x/a", 1790647283)]
     )
-    client = _news_client(factory=fake_ticker_factory(news=[]), search_factory=search)
+    client = make_client(factory=fake_ticker_factory(news=[]), search_factory=search)
 
     article = client.get_news("AAPL").articles[0]
 
@@ -1741,7 +1664,7 @@ def test_get_news_search_fallback_maps_the_flat_payload_shape() -> None:
 def test_get_news_does_not_call_search_when_the_ticker_stream_has_news() -> None:
     """The fallback costs a request, so it must only run when the primary came back empty."""
     search = fake_search_factory(news=[make_search_news_item("should not be used")])
-    client = _news_client(factory=fake_ticker_factory(news=NEWS_ITEMS), search_factory=search)
+    client = make_client(factory=fake_ticker_factory(news=NEWS_ITEMS), search_factory=search)
 
     result = client.get_news("AAPL")
 
@@ -1753,7 +1676,7 @@ def test_get_news_does_not_call_search_when_the_ticker_stream_has_news() -> None
 def test_get_news_empty_from_both_sources_is_still_empty() -> None:
     """A symbol with no coverage anywhere reports no news, not an error."""
     search = fake_search_factory(news=[])
-    client = _news_client(factory=fake_ticker_factory(news=[]), search_factory=search)
+    client = make_client(factory=fake_ticker_factory(news=[]), search_factory=search)
 
     result = client.get_news("ZZZZ")
 
@@ -1763,7 +1686,7 @@ def test_get_news_empty_from_both_sources_is_still_empty() -> None:
 def test_get_news_a_failing_search_fallback_leaves_the_empty_result_intact() -> None:
     """The primary succeeded with "no news"; a broken cross-check must not make it an error."""
     search = fake_search_factory(error=YFException("search down"))
-    client = _news_client(factory=fake_ticker_factory(news=[]), search_factory=search)
+    client = make_client(factory=fake_ticker_factory(news=[]), search_factory=search)
 
     assert client.get_news("ZZZZ").articles == []
 
@@ -1776,13 +1699,13 @@ def test_get_news_search_fallback_caps_at_count_and_drops_untitled_items() -> No
             make_search_news_item("dropped by count", "AP", "https://x/c", 1790646000),
         ]
     )
-    client = _news_client(factory=fake_ticker_factory(news=[]), search_factory=search)
+    client = make_client(factory=fake_ticker_factory(news=[]), search_factory=search)
 
     assert [a.title for a in client.get_news("AAPL", count=1).articles] == ["kept"]
 
 
 def test_get_news_typed_error_is_data_unavailable() -> None:
-    client = _news_client(factory=fake_ticker_factory(news_error=YFException("rate limited")))
+    client = make_client(factory=fake_ticker_factory(news_error=YFException("rate limited")))
     with pytest.raises(DataUnavailable) as exc:
         client.get_news("AAPL")
     assert "rate limited" in str(exc.value)
@@ -1790,7 +1713,7 @@ def test_get_news_typed_error_is_data_unavailable() -> None:
 
 
 def test_get_news_raw_error_is_data_unavailable() -> None:
-    client = _news_client(factory=fake_ticker_factory(news_error=RuntimeError("boom")))
+    client = make_client(factory=fake_ticker_factory(news_error=RuntimeError("boom")))
     with pytest.raises(DataUnavailable) as exc:
         client.get_news("AAPL")
     assert "boom" in str(exc.value)
@@ -1803,7 +1726,7 @@ def test_get_news_skips_item_without_title() -> None:
         make_news_item(None, publisher="Reuters", link="https://x"),
         NEWS_ITEMS[1],
     ]
-    client = _news_client(factory=fake_ticker_factory(news=items))
+    client = make_client(factory=fake_ticker_factory(news=items))
     result = client.get_news("AAPL")
     assert [a.title for a in result.articles] == [
         "Apple hits record high",
@@ -1819,7 +1742,7 @@ def test_get_news_null_nested_keys_yield_none() -> None:
         omit_provider=True,
         omit_canonical=True,
     )
-    client = _news_client(factory=fake_ticker_factory(news=[item]))
+    client = make_client(factory=fake_ticker_factory(news=[item]))
     [article] = client.get_news("AAPL").articles
     assert article.title == "Title only"
     assert article.publisher is None
@@ -1831,7 +1754,7 @@ def test_get_news_null_nested_keys_yield_none() -> None:
 def test_get_news_none_provider_and_canonical_yield_none() -> None:
     # provider/canonicalUrl present but explicitly None (a shape yfinance can return).
     item = make_news_item("Title", publisher=None, link=None)
-    client = _news_client(factory=fake_ticker_factory(news=[item]))
+    client = make_client(factory=fake_ticker_factory(news=[item]))
     [article] = client.get_news("AAPL").articles
     assert article.publisher is None and article.link is None
 
@@ -1843,7 +1766,7 @@ def test_get_news_click_through_fallback_link() -> None:
         omit_canonical=True,
         click_through="https://fallback.example/x",
     )
-    client = _news_client(factory=fake_ticker_factory(news=[item]))
+    client = make_client(factory=fake_ticker_factory(news=[item]))
     [article] = client.get_news("AAPL").articles
     assert article.link == "https://fallback.example/x"
 
@@ -1851,7 +1774,7 @@ def test_get_news_click_through_fallback_link() -> None:
 def test_get_news_clamps_to_count_and_passes_args_to_source() -> None:
     # The fake returns ALL 3 items regardless of count; the client must clamp to 2.
     factory = fake_ticker_factory(news=NEWS_ITEMS)
-    client = _news_client(factory=factory)
+    client = make_client(factory=factory)
     result = client.get_news("AAPL", count=2)
     assert len(result.articles) == 2  # client-side clamp, not the fake
     assert factory.captured_news_count["count"] == 2  # type: ignore[attr-defined]
@@ -1862,7 +1785,7 @@ def test_get_news_parse_error_is_data_unavailable() -> None:
     # A truthy but non-string title survives the title guard yet fails NewsArticle
     # validation (title: str), forcing the parse-stage error path.
     item = {"id": "x", "content": {"title": 123}}
-    client = _news_client(factory=fake_ticker_factory(news=[item]))
+    client = make_client(factory=fake_ticker_factory(news=[item]))
     with pytest.raises(DataUnavailable) as exc:
         client.get_news("AAPL")
     assert "Failed to parse news for 'AAPL'" in str(exc.value)
@@ -1902,7 +1825,7 @@ def test_symbols_are_normalized_before_caching_and_echoed_normalized() -> None:
         calls.append(symbol)
         return fake_ticker_factory(fast_info=QUOTE_FI)(symbol)
 
-    client = _client(factory=counting_factory)
+    client = make_client(factory=counting_factory)
     lower = client.get_quote(["aapl"]).quotes
     padded = client.get_quote([" AAPL "]).quotes
     assert calls == ["AAPL"]  # one fetch, with the normalized symbol
@@ -1918,7 +1841,7 @@ def test_price_history_normalizes_symbol() -> None:
         calls.append(symbol)
         return fake_ticker_factory(history_df=df)(symbol)
 
-    client = _client(factory=counting_factory)
+    client = make_client(factory=counting_factory)
     first = client.get_price_history(" aapl", period="1mo", interval="1d")
     client.get_price_history("AAPL", period="1mo", interval="1d")
     assert calls == ["AAPL"]
@@ -1934,7 +1857,7 @@ def test_profile_metrics_analyst_news_and_performance_normalize_symbol() -> None
         news=[make_news_item("Hi")],
         financials={"income_stmt": make_financials_df(INCOME, ["2024-09-30", "2023-09-30"])},
     )
-    client = _client(factory=factory)
+    client = make_client(factory=factory)
     assert client.get_company_profile(" aapl ").symbol == "AAPL"
     assert client.get_key_metrics(" aapl ").symbol == "AAPL"
     assert client.get_analyst_data(" aapl ").symbol == "AAPL"
@@ -1951,7 +1874,7 @@ def test_blank_symbol_raises_symbol_not_found_without_fetching(blank: str) -> No
         calls.append(symbol)
         return fake_ticker_factory(fast_info=QUOTE_FI)(symbol)
 
-    client = _client(factory=counting_factory)
+    client = make_client(factory=counting_factory)
     with pytest.raises(SymbolNotFound, match="Empty ticker symbol"):
         client.get_company_profile(blank)
     assert calls == []
@@ -2050,7 +1973,7 @@ TRANSPORT_ERRORS = [
 
 @pytest.mark.parametrize("exc", TRANSPORT_ERRORS, ids=lambda e: type(e).__name__ + str(e)[:12])
 def test_quote_transport_failure_is_data_unavailable_not_symbol_not_found(exc: Exception) -> None:
-    client = _client(factory=fake_ticker_factory(fast_info_error=exc))
+    client = make_client(factory=fake_ticker_factory(fast_info_error=exc))
     with pytest.raises(DataUnavailable) as raised:
         client._fetch_quote("AAPL")
     assert not isinstance(raised.value, SymbolNotFound)
@@ -2060,7 +1983,7 @@ def test_quote_transport_failure_is_data_unavailable_not_symbol_not_found(exc: E
 
 @pytest.mark.parametrize("exc", TRANSPORT_ERRORS, ids=lambda e: type(e).__name__ + str(e)[:12])
 def test_info_transport_failure_is_data_unavailable_not_symbol_not_found(exc: Exception) -> None:
-    client = _client(factory=fake_ticker_factory(info_error=exc))
+    client = make_client(factory=fake_ticker_factory(info_error=exc))
     with pytest.raises(DataUnavailable) as raised:
         client.get_company_profile("AAPL")
     assert not isinstance(raised.value, SymbolNotFound)
@@ -2079,7 +2002,7 @@ NO_DATA_ERRORS = [
 
 @pytest.mark.parametrize("exc", NO_DATA_ERRORS, ids=lambda e: type(e).__name__ + str(e)[:12])
 def test_quote_no_data_signals_are_symbol_not_found(exc: Exception) -> None:
-    client = _client(factory=fake_ticker_factory(fast_info_error=exc))
+    client = make_client(factory=fake_ticker_factory(fast_info_error=exc))
     with pytest.raises(SymbolNotFound) as raised:
         client._fetch_quote("NOPE")
     assert str(raised.value) == "No quote data for 'NOPE'. The symbol may be invalid or delisted."
@@ -2087,14 +2010,14 @@ def test_quote_no_data_signals_are_symbol_not_found(exc: Exception) -> None:
 
 @pytest.mark.parametrize("exc", NO_DATA_ERRORS, ids=lambda e: type(e).__name__ + str(e)[:12])
 def test_info_no_data_signals_are_symbol_not_found(exc: Exception) -> None:
-    client = _client(factory=fake_ticker_factory(info_error=exc))
+    client = make_client(factory=fake_ticker_factory(info_error=exc))
     with pytest.raises(SymbolNotFound) as raised:
         client.get_key_metrics("NOPE")
     assert "No metrics data for 'NOPE'" in str(raised.value)
 
 
 def test_rate_limit_error_stays_data_unavailable() -> None:
-    client = _client(factory=fake_ticker_factory(fast_info_error=YFRateLimitError()))
+    client = make_client(factory=fake_ticker_factory(fast_info_error=YFRateLimitError()))
     with pytest.raises(DataUnavailable) as raised:
         client._fetch_quote("AAPL")
     assert not isinstance(raised.value, SymbolNotFound)
@@ -2106,7 +2029,7 @@ def test_rate_limit_error_stays_data_unavailable() -> None:
 
 def test_intraday_bars_carry_a_full_timestamp_with_utc_offset() -> None:
     df = make_intraday_df([100.0, 101.0, 102.0])
-    client = _client(factory=fake_ticker_factory(history_df=df))
+    client = make_client(factory=fake_ticker_factory(history_df=df))
     hist = client.get_price_history("AAPL", period="1d", interval="5m")
     assert [b.date for b in hist.bars] == [
         "2026-09-25T09:30:00-04:00",
@@ -2120,7 +2043,7 @@ def test_intraday_bars_carry_a_full_timestamp_with_utc_offset() -> None:
 @pytest.mark.parametrize("interval", ["1m", "5m", "15m", "30m", "1h"])
 def test_every_intraday_interval_emits_distinct_timestamps(interval: str) -> None:
     df = make_intraday_df([100.0, 101.0])
-    client = _client(factory=fake_ticker_factory(history_df=df))
+    client = make_client(factory=fake_ticker_factory(history_df=df))
     dates = [b.date for b in client.get_price_history("AAPL", "1d", interval).bars]
     assert len(set(dates)) == 2
     assert all("T" in d and d.endswith("-04:00") for d in dates)
@@ -2131,7 +2054,7 @@ def test_daily_and_longer_bars_stay_date_only(interval: str) -> None:
     # Yahoo's daily index is midnight in the EXCHANGE's timezone; emitting a timestamp (or
     # converting to UTC) would either lie about the time or shift the calendar date.
     df = make_history_df([100.0, 101.0], start="2026-09-24", tz="America/New_York")
-    client = _client(factory=fake_ticker_factory(history_df=df))
+    client = make_client(factory=fake_ticker_factory(history_df=df))
     dates = [b.date for b in client.get_price_history("AAPL", "1mo", interval).bars]
     assert dates == ["2026-09-24", "2026-09-25"]
 
@@ -2158,13 +2081,13 @@ SAP_INFO = {  # SAP's US listing quotes in USD while it reports its financials i
 
 def test_financial_statement_is_labelled_with_the_reporting_currency() -> None:
     df = make_financials_df(INCOME, ["2024-12-31", "2023-12-31"])
-    client = _fin_client(factory=fake_ticker_factory(financials={"income_stmt": df}, info=SAP_INFO))
+    client = make_client(factory=fake_ticker_factory(financials={"income_stmt": df}, info=SAP_INFO))
     assert client.get_financials("SAP", "income", "annual").currency == "EUR"
 
 
 def test_financial_statement_currency_falls_back_to_quote_currency() -> None:
     df = make_financials_df(INCOME, ["2024-12-31", "2023-12-31"])
-    client = _fin_client(
+    client = make_client(
         factory=fake_ticker_factory(
             financials={"income_stmt": df}, info={"longName": "Apple Inc.", "currency": "USD"}
         )
@@ -2178,7 +2101,7 @@ def test_financial_statement_currency_is_none_when_info_is_unusable() -> None:
         fake_ticker_factory(financials={"income_stmt": df}, info={}),
         fake_ticker_factory(financials={"income_stmt": df}, info_error=OSError("no network")),
     ):
-        client = _fin_client(factory=factory)
+        client = make_client(factory=factory)
         # An unlabelled statement beats a failed one: the values are still correct.
         fs = client.get_financials("AAPL", "income", "annual")
         assert fs.currency is None
@@ -2186,7 +2109,7 @@ def test_financial_statement_currency_is_none_when_info_is_unusable() -> None:
 
 
 def test_key_metrics_carry_both_quote_and_financial_currency() -> None:
-    client = _metrics_client(factory=fake_ticker_factory(info=SAP_INFO))
+    client = make_client(factory=fake_ticker_factory(info=SAP_INFO))
     metrics = client.get_key_metrics("SAP")
     # EBITDA/debt/cash/FCF come from Yahoo's financialData (EUR); EV is derived from
     # market cap and is in the quote currency (USD). One currency field would misreport half.
@@ -2197,7 +2120,7 @@ def test_key_metrics_carry_both_quote_and_financial_currency() -> None:
 
 
 def test_key_metrics_currencies_are_none_when_absent() -> None:
-    client = _metrics_client(factory=fake_ticker_factory(info={"longName": "X"}))
+    client = make_client(factory=fake_ticker_factory(info={"longName": "X"}))
     metrics = client.get_key_metrics("X")
     assert metrics.currency is None and metrics.financial_currency is None
 
@@ -2207,7 +2130,7 @@ def test_key_metrics_currencies_are_none_when_absent() -> None:
 
 def _income_client() -> YFinanceClient:
     df = make_financials_df(INCOME, ["2024-09-30", "2023-09-30"])
-    return _fin_client(factory=fake_ticker_factory(financials={"income_stmt": df}))
+    return make_client(factory=fake_ticker_factory(financials={"income_stmt": df}))
 
 
 def test_unknown_line_items_are_reported_with_suggestions() -> None:
@@ -2263,7 +2186,7 @@ def test_unfiltered_statement_reports_no_misses() -> None:
 
 
 def test_get_quote_returns_partial_results_instead_of_failing_the_batch() -> None:
-    client = _client(
+    client = make_client(
         factory=fake_symbol_ticker_factory(fast_info={"AAPL": QUOTE_FI, "MSFT": QUOTE_FI})
     )
     result = client.get_quote(["AAPL", "BADSYM", "MSFT"])
@@ -2275,7 +2198,7 @@ def test_get_quote_returns_partial_results_instead_of_failing_the_batch() -> Non
 
 
 def test_get_quote_error_entry_carries_a_transport_failure_message() -> None:
-    client = _client(
+    client = make_client(
         factory=fake_symbol_ticker_factory(
             fast_info={"AAPL": QUOTE_FI}, errors={"MSFT": ConnectionError("connection reset")}
         )
@@ -2286,7 +2209,7 @@ def test_get_quote_error_entry_carries_a_transport_failure_message() -> None:
 
 
 def test_get_quote_all_failing_returns_no_quotes_and_all_errors() -> None:
-    client = _client(factory=fake_symbol_ticker_factory())
+    client = make_client(factory=fake_symbol_ticker_factory())
     result = client.get_quote(["NOPE1", "NOPE2"])
     assert result.quotes == []
     assert [e.symbol for e in result.errors] == ["NOPE1", "NOPE2"]
@@ -2294,14 +2217,16 @@ def test_get_quote_all_failing_returns_no_quotes_and_all_errors() -> None:
 
 def test_get_quote_deduplicates_equivalent_symbols() -> None:
     calls: list[str] = []
-    client = _client(factory=fake_symbol_ticker_factory(fast_info={"AAPL": QUOTE_FI}, calls=calls))
+    client = make_client(
+        factory=fake_symbol_ticker_factory(fast_info={"AAPL": QUOTE_FI}, calls=calls)
+    )
     result = client.get_quote(["AAPL", "aapl", " AAPL "])
     assert [q.symbol for q in result.quotes] == ["AAPL"]
     assert calls == ["AAPL"]
 
 
 def test_get_quote_blank_symbol_becomes_an_error_entry_not_an_exception() -> None:
-    client = _client(factory=fake_symbol_ticker_factory(fast_info={"AAPL": QUOTE_FI}))
+    client = make_client(factory=fake_symbol_ticker_factory(fast_info={"AAPL": QUOTE_FI}))
     result = client.get_quote(["AAPL", "  "])
     assert [q.symbol for q in result.quotes] == ["AAPL"]
     assert result.errors[0].symbol == "  "
@@ -2309,7 +2234,7 @@ def test_get_quote_blank_symbol_becomes_an_error_entry_not_an_exception() -> Non
 
 
 def test_get_quote_empty_list_returns_empty_result() -> None:
-    assert _client(factory=fake_symbol_ticker_factory()).get_quote([]) == QuoteResult(
+    assert make_client(factory=fake_symbol_ticker_factory()).get_quote([]) == QuoteResult(
         quotes=[], errors=[]
     )
 
@@ -2320,7 +2245,7 @@ def test_get_quote_fetches_tickers_concurrently() -> None:
     # tracks the worker bound so lowering QUOTE_MAX_WORKERS cannot deadlock the test.
     symbols = [f"SYM{i}" for i in range(min(QUOTE_MAX_WORKERS, 4))]
     gate = threading.Barrier(len(symbols), timeout=10)
-    client = _client(
+    client = make_client(
         factory=fake_symbol_ticker_factory(fast_info=dict.fromkeys(symbols, QUOTE_FI), gate=gate)
     )
     result = client.get_quote(symbols)
@@ -2331,7 +2256,9 @@ def test_get_quote_fetches_tickers_concurrently() -> None:
 def test_get_quote_concurrency_is_bounded() -> None:
     assert QUOTE_MAX_WORKERS > 1
     symbols = [f"SYM{i}" for i in range(QUOTE_MAX_WORKERS + 5)]
-    client = _client(factory=fake_symbol_ticker_factory(fast_info=dict.fromkeys(symbols, QUOTE_FI)))
+    client = make_client(
+        factory=fake_symbol_ticker_factory(fast_info=dict.fromkeys(symbols, QUOTE_FI))
+    )
     # More tickers than workers still completes: the pool queues the overflow.
     assert len(client.get_quote(symbols).quotes) == len(symbols)
 
@@ -2366,7 +2293,7 @@ def _statement_currency_factory(
 
 def test_statement_currency_is_fetched_once_per_symbol() -> None:
     info_reads: list[str] = []
-    client = _fin_client(factory=_statement_currency_factory(info_reads, SAP_INFO))
+    client = make_client(factory=_statement_currency_factory(info_reads, SAP_INFO))
     for statement in ("income", "balance", "cashflow"):
         for period in ("annual", "quarterly"):
             fs = client.get_financials("SAP", statement, period)
@@ -2377,7 +2304,7 @@ def test_statement_currency_is_fetched_once_per_symbol() -> None:
 
 def test_failed_statement_currency_read_is_not_cached() -> None:
     info_reads: list[str] = []
-    client = _fin_client(factory=_statement_currency_factory(info_reads, SAP_INFO, fail_first=1))
+    client = make_client(factory=_statement_currency_factory(info_reads, SAP_INFO, fail_first=1))
     first = client.get_financials("SAP", "income", "annual")
     assert first.currency is None  # unlabelled beats failing the statement
     # A rate limit says nothing about the reporting currency, so the next call retries
@@ -2389,7 +2316,7 @@ def test_failed_statement_currency_read_is_not_cached() -> None:
 
 def test_absent_statement_currency_is_cached() -> None:
     info_reads: list[str] = []
-    client = _fin_client(factory=_statement_currency_factory(info_reads, {}))
+    client = make_client(factory=_statement_currency_factory(info_reads, {}))
     assert client.get_financials("X", "income", "annual").currency is None
     assert client.get_financials("X", "balance", "annual").currency is None
     # A genuine "Yahoo reports no currency" IS cacheable - no repeat request.

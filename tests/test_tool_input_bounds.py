@@ -14,7 +14,7 @@ from fastmcp.exceptions import ToolError
 
 from finance_mcp.server import create_server
 from finance_mcp.tools._inputs import MAX_CASHFLOWS, MAX_COMPARE_TICKERS, TICKER_PATTERN
-from tests.conftest import fake_search_factory, fake_ticker_factory, make_client
+from tests.fakes import fake_search_factory, fake_ticker_factory, make_client
 
 
 def recording_factory(calls: list[str], **kwargs: Any) -> Callable[[str], Any]:

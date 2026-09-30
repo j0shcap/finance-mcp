@@ -8,7 +8,8 @@ from yfinance.exceptions import YFException
 
 from finance_mcp.data.errors import DataUnavailable
 from finance_mcp.server import create_server
-from tests.conftest import (
+from tests.fakes import (
+    QUOTE_FI,
     fake_search_factory,
     fake_symbol_ticker_factory,
     fake_ticker_factory,
@@ -29,18 +30,6 @@ FULL_INFO = {
     "currency": "USD",
     "marketCap": 4.5e12,
     "trailingPE": 37.7,
-}
-
-QUOTE_FI = {
-    "last_price": 190.0,
-    "previous_close": 188.0,
-    "day_high": 191.0,
-    "day_low": 187.0,
-    "year_high": 200.0,
-    "year_low": 150.0,
-    "market_cap": 3.0e12,
-    "currency": "USD",
-    "last_volume": 50_000_000,
 }
 
 
