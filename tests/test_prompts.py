@@ -1,8 +1,13 @@
 """Tests for analysis prompts (in-memory Client; no network)."""
 
-from fastmcp import Client
+import re
 
-from finance_mcp.conventions import CONVENTIONS_URI, UNITS_GLOSSARY
+import pytest
+from fastmcp import Client
+from mcp.types import TextContent
+
+from finance_mcp.conventions import CALCULATOR_CONVENTIONS, CONVENTIONS_URI, UNITS_GLOSSARY
+from finance_mcp.prompts._render import DISCLAIMER
 from finance_mcp.server import create_server
 
 
@@ -160,3 +165,113 @@ async def test_analyze_stock_warns_that_a_thin_overlap_makes_beta_noisy() -> Non
             (await client.get_prompt("analyze_stock", {"ticker": "AAPL"})).messages[0].content.text
         )
         assert "overlapping_observations" in text
+
+
+# --- shared contract for the prompts that point at the conventions resource ---------
+
+#: Sample arguments for each prompt that references finance://conventions instead of
+#: embedding the glossary (analyze_stock embeds it, by design, and is tested above).
+REFERENCING_PROMPTS: dict[str, dict[str, str]] = {
+    "investment_cashflows": {"cashflows": "-1000 now, then 300 a year for 5 years"},
+}
+
+
+async def _render(name: str, args: dict[str, str]) -> str:
+    async with Client(create_server()) as client:
+        result = await client.get_prompt(name, args)
+        assert len(result.messages) == 1
+        content = result.messages[0].content
+        assert isinstance(content, TextContent)
+        return content.text
+
+
+@pytest.mark.parametrize("name", sorted(REFERENCING_PROMPTS))
+async def test_prompt_references_conventions_instead_of_duplicating_them(name: str) -> None:
+    text = await _render(name, REFERENCING_PROMPTS[name])
+    assert CONVENTIONS_URI in text
+    assert UNITS_GLOSSARY not in text
+    assert CALCULATOR_CONVENTIONS not in text
+
+
+@pytest.mark.parametrize("name", sorted(REFERENCING_PROMPTS))
+async def test_prompt_renders_completely_and_ends_with_the_disclaimer(name: str) -> None:
+    text = await _render(name, REFERENCING_PROMPTS[name])
+    assert not re.search(r"\{[a-z_]+\}", text)  # no unrendered placeholder
+    assert text.rstrip().endswith(DISCLAIMER)
+
+
+@pytest.mark.parametrize("name", sorted(REFERENCING_PROMPTS))
+async def test_prompt_insists_on_tool_computation_not_mental_arithmetic(name: str) -> None:
+    text = await _render(name, REFERENCING_PROMPTS[name])
+    assert "never do that arithmetic yourself" in text
+
+
+# --- investment_cashflows ------------------------------------------------------------
+
+
+async def _prompt_arguments(name: str) -> dict[str, bool]:
+    async with Client(create_server()) as client:
+        by_name = {p.name: p for p in await client.list_prompts()}
+        return {a.name: bool(a.required) for a in (by_name[name].arguments or [])}
+
+
+async def test_investment_cashflows_arguments() -> None:
+    assert await _prompt_arguments("investment_cashflows") == {
+        "cashflows": True,
+        "discount_rate": False,
+        "reinvest_rate": False,
+    }
+
+
+async def test_investment_cashflows_echoes_inputs_and_marks_missing_rates() -> None:
+    text = await _render("investment_cashflows", {"cashflows": "-500, 200, 200, 200"})
+    assert "-500, 200, 200, 200" in text
+    assert "Discount (hurdle) rate: not given" in text
+    assert "Reinvestment rate for MIRR: not given" in text
+    text = await _render(
+        "investment_cashflows",
+        {"cashflows": "-500, 200", "discount_rate": "8%", "reinvest_rate": "5%"},
+    )
+    assert "Discount (hurdle) rate: 8%" in text
+    assert "Reinvestment rate for MIRR: 5%" in text
+
+
+async def test_investment_cashflows_pins_the_timing_and_period_conventions() -> None:
+    text = await _render("investment_cashflows", REFERENCING_PROMPTS["investment_cashflows"])
+    assert "npv treats cashflows[0] as today" in text
+    assert "Excel's NPV() discounts its first" in text  # the classic off-by-one-period
+    assert '"effective_to_nominal"' in text  # per-period rate from an annual one
+    assert "xnpv / xirr" in text  # irregular dates
+
+
+async def test_investment_cashflows_makes_npv_the_decision_rule() -> None:
+    text = await _render("investment_cashflows", REFERENCING_PROMPTS["investment_cashflows"])
+    assert "NPV is the decision rule" in text
+    assert "NPV wins" in text
+    assert "NPV profile" in text
+
+
+async def test_investment_cashflows_explains_multiple_and_borrowing_type_irrs() -> None:
+    text = await _render("investment_cashflows", REFERENCING_PROMPTS["investment_cashflows"])
+    assert "Descartes" in text  # sign changes bound the number of IRRs
+    assert "is_unique" in text
+    assert "all_irrs" in text
+    assert "there is NO single IRR" in text
+    # irr returns the same root for a loan as for its mirror-image investment.
+    assert "Borrowing-type" in text
+    assert "higher IRR is WORSE" in text
+
+
+async def test_investment_cashflows_says_when_to_prefer_mirr_and_its_limits() -> None:
+    text = await _render("investment_cashflows", REFERENCING_PROMPTS["investment_cashflows"])
+    assert "Prefer MIRR when" in text
+    assert "finance_rate" in text
+    assert "reinvest_rate" in text
+    assert "MIRR exceeds the hurdle exactly when NPV is positive" in text
+    assert "There is no dated MIRR tool" in text
+    assert "crossover rate" in text  # ranking mutually exclusive projects
+
+
+async def test_investment_cashflows_verifies_the_irr_by_repricing() -> None:
+    text = await _render("investment_cashflows", REFERENCING_PROMPTS["investment_cashflows"])
+    assert "npv (or xnpv) at the IRR must be ~0" in text

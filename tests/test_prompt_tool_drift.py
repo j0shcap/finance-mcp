@@ -28,6 +28,11 @@ from mcp.types import TextContent, Tool
 #: prompt cannot bypass the guard by never being rendered.
 SAMPLE_ARGS: dict[str, dict[str, str]] = {
     "analyze_stock": {"ticker": "AAPL", "horizon": "3y"},
+    "investment_cashflows": {
+        "cashflows": "-1000, 300, 300, 400",
+        "discount_rate": "8%",
+        "reinvest_rate": "6%",
+    },
 }
 
 _CALL_SITE = re.compile(r"\b([a-z][a-z0-9_]*)\(")
