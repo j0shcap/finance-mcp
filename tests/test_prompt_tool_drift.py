@@ -6,7 +6,8 @@ renamed, a parameter dropped, or a result field reshaped would leave a prompt st
 the model toward a call that fails or a field that is never there. This checks every
 rendered prompt against the live registry, from two angles:
 
-- call sites: each ``identifier(`` must be a registered tool;
+- call sites: each ``identifier(`` must be a registered tool, and each ``keyword=`` inside
+  its parentheses must be one of THAT tool's input parameters;
 - vocabulary: each snake_case token (one containing ``_``) must be a tool name, a tool
   input parameter, a property somewhere in a tool's output schema, or a string enum
   literal from a schema (e.g. ``nominal_to_effective``).
@@ -44,6 +45,8 @@ SAMPLE_ARGS: dict[str, dict[str, str]] = {
 }
 
 _CALL_SITE = re.compile(r"\b([a-z][a-z0-9_]*)\(")
+_CALL_WITH_ARGS = re.compile(r"\b([a-z][a-z0-9_]*)\(([^()]*)\)")
+_KEYWORD = re.compile(r"\b([a-z][a-z0-9_]*)=")
 _SNAKE_CASE = re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b")
 
 
@@ -79,18 +82,32 @@ def unknown_call_sites(text: str, tool_names: set[str]) -> set[str]:
     return set(_CALL_SITE.findall(text)) - tool_names
 
 
+def unknown_keywords(text: str, parameters: dict[str, set[str]]) -> set[str]:
+    """``tool(kw=...)`` keywords that are not an input parameter of that particular tool.
+
+    The vocabulary check alone would accept a parameter of a different tool.
+    """
+    return {
+        f"{tool}({keyword}=)"
+        for tool, args in _CALL_WITH_ARGS.findall(text)
+        if tool in parameters
+        for keyword in _KEYWORD.findall(args)
+        if keyword not in parameters[tool]
+    }
+
+
 def unknown_identifiers(text: str, words: set[str]) -> set[str]:
     """snake_case tokens in ``text`` that are not a tool, parameter, field or literal."""
     return set(_SNAKE_CASE.findall(text)) - words
 
 
+async def _render(client: Client[FastMCPTransport], name: str) -> str:
+    result = await client.get_prompt(name, SAMPLE_ARGS[name])
+    return "\n".join(m.content.text for m in result.messages if isinstance(m.content, TextContent))
+
+
 async def _rendered_prompts(client: Client[FastMCPTransport]) -> dict[str, str]:
-    rendered = {}
-    for prompt in await client.list_prompts():
-        result = await client.get_prompt(prompt.name, SAMPLE_ARGS[prompt.name])
-        parts = [m.content.text for m in result.messages if isinstance(m.content, TextContent)]
-        rendered[prompt.name] = "\n".join(parts)
-    return rendered
+    return {p.name: await _render(client, p.name) for p in await client.list_prompts()}
 
 
 # --- the guard's own behaviour: it must actually fire -------------------------------
@@ -99,6 +116,12 @@ async def _rendered_prompts(client: Client[FastMCPTransport]) -> dict[str, str]:
 def test_call_site_check_flags_a_tool_that_does_not_exist() -> None:
     text = "Call get_quote(tickers=[...]) and get_price_targets(ticker='AAPL')."
     assert unknown_call_sites(text, {"get_quote"}) == {"get_price_targets"}
+
+
+def test_keyword_check_flags_a_parameter_of_a_different_tool() -> None:
+    text = 'Call get_quote(ticker="AAPL") and get_news(ticker="AAPL", limit=5).'
+    parameters = {"get_quote": {"tickers"}, "get_news": {"ticker", "limit"}}
+    assert unknown_keywords(text, parameters) == {"get_quote(ticker=)"}
 
 
 def test_vocabulary_check_flags_a_field_that_does_not_exist() -> None:
@@ -140,6 +163,17 @@ async def test_prompts_only_call_registered_tools(client: Client[FastMCPTranspor
         assert not unknown, f"{name} calls unregistered tools: {sorted(unknown)}"
 
 
+async def test_prompts_pass_each_tool_only_its_own_parameters(
+    client: Client[FastMCPTransport],
+) -> None:
+    parameters = {
+        tool.name: set(tool.inputSchema.get("properties", {})) for tool in await client.list_tools()
+    }
+    for name, text in (await _rendered_prompts(client)).items():
+        unknown = unknown_keywords(text, parameters)
+        assert not unknown, f"{name} passes parameters its tools do not take: {sorted(unknown)}"
+
+
 async def test_prompts_only_name_registered_tools_parameters_and_fields(
     client: Client[FastMCPTransport],
 ) -> None:
@@ -154,5 +188,5 @@ async def test_every_prompt_orchestrates_at_least_one_tool(
     client: Client[FastMCPTransport], prompt: str
 ) -> None:
     tool_names = {tool.name for tool in await client.list_tools()}
-    text = (await _rendered_prompts(client))[prompt]
+    text = await _render(client, prompt)
     assert set(_CALL_SITE.findall(text)) & tool_names, prompt

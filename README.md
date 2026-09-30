@@ -65,9 +65,11 @@ them as slash commands; other clients surface them their own way).
 - `bond_analysis` (arguments: `bond` — a plain-words description, optional `shock_bp`, default `100`) — price, yield, accrued interest, duration, convexity and DV01 with the day count and clean/dirty basis made explicit, then a ± rate shock estimated from duration and convexity and cross-checked by exact repricing, and where option-free analytics break.
 - `investment_cashflows` (arguments: `cashflows`, optional `discount_rate`, `reinvest_rate`) — NPV/IRR/MIRR/XIRR: timing and rate-period conventions, sign-pattern diagnosis (multiple IRRs, borrowing-type flows), NPV as the decision rule with an NPV profile, and when MIRR is the better single figure.
 
-Every prompt points at the `finance://conventions` resource rather than restating unit rules, and
-names only tools, parameters and result fields the server actually has — a test renders each
-prompt and checks it against the tool registry.
+Every prompt points at the `finance://conventions` resource for unit rules (`compare_stocks`, `loan_planner`, `bond_analysis` and `investment_cashflows`
+reference it rather than restating it; `analyze_stock` also embeds the market-data units
+glossary), and names only tools, parameters and result fields the server actually has — a test
+renders each prompt and checks every tool call, each tool's keyword arguments, and every
+snake_case field name against the tool registry.
 
 ## Resources
 
