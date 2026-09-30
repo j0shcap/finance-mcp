@@ -12,8 +12,9 @@ import math
 import threading
 import time
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any, cast
 
@@ -59,9 +60,7 @@ MAX_CACHEABLE_BARS = 2000
 # Quotes in a batch are independent single requests, so they are fetched in parallel; the
 # bound keeps a large batch from opening a connection per ticker at once.
 QUOTE_MAX_WORKERS = 8
-# A benchmark comparison is two independent history fetches; both go through
-# _fetch_concurrently under this bound.
-BENCHMARK_MAX_WORKERS = 2
+BENCHMARK_MAX_WORKERS = 2  # the asset and the benchmark
 # The fewest shared closes that yield a single return to compare.
 MIN_OVERLAP_OBSERVATIONS = 2
 # Each comparison row costs two Yahoo calls (history + info), so the worker bound is lower
@@ -73,10 +72,9 @@ _INTRADAY_INTERVALS = frozenset({"1m", "5m", "15m", "30m", "1h"})
 SMA_SHORT_WINDOW = 50
 SMA_LONG_WINDOW = 200
 # Below roughly a quarter of calendar time, annualizing compounds short-run noise into a
-# yearly figure that reads as a forecast (a 4-day AAPL move once reported as +47.3%/yr).
-# Set just under three months rather than at it: a period="3mo" window spans 87-95 elapsed
-# days depending on the call date, so a 90-day gate cut through that range and made the
-# annualized fields blink in and out for the same request.
+# yearly figure that reads as a forecast. Set just under three months because a
+# period="3mo" window spans 87-95 elapsed days depending on the call date, and the same
+# request should not gain and lose its annualized fields from one day to the next.
 MIN_ANNUALIZATION_DAYS = 85
 
 _FINANCIALS_ATTR = {
@@ -139,11 +137,10 @@ class YFinanceClient:
             hit = self._cache.get(key)
             if hit is not None:
                 if now - hit[0] < ttl:
-                    self._cache.move_to_end(key)  # most recently used
-                    # The cache is heterogeneous (Any value); the key space guarantees each
-                    # key always maps to the same T, so this single cast is the only one needed.
+                    self._cache.move_to_end(key)
+                    # Values are Any, but each key prefix always stores the same type.
                     return cast(T, hit[2])
-                del self._cache[key]  # stale: drop before refetching
+                del self._cache[key]
         value = fetch()
         if cacheable is not None and not cacheable(value):
             return value
@@ -155,7 +152,7 @@ class YFinanceClient:
             # got there first) leaves it in its old position, so order it explicitly.
             self._cache.move_to_end(key)
             while len(self._cache) > self._cache_max_entries:
-                self._cache.popitem(last=False)  # evict the least recently used entry
+                self._cache.popitem(last=False)
         return value
 
     def _purge_expired(self, now: float) -> None:
@@ -168,9 +165,8 @@ class YFinanceClient:
     ) -> tuple[Any, dict[str, Any]]:
         """Fetch a ticker and its ``.info``, asserting the symbol names a real instrument.
 
-        Shared by the profile/metrics/analyst fetchers. Access errors are classified by
-        _data_error; an ``info`` dict that is empty or has no longName/shortName (Yahoo's
-        tell for an unknown symbol) becomes SymbolNotFound.
+        Access errors are classified by _data_error; an ``info`` dict that is empty or has
+        no longName/shortName (Yahoo's tell for an unknown symbol) becomes SymbolNotFound.
         """
         ticker = self._ticker(symbol)
         try:
@@ -181,36 +177,14 @@ class YFinanceClient:
             raise SymbolNotFound(_no_data_msg(kind, symbol))
         return ticker, info
 
-    def _normalize_batch(self, symbols: list[str]) -> tuple[list[str], list[tuple[str, str]]]:
-        """Normalize, de-duplicate and order a batch; returns (pending, (raw, reason) pairs).
-
-        Shared by get_quote and compare_tickers, which wrap the failures in their own error
-        models. A symbol that cannot even be normalized never reaches the network.
-        """
-        pending: list[str] = []  # normalized, de-duped, in request order
-        failures: list[tuple[str, str]] = []
-        for raw in symbols:
-            try:
-                symbol = _norm(raw)
-            except DataUnavailable as exc:
-                failures.append((raw, str(exc)))
-                continue
-            if symbol not in pending:
-                pending.append(symbol)
-        return pending, failures
-
     def get_quote(self, symbols: list[str]) -> QuoteResult:
         """Fetch quotes for a batch of symbols concurrently, with partial results.
 
         A batch is a set of independent lookups, so one unknown or unreachable ticker
         reports itself in ``errors`` instead of discarding the quotes that did work.
         """
-        pending, failures = self._normalize_batch(symbols)
-        errors: list[QuoteError] = [
-            QuoteError(symbol=raw, error=reason) for raw, reason in failures
-        ]
-        if not pending:
-            return QuoteResult(quotes=[], errors=errors)
+        pending, failures = _normalize_batch(symbols)
+        errors = [QuoteError(symbol=raw, error=reason) for raw, reason in failures]
         fetched = _fetch_concurrently(pending, self._quote_or_error, QUOTE_MAX_WORKERS)
         errors.extend(r for r in fetched if isinstance(r, QuoteError))
         return QuoteResult(quotes=[r for r in fetched if isinstance(r, Quote)], errors=errors)
@@ -285,24 +259,16 @@ class YFinanceClient:
     def _fetch_all_bars(self, symbol: str, period: str, interval: str) -> list[PriceBar]:
         """Fetch and parse the FULL (untruncated) OHLCV bars, dropping non-finite rows."""
         intraday = interval in _INTRADAY_INTERVALS
-        try:
+        no_history = f"No price history for '{symbol}'. Check the symbol/period/interval."
+        with _unavailable_on_error(f"Failed to fetch history for '{symbol}'"):
             df = self._ticker(symbol).history(period=period, interval=interval, auto_adjust=True)
-        except Exception as exc:  # surface any yfinance failure verbatim
-            raise DataUnavailable(f"Failed to fetch history for '{symbol}': {exc}") from exc
         if df is None or df.empty:
-            raise SymbolNotFound(
-                f"No price history for '{symbol}'. Check the symbol/period/interval."
-            )
-        try:
-            all_bars: list[PriceBar] = []
-            for idx, row in df.iterrows():
-                o, h, low, c, v = (
-                    float(row["Open"]),
-                    float(row["High"]),
-                    float(row["Low"]),
-                    float(row["Close"]),
-                    float(row["Volume"]),
-                )
+            raise SymbolNotFound(no_history)
+        all_bars: list[PriceBar] = []
+        with _unavailable_on_error(f"Failed to parse history for '{symbol}'"):
+            columns = [df[name] for name in ("Open", "High", "Low", "Close", "Volume")]
+            for idx, *values in zip(df.index, *columns, strict=True):
+                o, h, low, c, v = (float(x) for x in values)
                 if any(not math.isfinite(x) for x in (o, h, low, c, v)):
                     continue
                 all_bars.append(
@@ -310,15 +276,9 @@ class YFinanceClient:
                         date=_bar_date(idx, intraday), open=o, high=h, low=low, close=c, volume=v
                     )
                 )
-            if not all_bars:
-                raise SymbolNotFound(
-                    f"No price history for '{symbol}'. Check the symbol/period/interval."
-                )
-            return all_bars
-        except SymbolNotFound:
-            raise
-        except Exception as exc:  # surface any parsing failure verbatim
-            raise DataUnavailable(f"Failed to parse history for '{symbol}': {exc}") from exc
+        if not all_bars:
+            raise SymbolNotFound(no_history)
+        return all_bars
 
     def _fetch_history(self, symbol: str, period: str, interval: str) -> PriceHistory:
         all_bars = self._all_bars(symbol, period, interval)
@@ -362,7 +322,7 @@ class YFinanceClient:
         )
 
     def _compute_performance(
-        self, symbol: str, period: str, risk_free_rate: float = 0.0
+        self, symbol: str, period: str, risk_free_rate: float
     ) -> PerformanceStats:
         bars = self._all_bars(symbol, period, "1d")
         if len(bars) < 2:
@@ -377,8 +337,8 @@ class YFinanceClient:
         annualized_return: float | None = None
         annualized_volatility: float | None = None
         periods_per_year: float | None = None
-        # Every risk-adjusted figure is scaled by periods_per_year (Calmar needs the CAGR),
-        # so they all sit behind the same gate rather than falling back on a fixed 252.
+        # Every risk-adjusted figure needs periods_per_year (Calmar needs the CAGR), so they
+        # share the annualization gate.
         sharpe: float | None = None
         sortino: float | None = None
         downside: float | None = None
@@ -448,8 +408,7 @@ class YFinanceClient:
         tracking: float | None = None
         info_ratio: float | None = None
         # Beta and correlation are unit-free and need no calendar, so they are computed
-        # unconditionally; everything annualized sits behind the same 90-day gate
-        # analyze_performance uses.
+        # unconditionally; everything annualized shares analyze_performance's gate.
         asset_beta = analytics.beta(asset_closes, bench_closes)
         if elapsed_days >= MIN_ANNUALIZATION_DAYS:
             years = elapsed_days / analytics.DAYS_PER_YEAR
@@ -493,7 +452,7 @@ class YFinanceClient:
         already use, so a batch costs no more than calling them one at a time -- and one
         ticker's failure reports itself instead of discarding the rows that worked.
         """
-        pending, failures = self._normalize_batch(symbols)
+        pending, failures = _normalize_batch(symbols)
         errors = [ComparisonError(symbol=raw, error=reason) for raw, reason in failures]
         built = _fetch_concurrently(
             pending,
@@ -587,21 +546,17 @@ class YFinanceClient:
     ) -> FinancialStatement:
         attr = _FINANCIALS_ATTR[(statement, period)]
         ticker = self._ticker(symbol)
-        try:
+        with _unavailable_on_error(f"Failed to fetch {statement} statement for '{symbol}'"):
             df = getattr(ticker, attr)
-        except Exception as exc:  # surface any yfinance failure verbatim
-            raise DataUnavailable(
-                f"Failed to fetch {statement} statement for '{symbol}': {exc}"
-            ) from exc
         if df is None or df.empty:
             raise SymbolNotFound(
                 f"No {statement} statement available for '{symbol}'. It may be an ETF, index, or "
                 "other instrument without financial statements, or an invalid symbol."
             )
-        try:
+        with _unavailable_on_error(f"Failed to parse {statement} statement for '{symbol}'"):
             period_ends = [col.date().isoformat() for col in df.columns]
             line_items: dict[str, list[float | None]] = {
-                str(idx): [_opt(v) for v in row] for idx, row in df.iterrows()
+                str(idx): [_opt(v) for v in values] for idx, *values in df.itertuples(name=None)
             }
             return FinancialStatement(
                 symbol=symbol,
@@ -611,10 +566,6 @@ class YFinanceClient:
                 period_ends=period_ends,
                 line_items=line_items,
             )
-        except Exception as exc:  # surface any parsing failure verbatim
-            raise DataUnavailable(
-                f"Failed to parse {statement} statement for '{symbol}': {exc}"
-            ) from exc
 
     def _statement_currency(self, symbol: str, ticker: Any) -> str | None:
         """The currency a statement is reported in, cached per symbol.
@@ -642,7 +593,8 @@ class YFinanceClient:
 
     def _fetch_profile(self, symbol: str) -> CompanyProfile:
         ticker, info = self._ticker_with_info(symbol, "profile", "profile")
-        try:
+        # Also covers the dividends/splits reads, which are separate Yahoo requests.
+        with _unavailable_on_error(f"Failed to parse profile for '{symbol}'"):
             return CompanyProfile(
                 symbol=symbol,
                 name=info.get("longName") or info.get("shortName"),
@@ -661,8 +613,6 @@ class YFinanceClient:
                 recent_dividends=_dividend_events(ticker.dividends, limit=8),
                 splits=_split_events(ticker.splits),
             )
-        except Exception as exc:  # surface any parsing failure verbatim
-            raise DataUnavailable(f"Failed to parse profile for '{symbol}': {exc}") from exc
 
     def get_key_metrics(self, symbol: str) -> KeyMetrics:
         symbol = _norm(symbol)
@@ -672,7 +622,7 @@ class YFinanceClient:
 
     def _fetch_metrics(self, symbol: str) -> KeyMetrics:
         _, info = self._ticker_with_info(symbol, "metrics", "metrics")
-        try:
+        with _unavailable_on_error(f"Failed to parse metrics for '{symbol}'"):
             return KeyMetrics(
                 symbol=symbol,
                 currency=info.get("currency"),
@@ -703,8 +653,6 @@ class YFinanceClient:
                 revenue_per_share=_opt(info.get("revenuePerShare")),
                 book_value=_opt(info.get("bookValue")),
             )
-        except Exception as exc:  # surface any mapping failure verbatim
-            raise DataUnavailable(f"Failed to parse metrics for '{symbol}': {exc}") from exc
 
     def get_analyst_data(self, symbol: str) -> AnalystData:
         symbol = _norm(symbol)
@@ -716,22 +664,22 @@ class YFinanceClient:
 
     def _fetch_analyst(self, symbol: str) -> AnalystData:
         ticker, info = self._ticker_with_info(symbol, "analyst data", "analyst")
-        try:
+        parse_failed = f"Failed to parse analyst data for '{symbol}'"
+        with _unavailable_on_error(parse_failed):
             mean = _opt(info.get("recommendationMean"))
             analysts = _opt_int(info.get("numberOfAnalystOpinions"))
             target_mean = _opt(info.get("targetMeanPrice"))
             target_median = _opt(info.get("targetMedianPrice"))
             target_high = _opt(info.get("targetHighPrice"))
             target_low = _opt(info.get("targetLowPrice"))
-        except Exception as exc:  # non-numeric values from the source
-            raise DataUnavailable(f"Failed to parse analyst data for '{symbol}': {exc}") from exc
         targets = (target_mean, target_median, target_high, target_low)
         if mean is None and analysts is None and all(t is None for t in targets):
             raise DataUnavailable(
                 f"No analyst coverage for '{symbol}'. It may be an ETF, index, or other "
                 "instrument without sell-side analyst data."
             )
-        try:
+        # Also covers the recommendations read, which is a separate Yahoo request.
+        with _unavailable_on_error(parse_failed):
             return AnalystData(
                 symbol=symbol,
                 currency=info.get("currency"),
@@ -745,8 +693,6 @@ class YFinanceClient:
                 target_low_price=target_low,
                 recommendation_trend=_recommendation_trend(ticker.recommendations),
             )
-        except Exception as exc:  # surface any parsing failure verbatim
-            raise DataUnavailable(f"Failed to parse analyst data for '{symbol}': {exc}") from exc
 
     def get_news(self, symbol: str, count: int = 10) -> NewsResult:
         symbol = _norm(symbol)
@@ -757,10 +703,8 @@ class YFinanceClient:
         )
 
     def _fetch_news(self, symbol: str, count: int) -> NewsResult:
-        try:
+        with _unavailable_on_error(f"Failed to fetch news for '{symbol}'"):
             items = self._ticker(symbol).get_news(count=count, tab="news")
-        except Exception as exc:  # a failed news fetch is a data issue, not a missing symbol
-            raise DataUnavailable(f"Failed to fetch news for '{symbol}': {exc}") from exc
         if not items:
             # An empty stream is ambiguous: yfinance turns a 500 from the news endpoint into
             # an empty list, so an outage is indistinguishable from a symbol with no
@@ -769,11 +713,9 @@ class YFinanceClient:
             return NewsResult(
                 symbol=symbol, articles=self._search_news(symbol, count), source="search"
             )
-        try:
+        with _unavailable_on_error(f"Failed to parse news for '{symbol}'"):
             articles = [a for a in (_news_article(it) for it in items) if a is not None][:count]
             return NewsResult(symbol=symbol, articles=articles, source="ticker")
-        except Exception as exc:  # surface any parsing failure verbatim
-            raise DataUnavailable(f"Failed to parse news for '{symbol}': {exc}") from exc
 
     def _search_news(self, symbol: str, count: int) -> list[NewsArticle]:
         """News for `symbol` from the search endpoint, or none if it cannot supply any.
@@ -787,9 +729,8 @@ class YFinanceClient:
             found = self._search(symbol, max_results=1, news_count=count, lists_count=0).news
         except Exception:
             return []
-        return [a for a in (_search_news_article(it) for it in found or []) if a is not None][
-            :count
-        ]
+        articles = (_search_news_article(item) for item in found or [])
+        return [a for a in articles if a is not None][:count]
 
     def search_symbols(self, query: str, max_results: int = 8) -> SymbolSearchResult:
         return self._cached(
@@ -799,18 +740,33 @@ class YFinanceClient:
         )
 
     def _fetch_search(self, query: str, max_results: int) -> SymbolSearchResult:
-        try:
+        with _unavailable_on_error(f"Search failed for '{query}'"):
             result = self._search(query, max_results=max_results, news_count=0, lists_count=0)
             quotes = result.quotes
-        except Exception as exc:  # a failed search is a data issue, not a missing symbol
-            raise DataUnavailable(f"Search failed for '{query}': {exc}") from exc
         if not quotes:
             return SymbolSearchResult(query=query, matches=[])
-        try:
+        with _unavailable_on_error(f"Failed to parse search results for '{query}'"):
             matches = [_symbol_match(q) for q in quotes if q.get("symbol")]
             return SymbolSearchResult(query=query, matches=matches)
-        except Exception as exc:  # surface any parsing failure verbatim
-            raise DataUnavailable(f"Failed to parse search results for '{query}': {exc}") from exc
+
+
+def _normalize_batch(symbols: list[str]) -> tuple[list[str], list[tuple[str, str]]]:
+    """Normalize and de-duplicate a batch in request order.
+
+    Returns the symbols to fetch and a (raw, reason) pair for each one that could not be
+    normalized, which therefore never reaches the network.
+    """
+    pending: list[str] = []
+    failures: list[tuple[str, str]] = []
+    for raw in symbols:
+        try:
+            symbol = _norm(raw)
+        except DataUnavailable as exc:
+            failures.append((raw, str(exc)))
+            continue
+        if symbol not in pending:
+            pending.append(symbol)
+    return pending, failures
 
 
 def _fetch_concurrently[T](
@@ -935,27 +891,38 @@ def _data_error(exc: Exception, fetch_label: str, kind: str, symbol: str) -> Dat
     return DataUnavailable(f"Failed to fetch {fetch_label} for '{symbol}': {exc}")
 
 
+@contextmanager
+def _unavailable_on_error(message: str) -> Iterator[None]:
+    """Re-raise any failure in the block as DataUnavailable("<message>: <error>").
+
+    yfinance and the payloads it returns fail in more ways than can be enumerated, so the
+    underlying error text is passed on for the caller to read.
+    """
+    try:
+        yield
+    except Exception as exc:
+        raise DataUnavailable(f"{message}: {exc}") from exc
+
+
 def _no_data_msg(kind: str, symbol: str) -> str:
-    """Single source of truth for the 'symbol has no usable data' message."""
+    """The message for a symbol with no usable data."""
     return f"No {kind} data for '{symbol}'. The symbol may be invalid or delisted."
 
 
 def _recommendation_trend(df: Any) -> list[RecommendationPeriod]:
     if df is None or len(df) == 0:
         return []
-    periods: list[RecommendationPeriod] = []
-    for row in df.to_dict("records"):
-        periods.append(
-            RecommendationPeriod(
-                period=str(row.get("period", "")),
-                strong_buy=_opt_int(row.get("strongBuy")) or 0,
-                buy=_opt_int(row.get("buy")) or 0,
-                hold=_opt_int(row.get("hold")) or 0,
-                sell=_opt_int(row.get("sell")) or 0,
-                strong_sell=_opt_int(row.get("strongSell")) or 0,
-            )
+    return [
+        RecommendationPeriod(
+            period=str(row.get("period", "")),
+            strong_buy=_opt_int(row.get("strongBuy")) or 0,
+            buy=_opt_int(row.get("buy")) or 0,
+            hold=_opt_int(row.get("hold")) or 0,
+            sell=_opt_int(row.get("sell")) or 0,
+            strong_sell=_opt_int(row.get("strongSell")) or 0,
         )
-    return periods
+        for row in df.to_dict("records")
+    ]
 
 
 def _symbol_match(q: dict[str, Any]) -> SymbolMatch:

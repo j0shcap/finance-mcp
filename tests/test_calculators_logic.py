@@ -524,12 +524,11 @@ def test_mirr_invalid_rate_raises() -> None:
         mirr([-100.0, 200.0], finance_rate=-1.0, reinvest_rate=0.1)
 
 
-# --- guard / defensive-branch coverage (option b) ---
+# --- guards and edge cases ---
 
 
 def test_rate_solve_large_nper_no_overflow() -> None:
-    # Regression: solving a 360-period rate must not overflow (1+10)**360 used to raise
-    # OverflowError; searching from high=1.0 keeps it finite. 200k @ 1199.101/mo -> 0.5%/mo.
+    # The rate search must not overflow on (1 + r)**360. 200k @ 1199.101/mo -> 0.5%/mo.
     result = time_value_of_money(solve_for="rate", pv=200000.0, fv=0.0, pmt=-1199.101, nper=360.0)
     assert result.solved_value == pytest.approx(0.005, rel=1e-3)
 
@@ -565,8 +564,7 @@ def test_nper_general_no_solution_raises() -> None:
 
 
 def test_irr_within_extended_range() -> None:
-    # IRR = 999/period (99,900%) is past the old 1000% cap but inside the log-spaced
-    # tail, so it is now found instead of reported as non-existent.
+    # IRR = 999/period (99,900%) lies in the log-spaced tail of the search grid.
     assert irr([-1.0, 1000.0]).irr == pytest.approx(999.0, rel=1e-9)
 
 
@@ -643,9 +641,8 @@ def test_npv_extreme_rate_ignores_zero_cashflows_in_underflow_region() -> None:
 
 
 def test_irr_long_monthly_series_matches_annuity_solution() -> None:
-    # A 30-year monthly IRR is valid input; the root finder evaluates npv near rate == -1,
-    # which previously raised ZeroDivisionError. Expected value derived independently from
-    # the ordinary-annuity equation 100000 = 800 * (1 - (1+r)^-360)/r  ->  r = 0.00744641.
+    # The root finder evaluates npv near rate == -1, where (1 + r)**360 underflows. Expected
+    # value from the annuity equation 100000 = 800 * (1 - (1+r)^-360)/r  ->  r = 0.00744641.
     cashflows = [-100000.0] + [800.0] * 360
     result = irr(cashflows)
     assert result.irr == pytest.approx(0.00744641, rel=1e-5)

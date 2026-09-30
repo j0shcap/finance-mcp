@@ -191,18 +191,15 @@ def _require(name: str, value: float | None) -> float:
     return value
 
 
-def _require_rate(rate: float) -> float:
+def _require_rate(rate: float) -> None:
     """Reject per-period rates at or below -100%, which the TVM equation cannot express.
 
     At rate == -1 the growth factor (1+rate)**nper is exactly 0 — ``_pv`` divides by it
     and ``_nper`` takes log(1+rate) = log(0). Below -1 the base is negative, so a
     fractional ``nper`` produces a complex number that the result model cannot hold.
-    Every rate-taking calculator here (npv, xnpv, mirr, convert_rate) already requires
-    rate > -1; this keeps TVM consistent with them.
     """
     if rate <= -1.0:
         raise InvalidInput("rate must be greater than -1 (-100%) per period.")
-    return rate
 
 
 def _fv(pv: float, pmt: float, rate: float, nper: float, due: bool = False) -> float:
@@ -279,6 +276,16 @@ def _rate(pv: float, fv: float, pmt: float, nper: float, due: bool = False) -> f
     return _bisect(lambda r: _fv(pv, pmt, r, nper, due) - fv, high=1.0)
 
 
+# Each solver takes the other four TVM variables as keyword arguments named like the fields.
+_TVM_SOLVERS: dict[TVMVariable, Callable[..., float]] = {
+    "fv": _fv,
+    "pv": _pv,
+    "pmt": _pmt,
+    "nper": _nper,
+    "rate": _rate,
+}
+
+
 def time_value_of_money(
     solve_for: TVMVariable,
     pv: float | None = None,
@@ -295,67 +302,15 @@ def time_value_of_money(
     future value, annuity payments, period count, and CAGR (solve for ``rate`` with
     ``pmt=0``). ``when`` selects end- or begin-of-period payments (begin = annuity-due).
     """
-    due = when == "begin"
-    pmt_known = 0.0 if (pmt is None and solve_for != "pmt") else pmt
-
-    if solve_for == "fv":
-        value = _fv(
-            _require("pv", pv),
-            _require("pmt", pmt_known),
-            _require_rate(_require("rate", rate)),
-            _require("nper", nper),
-            due,
-        )
-    elif solve_for == "pv":
-        value = _pv(
-            _require("fv", fv),
-            _require("pmt", pmt_known),
-            _require_rate(_require("rate", rate)),
-            _require("nper", nper),
-            due,
-        )
-    elif solve_for == "pmt":
-        value = _pmt(
-            _require("pv", pv),
-            _require("fv", fv),
-            _require_rate(_require("rate", rate)),
-            _require("nper", nper),
-            due,
-        )
-    elif solve_for == "nper":
-        value = _nper(
-            _require("pv", pv),
-            _require("fv", fv),
-            _require("pmt", pmt_known),
-            _require_rate(_require("rate", rate)),
-            due,
-        )
-    else:  # rate
-        value = _rate(
-            _require("pv", pv),
-            _require("fv", fv),
-            _require("pmt", pmt_known),
-            _require("nper", nper),
-            due,
-        )
-
-    resolved: dict[str, float | None] = {
-        "pv": pv,
-        "fv": fv,
-        "pmt": pmt_known,
-        "rate": rate,
-        "nper": nper,
-    }
-    resolved[solve_for] = value
-    return TVMResult(
-        solved_for=solve_for,
-        solved_value=value,
-        pv=resolved["pv"] if resolved["pv"] is not None else 0.0,
-        fv=resolved["fv"] if resolved["fv"] is not None else 0.0,
-        pmt=resolved["pmt"] if resolved["pmt"] is not None else 0.0,
-        rate=resolved["rate"] if resolved["rate"] is not None else 0.0,
-        nper=resolved["nper"] if resolved["nper"] is not None else 0.0,
-    )
+    given = {"pv": pv, "fv": fv, "pmt": 0.0 if pmt is None else pmt, "rate": rate, "nper": nper}
+    del given[solve_for]
+    known: dict[str, float] = {}
+    for name, value in given.items():
+        known[name] = _require(name, value)
+        if name == "rate":
+            _require_rate(known[name])
+    solved = _TVM_SOLVERS[solve_for](**known, due=when == "begin")
+    return TVMResult(solved_for=solve_for, solved_value=solved, **known, **{solve_for: solved})
 
 
 def loan_schedule(
@@ -415,18 +370,14 @@ def loan_schedule(
     total_paid = 0.0
     total_interest = 0.0
     period = 0
-    # Guard against non-terminating loops; term_months is the natural upper bound.
     while balance > 1e-9 and period < term_months:
         period += 1
         interest = balance * monthly_rate
         scheduled = payment + extra_payment
         principal_paid = scheduled - interest
         if principal_paid >= balance or period == term_months:
-            # Final payment. The period check matters even when the scheduled payment
-            # would not otherwise finish the loan: accumulated float error can leave a
-            # tiny residual balance after the last scheduled period, which would
-            # otherwise go unpaid. By construction the payment was solved from this
-            # principal, rate, and term, so the residual absorbed here is only noise.
+            # Last payment. Checking the period too clears the float residue that can
+            # remain after the final scheduled payment.
             principal_paid = balance
             scheduled = principal_paid + interest
         balance -= principal_paid
@@ -439,7 +390,7 @@ def loan_schedule(
                     payment=round(scheduled, 2),
                     principal=round(principal_paid, 2),
                     interest=round(interest, 2),
-                    balance=round(max(balance, 0.0), 2),
+                    balance=round(balance, 2),
                 )
             )
 
@@ -455,13 +406,10 @@ def loan_schedule(
 def _discount_sum(rate: float, terms: Iterable[tuple[float, float]]) -> float:
     """Sum ``cash / (1 + rate)**exp`` over ``(cash, exp)`` terms, robust near rate == -1.
 
-    The discount factor ``(1 + rate)**exp`` overflows for large ``exp`` (the term then
-    decays toward 0) and underflows to ``0.0`` as ``rate`` approaches -1 (the term is then
-    infinite). The IRR/XIRR root-finders evaluate present value at the bracket low end
-    (rate ~ -1), so a naive ``cash / 0.0`` raised ZeroDivisionError on otherwise-valid long
-    cashflow series. Here an overflowed term contributes 0 and an underflowed term
-    contributes a signed infinity (the largest-exponent term dominates the limit), so the
-    present value stays well-signed and the root scan converges instead of crashing.
+    The IRR root scan starts just above rate == -1, where ``(1 + rate)**exp`` can underflow
+    to 0 or, for large ``exp``, overflow. An overflowed term contributes 0; underflowed
+    terms make the sum infinite, signed by the largest-exponent one, which dominates the
+    limit. Either way the result stays well-signed for the root scan.
 
     ``rate`` must be > -1, so ``base`` is positive and the power is always real.
     """
@@ -483,6 +431,11 @@ def _discount_sum(rate: float, terms: Iterable[tuple[float, float]]) -> float:
     return math.copysign(math.inf, dominant_sign) if dominant_sign != 0 else total
 
 
+def _npv_terms(cashflows: list[float]) -> list[tuple[float, float]]:
+    """``(amount, period)`` terms with cashflows[0] at period 0."""
+    return [(cash, float(period)) for period, cash in enumerate(cashflows)]
+
+
 def npv(rate: float, cashflows: list[float]) -> NPVResult:
     """Net present value of equally-spaced cashflows, with cashflows[0] at t=0 (undiscounted).
 
@@ -493,8 +446,7 @@ def npv(rate: float, cashflows: list[float]) -> NPVResult:
         raise InvalidInput("cashflows must not be empty.")
     if rate <= -1.0:
         raise InvalidInput("rate must be greater than -1 (-100%).")
-    total = _discount_sum(rate, ((cash, float(period)) for period, cash in enumerate(cashflows)))
-    return NPVResult(rate=rate, npv=total)
+    return NPVResult(rate=rate, npv=_discount_sum(rate, _npv_terms(cashflows)))
 
 
 def _has_sign_change(values: list[float]) -> bool:
@@ -513,7 +465,8 @@ def irr(cashflows: list[float]) -> IRRResult:
         raise InvalidInput("irr needs at least two cashflows.")
     if not _has_sign_change(cashflows):
         raise InvalidInput("irr needs at least one sign change in the cashflows.")
-    roots = _find_all_roots(lambda r: npv(r, cashflows).npv)
+    terms = _npv_terms(cashflows)
+    roots = _find_all_roots(lambda r: _discount_sum(r, terms))
     if not roots:
         raise InvalidInput(
             "No internal rate of return exists in (-100%, 1,000,000%]; consider mirr()."
@@ -551,6 +504,12 @@ def mirr(cashflows: list[float], finance_rate: float, reinvest_rate: float) -> M
     return MIRRResult(mirr=result, finance_rate=finance_rate, reinvest_rate=reinvest_rate)
 
 
+def _xnpv_terms(cashflows: list[DatedCashflow]) -> list[tuple[float, float]]:
+    """``(amount, years)`` terms on Actual/365 from the earliest cashflow date."""
+    base = min(cf.date for cf in cashflows)
+    return [(cf.amount, (cf.date - base).days / 365.0) for cf in cashflows]
+
+
 def xnpv(rate: float, cashflows: list[DatedCashflow]) -> NPVResult:
     """Net present value of dated cashflows; base date is the earliest, 365-day basis.
 
@@ -565,8 +524,7 @@ def xnpv(rate: float, cashflows: list[DatedCashflow]) -> NPVResult:
         raise InvalidInput("cashflows must not be empty.")
     if rate <= -1.0:
         raise InvalidInput("rate must be greater than -1 (-100%).")
-    base = min(cf.date for cf in cashflows)
-    total = _discount_sum(rate, ((cf.amount, (cf.date - base).days / 365.0) for cf in cashflows))
+    total = _discount_sum(rate, _xnpv_terms(cashflows))
     return NPVResult(rate=rate, npv=total)
 
 
@@ -579,7 +537,8 @@ def xirr(cashflows: list[DatedCashflow]) -> IRRResult:
         raise InvalidInput("xirr needs at least two cashflows.")
     if not _has_sign_change([cf.amount for cf in cashflows]):
         raise InvalidInput("xirr needs at least one sign change in the cashflows.")
-    roots = _find_all_roots(lambda r: xnpv(r, cashflows).npv)
+    terms = _xnpv_terms(cashflows)
+    roots = _find_all_roots(lambda r: _discount_sum(r, terms))
     if not roots:
         raise InvalidInput(
             "No internal rate of return exists in (-100%, 1,000,000%]; consider mirr()."
@@ -803,8 +762,7 @@ def _bond_metrics(
 
     The price returned is the DIRTY price: the present value of every remaining cashflow,
     which is the cash a buyer pays. On a coupon date nothing has accrued and these collapse
-    exactly to the on-coupon formulas -- which is why ``bond_price`` can delegate here
-    without moving any of its numbers.
+    exactly to the on-coupon formulas ``bond_price`` needs.
 
     Macaulay duration is ``-(1+y)/P * dP/dy`` expressed in years and modified duration is
     ``-(1/P) * dP/dY`` for the annual yield ``Y``, which is why ``modified = macaulay/(1+y)``
@@ -815,6 +773,42 @@ def _bond_metrics(
     dirty, macaulay_periods, convexity_periods = branch(face, coupon, y, n, first_fraction)
     macaulay = macaulay_periods / frequency
     return dirty, macaulay, macaulay / (1.0 + y), convexity_periods / frequency**2
+
+
+def _require_bond_yield(ytm: float, frequency: int) -> None:
+    """Reject yields the periodic discount base cannot express.
+
+    Pricing only needs ``1 + ytm/frequency > 0``, so the bound is ytm > -frequency, not -1.
+    """
+    if 1.0 + ytm / frequency <= 0.0:
+        raise InvalidInput(
+            "ytm must be greater than -frequency so that 1 + ytm/frequency is positive "
+            f"(got ytm={ytm} with frequency={frequency})."
+        )
+
+
+def _require_bond_terms(face: float, years_to_maturity: float, frequency: int) -> None:
+    if face <= 0.0:
+        raise InvalidInput("face must be positive.")
+    if frequency < 1:
+        raise InvalidInput("frequency must be at least 1.")
+    if years_to_maturity <= 0.0:
+        raise InvalidInput("years_to_maturity must be positive.")
+
+
+def _coupon_periods(years_to_maturity: float, frequency: int) -> int:
+    """The number of whole coupon periods to maturity, for a bond priced on a coupon date."""
+    periods = years_to_maturity * frequency
+    n = round(periods)
+    if abs(periods - n) > 1e-9:
+        raise InvalidInput(
+            "years_to_maturity * frequency must be a whole number of coupon periods "
+            f"(got {periods}); this calculator prices on a coupon date only. Choose a "
+            "maturity that lands on a coupon date (a multiple of 1/frequency)."
+        )
+    if n < 1:
+        raise InvalidInput("years_to_maturity * frequency must be at least one period.")
+    return n
 
 
 def bond_price(
@@ -834,30 +828,9 @@ def bond_price(
     first period (on a coupon date the clean and dirty prices coincide). Therefore
     ``years_to_maturity * frequency`` must be a whole number of coupon periods.
     """
-    if face <= 0.0:
-        raise InvalidInput("face must be positive.")
-    if frequency < 1:
-        raise InvalidInput("frequency must be at least 1.")
-    if years_to_maturity <= 0.0:
-        raise InvalidInput("years_to_maturity must be positive.")
-    if 1.0 + ytm / frequency <= 0.0:
-        # The pricing loop only needs a positive discount base (1 + ytm/frequency);
-        # the binding constraint is ytm > -frequency, not ytm > -1.
-        raise InvalidInput(
-            "ytm must be greater than -frequency so that 1 + ytm/frequency is positive "
-            f"(got ytm={ytm} with frequency={frequency})."
-        )
-
-    periods = years_to_maturity * frequency
-    n = round(periods)
-    if abs(periods - n) > 1e-9:
-        raise InvalidInput(
-            "years_to_maturity * frequency must be a whole number of coupon periods "
-            f"(got {periods}); this calculator prices on a coupon date only. Choose a "
-            "maturity that lands on a coupon date (a multiple of 1/frequency)."
-        )
-    if n < 1:
-        raise InvalidInput("years_to_maturity * frequency must be at least one period.")
+    _require_bond_terms(face, years_to_maturity, frequency)
+    _require_bond_yield(ytm, frequency)
+    n = _coupon_periods(years_to_maturity, frequency)
     price, macaulay, modified, convexity = _bond_metrics(
         face=face, coupon_rate=coupon_rate, frequency=frequency, y=ytm / frequency, n=n
     )
@@ -924,16 +897,6 @@ def _dated_terms(
     return previous, next_coupon, periods, accrued_days, period_days
 
 
-def _require_bond_yield(ytm: float, frequency: int) -> float:
-    """Reject yields the periodic discount base cannot express (same rule as bond_price)."""
-    if 1.0 + ytm / frequency <= 0.0:
-        raise InvalidInput(
-            "ytm must be greater than -frequency so that 1 + ytm/frequency is positive "
-            f"(got ytm={ytm} with frequency={frequency})."
-        )
-    return ytm
-
-
 def bond_price_dated(
     settlement: datetime.date,
     maturity: datetime.date,
@@ -959,8 +922,8 @@ def bond_price_dated(
     ``first_period_discount="simple"`` here.
 
     Returns the clean and dirty prices (per ``face`` and per 100), the accrued interest,
-    and duration/convexity computed with the fractional first period under the standard
-    street convention -- the part period is compounded, ``(1+y)**(DSC/E)``.
+    and duration/convexity computed with the fractional first period discounted per
+    ``first_period_discount``: compounded, ``(1+y)**(DSC/E)``, by default.
 
     Assumes a regular schedule: every coupon period is a whole ``12 / frequency`` months.
     Bonds with an odd (long or short) first or last coupon period are out of scope, and
@@ -1034,8 +997,10 @@ def bond_ytm(
     """
     if price <= 0.0:
         raise InvalidInput("price must be positive.")
+    _require_bond_terms(face, years_to_maturity, frequency)
+    n = _coupon_periods(years_to_maturity, frequency)
     rate = _bisect(
-        lambda y: bond_price(face, coupon_rate, years_to_maturity, y, frequency).price - price
+        lambda y: _bond_metrics(face, coupon_rate, frequency, y / frequency, n)[0] - price
     )
     return BondYTM(yield_to_maturity=rate)
 
@@ -1057,10 +1022,8 @@ def bond_ytm_dated(
     implied by the coupon schedule is returned alongside, so the caller also sees the dirty
     price -- the cash actually paid.
 
-    As with ``bond_ytm``, the search starts just above -100%, so this finds yields > -1 only
-    -- narrower than the range ``bond_price_dated`` can price (ytm > -frequency). Yields
-    that deeply negative have no market interpretation, and restricting the bracket keeps
-    the solve robust.
+    As with ``bond_ytm``, only yields > -1 are searched, although ``bond_price_dated`` can
+    price down to ytm > -frequency.
     """
     if clean_price <= 0.0:
         raise InvalidInput("clean_price must be positive.")

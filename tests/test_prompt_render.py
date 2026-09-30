@@ -48,7 +48,7 @@ def test_render_requires_every_prompt_to_point_at_conventions_and_end_with_the_d
         render("{x} {conventions_uri} with no disclaimer", x="1")
 
 
-def test_disclaimer_is_the_text_analyze_stock_has_always_ended_with() -> None:
+def test_disclaimer_wording() -> None:
     assert DISCLAIMER == (
         "Disclaimer: This is quantitative analysis for research purposes, not investment "
         "advice. Always do your own due diligence."

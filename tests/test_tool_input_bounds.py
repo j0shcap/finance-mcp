@@ -4,7 +4,7 @@ Each test that rejects an argument also asserts the data layer was never reached
 is the point of validating at the boundary: a malformed ticker should cost nothing.
 """
 
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
@@ -14,32 +14,19 @@ from fastmcp.exceptions import ToolError
 
 from finance_mcp.server import create_server
 from finance_mcp.tools._inputs import MAX_CASHFLOWS, MAX_COMPARE_TICKERS, TICKER_PATTERN
-from tests.conftest import fake_search_factory, fake_ticker_factory, make_client
-
-
-def recording_factory(calls: list[str], **kwargs: Any) -> Callable[[str], Any]:
-    """A ticker factory that records every symbol the data layer actually fetched."""
-    inner = fake_ticker_factory(**kwargs)
-
-    def factory(symbol: str) -> Any:
-        calls.append(symbol)
-        return inner(symbol)
-
-    return factory
+from tests.fakes import counting, fake_ticker_factory, make_client
 
 
 @pytest.fixture
 async def fetches() -> AsyncIterator[tuple[Client[FastMCPTransport], list[str]]]:
     """A client over a fake data layer, plus the list of symbols it was asked to fetch."""
-    calls: list[str] = []
-    factory = recording_factory(
-        calls,
-        info={"longName": "Some Instrument", "currency": "USD"},
-        fast_info={"last_price": 190.0, "currency": "USD"},
+    factory, calls = counting(
+        fake_ticker_factory(
+            info={"longName": "Some Instrument", "currency": "USD"},
+            fast_info={"last_price": 190.0, "currency": "USD"},
+        )
     )
-    server = create_server(
-        make_client(factory=factory, search_factory=fake_search_factory(quotes=[]))
-    )
+    server = create_server(make_client(factory))
     async with Client(server) as client:
         yield client, calls
 

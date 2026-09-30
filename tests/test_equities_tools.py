@@ -8,8 +8,9 @@ from yfinance.exceptions import YFException
 
 from finance_mcp.data.errors import DataUnavailable
 from finance_mcp.server import create_server
-from tests.conftest import (
-    fake_search_factory,
+from tests.fakes import (
+    QUOTE_FI,
+    FakeSearch,
     fake_symbol_ticker_factory,
     fake_ticker_factory,
     make_client,
@@ -29,18 +30,6 @@ FULL_INFO = {
     "currency": "USD",
     "marketCap": 4.5e12,
     "trailingPE": 37.7,
-}
-
-QUOTE_FI = {
-    "last_price": 190.0,
-    "previous_close": 188.0,
-    "day_high": 191.0,
-    "day_low": 187.0,
-    "year_high": 200.0,
-    "year_low": 150.0,
-    "market_cap": 3.0e12,
-    "currency": "USD",
-    "last_volume": 50_000_000,
 }
 
 
@@ -236,7 +225,7 @@ async def test_search_symbols_tool() -> None:
     ]
     server = create_server(
         yf_client=make_client(
-            factory=fake_ticker_factory(), search_factory=fake_search_factory(quotes=quotes)
+            factory=fake_ticker_factory(), search_factory=FakeSearch(quotes=quotes)
         )
     )
     async with Client(server) as client:
@@ -246,11 +235,7 @@ async def test_search_symbols_tool() -> None:
 
 
 async def test_search_symbols_tool_empty_is_not_error() -> None:
-    server = create_server(
-        yf_client=make_client(
-            factory=fake_ticker_factory(), search_factory=fake_search_factory(quotes=[])
-        )
-    )
+    server = create_server(yf_client=make_client(factory=fake_ticker_factory()))
     async with Client(server) as client:
         result = await client.call_tool("search_symbols", {"query": "zzzznope"})
         assert result.data.matches == []
@@ -260,7 +245,7 @@ async def test_search_symbols_tool_surfaces_error() -> None:
     server = create_server(
         yf_client=make_client(
             factory=fake_ticker_factory(),
-            search_factory=fake_search_factory(error=RuntimeError("yahoo: search down")),
+            search_factory=FakeSearch(error=RuntimeError("yahoo: search down")),
         )
     )
     async with Client(server) as client:

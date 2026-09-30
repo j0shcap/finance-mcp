@@ -1,7 +1,4 @@
-"""Mocked-client tests for the benchmark comparison and the multi-ticker table.
-
-Kept out of test_yfinance_client.py, which is already past 2 000 lines.
-"""
+"""YFinanceClient.compare_to_benchmark and compare_tickers."""
 
 import math
 import threading
@@ -12,15 +9,10 @@ import pytest
 from finance_mcp.data import analytics
 from finance_mcp.data.errors import DataUnavailable, InvalidInput
 from finance_mcp.data.models import BenchmarkComparison
-from finance_mcp.data.yfinance_client import YFinanceClient
-from tests.conftest import FakeClock, fake_multi_ticker_factory, make_history_df
+from tests.fakes import fake_multi_ticker_factory, make_client, make_history_df
 
-# 200 consecutive calendar days from 2024-01-01, so both legs clear the 90-day gate.
+# 200 consecutive calendar days from 2024-01-01, so both legs clear the annualization gate.
 DAYS = 200
-
-
-def _client(**kwargs: Any) -> YFinanceClient:
-    return YFinanceClient(time_fn=FakeClock(), **kwargs)
 
 
 def _walk(seed: float, step: float, wobble: float, n: int = DAYS) -> list[float]:
@@ -42,7 +34,7 @@ def _compare(
             "SPY": {"history_df": make_history_df(bench_closes, freq=bench_freq)},
         }
     )
-    return _client(ticker_factory=factory).compare_to_benchmark("AAPL", "SPY", "1y", risk_free_rate)
+    return make_client(factory).compare_to_benchmark("AAPL", "SPY", "1y", risk_free_rate)
 
 
 def test_compare_to_benchmark_reports_the_relative_statistics() -> None:
@@ -121,7 +113,7 @@ def test_compare_to_benchmark_needs_two_overlapping_dates() -> None:
         }
     )
     with pytest.raises(DataUnavailable, match="overlapping"):
-        _client(ticker_factory=factory).compare_to_benchmark("AAPL", "SPY", "5d", 0.0)
+        make_client(factory).compare_to_benchmark("AAPL", "SPY", "5d", 0.0)
 
 
 def test_compare_to_benchmark_with_no_shared_dates_names_both_symbols() -> None:
@@ -132,13 +124,13 @@ def test_compare_to_benchmark_with_no_shared_dates_names_both_symbols() -> None:
         }
     )
     with pytest.raises(DataUnavailable) as excinfo:
-        _client(ticker_factory=factory).compare_to_benchmark("AAPL", "SPY", "1y", 0.0)
+        make_client(factory).compare_to_benchmark("AAPL", "SPY", "1y", 0.0)
     assert "AAPL" in str(excinfo.value) and "SPY" in str(excinfo.value)
 
 
 def test_compare_to_benchmark_nulls_annualized_figures_on_a_short_overlap() -> None:
     asset, bench = _walk(100.0, 0.30, 2.0, n=30), _walk(400.0, 0.80, 4.0, n=30)
-    result = _compare(asset, bench)  # 30 calendar days: under the 90-day gate
+    result = _compare(asset, bench)  # 30 calendar days: under the annualization gate
     assert result.periods_per_year is None
     assert result.annualized_return_percent is None
     assert result.benchmark_annualized_return_percent is None
@@ -166,7 +158,7 @@ def test_compare_to_benchmark_rejects_comparing_a_symbol_to_itself() -> None:
         {"SPY": {"history_df": make_history_df(_walk(400.0, 0.8, 4.0))}}
     )
     with pytest.raises(InvalidInput, match="two different"):
-        _client(ticker_factory=factory).compare_to_benchmark("SPY", "spy", "1y", 0.0)
+        make_client(factory).compare_to_benchmark("SPY", "spy", "1y", 0.0)
 
 
 def test_compare_to_benchmark_propagates_an_unknown_benchmark() -> None:
@@ -174,7 +166,7 @@ def test_compare_to_benchmark_propagates_an_unknown_benchmark() -> None:
         {"AAPL": {"history_df": make_history_df(_walk(100.0, 0.3, 2.0))}}
     )
     with pytest.raises(DataUnavailable):
-        _client(ticker_factory=factory).compare_to_benchmark("AAPL", "NOPE", "1y", 0.0)
+        make_client(factory).compare_to_benchmark("AAPL", "NOPE", "1y", 0.0)
 
 
 def test_compare_to_benchmark_normalizes_both_symbols() -> None:
@@ -184,7 +176,7 @@ def test_compare_to_benchmark_normalizes_both_symbols() -> None:
             "SPY": {"history_df": make_history_df(_walk(400.0, 0.80, 4.0))},
         }
     )
-    result = _client(ticker_factory=factory).compare_to_benchmark(" aapl ", "spy", "1y", 0.0)
+    result = make_client(factory).compare_to_benchmark(" aapl ", "spy", "1y", 0.0)
     assert (result.symbol, result.benchmark) == ("AAPL", "SPY")
 
 
@@ -199,7 +191,7 @@ def test_compare_to_benchmark_fetches_both_legs_concurrently() -> None:
         },
         gate=gate,
     )
-    result = _client(ticker_factory=factory).compare_to_benchmark("AAPL", "SPY", "1y", 0.0)
+    result = make_client(factory).compare_to_benchmark("AAPL", "SPY", "1y", 0.0)
     assert result.overlapping_observations == DAYS
 
 
@@ -227,7 +219,7 @@ def _rows_factory(**overrides: dict[str, Any]) -> Any:
 
 
 def test_compare_tickers_returns_one_row_per_ticker_in_request_order() -> None:
-    table = _client(ticker_factory=_rows_factory()).compare_tickers(["msft", " aapl "], "1y")
+    table = make_client(_rows_factory()).compare_tickers(["msft", " aapl "], "1y")
     assert [row.symbol for row in table.rows] == ["MSFT", "AAPL"]
     assert table.errors == []
     assert table.period == "1y"
@@ -235,7 +227,7 @@ def test_compare_tickers_returns_one_row_per_ticker_in_request_order() -> None:
 
 
 def test_compare_tickers_rows_carry_performance_and_valuation() -> None:
-    table = _client(ticker_factory=_rows_factory()).compare_tickers(["AAPL", "MSFT"], "1y")
+    table = make_client(_rows_factory()).compare_tickers(["AAPL", "MSFT"], "1y")
     row = table.rows[0]
     assert row.total_return_percent is not None
     assert row.annualized_volatility_percent is not None
@@ -259,7 +251,7 @@ def test_compare_tickers_rows_report_the_calendar_each_was_annualized_on() -> No
             "info": METRICS_INFO,
         }
     )
-    table = _client(ticker_factory=factory).compare_tickers(["AAPL", "MSFT"], "1y")
+    table = make_client(factory).compare_tickers(["AAPL", "MSFT"], "1y")
     crypto_like, equity_like = table.rows
     assert crypto_like.periods_per_year == pytest.approx(365.25, rel=0.02)
     assert equity_like.periods_per_year == pytest.approx(261.0, rel=0.02)
@@ -268,15 +260,15 @@ def test_compare_tickers_rows_report_the_calendar_each_was_annualized_on() -> No
 def test_compare_tickers_short_window_row_has_no_periods_per_year() -> None:
     """Under the annualization floor the row reports no calendar, matching its null ratios."""
     factory = _rows_factory(AAPL={"history_df": make_history_df(_walk(100.0, 0.3, 2.0, n=30))})
-    table = _client(ticker_factory=factory).compare_tickers(["AAPL"], "1mo")
+    table = make_client(factory).compare_tickers(["AAPL"], "1mo")
     row = table.rows[0]
     assert row.periods_per_year is None
     assert row.sharpe_ratio is None
 
 
 def test_compare_tickers_applies_the_risk_free_rate_to_every_row() -> None:
-    raw = _client(ticker_factory=_rows_factory()).compare_tickers(["AAPL", "MSFT"], "1y")
-    excess = _client(ticker_factory=_rows_factory()).compare_tickers(
+    raw = make_client(_rows_factory()).compare_tickers(["AAPL", "MSFT"], "1y")
+    excess = make_client(_rows_factory()).compare_tickers(
         ["AAPL", "MSFT"], "1y", risk_free_rate=0.05
     )
     assert excess.risk_free_rate == 0.05
@@ -285,14 +277,14 @@ def test_compare_tickers_applies_the_risk_free_rate_to_every_row() -> None:
 
 
 def test_compare_tickers_deduplicates_equivalent_spellings() -> None:
-    table = _client(ticker_factory=_rows_factory()).compare_tickers(["AAPL", "aapl"], "1y")
+    table = make_client(_rows_factory()).compare_tickers(["AAPL", "aapl"], "1y")
     assert [row.symbol for row in table.rows] == ["AAPL"]
 
 
 def test_compare_tickers_reports_a_failed_history_as_an_error_not_a_row() -> None:
     """The row's backbone is gone, so there is no row."""
     factory = _rows_factory(NOPE={"history_error": KeyError("exchangeTimezoneName")})
-    table = _client(ticker_factory=factory).compare_tickers(["AAPL", "NOPE"], "1y")
+    table = make_client(factory).compare_tickers(["AAPL", "NOPE"], "1y")
     assert [row.symbol for row in table.rows] == ["AAPL"]
     assert [err.symbol for err in table.errors] == ["NOPE"]
     assert "NOPE" in table.errors[0].error
@@ -307,7 +299,7 @@ def test_compare_tickers_keeps_the_row_when_only_the_valuation_metrics_fail() ->
             "info_error": RuntimeError("Yahoo 503"),
         }
     )
-    table = _client(ticker_factory=factory).compare_tickers(["AAPL", "BADINFO"], "1y")
+    table = make_client(factory).compare_tickers(["AAPL", "BADINFO"], "1y")
     row = next(r for r in table.rows if r.symbol == "BADINFO")
     assert table.errors == []  # not double-reported
     assert row.total_return_percent is not None
@@ -316,14 +308,14 @@ def test_compare_tickers_keeps_the_row_when_only_the_valuation_metrics_fail() ->
 
 
 def test_compare_tickers_reports_an_unnormalizable_symbol_without_fetching() -> None:
-    table = _client(ticker_factory=_rows_factory()).compare_tickers(["AAPL", "  "], "1y")
+    table = make_client(_rows_factory()).compare_tickers(["AAPL", "  "], "1y")
     assert [row.symbol for row in table.rows] == ["AAPL"]
     assert table.errors[0].symbol == "  "
     assert "Empty ticker symbol" in table.errors[0].error
 
 
 def test_compare_tickers_empty_list_is_an_empty_table() -> None:
-    table = _client(ticker_factory=_rows_factory()).compare_tickers([], "1y")
+    table = make_client(_rows_factory()).compare_tickers([], "1y")
     assert table.rows == [] and table.errors == []
     assert table.base_currency is None
     assert table.mixed_currencies is False
@@ -334,7 +326,7 @@ def test_compare_tickers_flags_a_currency_difference_per_row() -> None:
     factory = _rows_factory(
         SAP={"history_df": make_history_df(_walk(150.0, 0.25, 2.0)), "info": foreign}
     )
-    table = _client(ticker_factory=factory).compare_tickers(["AAPL", "SAP"], "1y")
+    table = make_client(factory).compare_tickers(["AAPL", "SAP"], "1y")
     by_symbol = {row.symbol: row for row in table.rows}
     assert table.base_currency == "USD"  # the first row that reported one
     assert table.mixed_currencies is True
@@ -343,7 +335,7 @@ def test_compare_tickers_flags_a_currency_difference_per_row() -> None:
 
 
 def test_compare_tickers_single_currency_batch_is_not_flagged() -> None:
-    table = _client(ticker_factory=_rows_factory()).compare_tickers(["AAPL", "MSFT"], "1y")
+    table = make_client(_rows_factory()).compare_tickers(["AAPL", "MSFT"], "1y")
     assert table.mixed_currencies is False
     assert all(row.currency_differs is False for row in table.rows)
 
@@ -354,7 +346,7 @@ def test_compare_tickers_unknown_currency_is_not_flagged_as_a_difference() -> No
     factory = _rows_factory(
         MYST={"history_df": make_history_df(_walk(10.0, 0.05, 0.4)), "info": no_currency}
     )
-    table = _client(ticker_factory=factory).compare_tickers(["AAPL", "MYST"], "1y")
+    table = make_client(factory).compare_tickers(["AAPL", "MYST"], "1y")
     by_symbol = {row.symbol: row for row in table.rows}
     assert by_symbol["MYST"].currency is None
     assert by_symbol["MYST"].currency_differs is False
@@ -366,7 +358,7 @@ def test_compare_tickers_base_currency_comes_from_the_first_row_that_has_one() -
     factory = _rows_factory(
         MYST={"history_df": make_history_df(_walk(10.0, 0.05, 0.4)), "info": no_currency}
     )
-    table = _client(ticker_factory=factory).compare_tickers(["MYST", "AAPL"], "1y")
+    table = make_client(factory).compare_tickers(["MYST", "AAPL"], "1y")
     assert table.base_currency == "USD"
 
 
@@ -386,5 +378,5 @@ def test_compare_tickers_fetches_rows_concurrently() -> None:
         },
         gate=gate,
     )
-    table = _client(ticker_factory=factory).compare_tickers(symbols, "1y")
+    table = make_client(factory).compare_tickers(symbols, "1y")
     assert [row.symbol for row in table.rows] == symbols
