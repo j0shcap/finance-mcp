@@ -7,12 +7,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """Server configuration. All fields have safe defaults so zero-config works.
 
-    Environment only, deliberately: no ``env_file``. An MCP client launches the server
-    with whatever working directory it likes (often the user's home or the client's own
-    install directory), so reading a relative ``.env`` would make the configuration
-    depend on an invisible, unpredictable path - and could pick up an unrelated project's
-    file. Clients pass configuration through the server's environment instead, which is
-    what every MCP client config format supports.
+    Environment only, deliberately: no ``env_file``. MCP clients launch the server from
+    an arbitrary working directory, so a relative ``.env`` could be missing or belong to
+    another project; every MCP client config can set the server's environment instead.
     """
 
     model_config = SettingsConfigDict(env_prefix="FINANCE_MCP_")

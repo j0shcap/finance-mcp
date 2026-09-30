@@ -197,8 +197,6 @@ def _require_rate(rate: float) -> None:
     At rate == -1 the growth factor (1+rate)**nper is exactly 0 — ``_pv`` divides by it
     and ``_nper`` takes log(1+rate) = log(0). Below -1 the base is negative, so a
     fractional ``nper`` produces a complex number that the result model cannot hold.
-    Every rate-taking calculator here (npv, xnpv, mirr, convert_rate) already requires
-    rate > -1; this keeps TVM consistent with them.
     """
     if rate <= -1.0:
         raise InvalidInput("rate must be greater than -1 (-100%) per period.")
@@ -372,18 +370,14 @@ def loan_schedule(
     total_paid = 0.0
     total_interest = 0.0
     period = 0
-    # Guard against non-terminating loops; term_months is the natural upper bound.
     while balance > 1e-9 and period < term_months:
         period += 1
         interest = balance * monthly_rate
         scheduled = payment + extra_payment
         principal_paid = scheduled - interest
         if principal_paid >= balance or period == term_months:
-            # Final payment. The period check matters even when the scheduled payment
-            # would not otherwise finish the loan: accumulated float error can leave a
-            # tiny residual balance after the last scheduled period, which would
-            # otherwise go unpaid. By construction the payment was solved from this
-            # principal, rate, and term, so the residual absorbed here is only noise.
+            # Last payment. Checking the period too clears the float residue that can
+            # remain after the final scheduled payment.
             principal_paid = balance
             scheduled = principal_paid + interest
         balance -= principal_paid
@@ -396,7 +390,7 @@ def loan_schedule(
                     payment=round(scheduled, 2),
                     principal=round(principal_paid, 2),
                     interest=round(interest, 2),
-                    balance=round(max(balance, 0.0), 2),
+                    balance=round(balance, 2),
                 )
             )
 
@@ -412,13 +406,10 @@ def loan_schedule(
 def _discount_sum(rate: float, terms: Iterable[tuple[float, float]]) -> float:
     """Sum ``cash / (1 + rate)**exp`` over ``(cash, exp)`` terms, robust near rate == -1.
 
-    The discount factor ``(1 + rate)**exp`` overflows for large ``exp`` (the term then
-    decays toward 0) and underflows to ``0.0`` as ``rate`` approaches -1 (the term is then
-    infinite). The IRR/XIRR root-finders evaluate present value at the bracket low end
-    (rate ~ -1), so a naive ``cash / 0.0`` raised ZeroDivisionError on otherwise-valid long
-    cashflow series. Here an overflowed term contributes 0 and an underflowed term
-    contributes a signed infinity (the largest-exponent term dominates the limit), so the
-    present value stays well-signed and the root scan converges instead of crashing.
+    The IRR root scan starts just above rate == -1, where ``(1 + rate)**exp`` can underflow
+    to 0 or, for large ``exp``, overflow. An overflowed term contributes 0; underflowed
+    terms make the sum infinite, signed by the largest-exponent one, which dominates the
+    limit. Either way the result stays well-signed for the root scan.
 
     ``rate`` must be > -1, so ``base`` is positive and the power is always real.
     """
@@ -767,8 +758,7 @@ def _bond_metrics(
 
     The price returned is the DIRTY price: the present value of every remaining cashflow,
     which is the cash a buyer pays. On a coupon date nothing has accrued and these collapse
-    exactly to the on-coupon formulas -- which is why ``bond_price`` can delegate here
-    without moving any of its numbers.
+    exactly to the on-coupon formulas ``bond_price`` needs.
 
     Macaulay duration is ``-(1+y)/P * dP/dy`` expressed in years and modified duration is
     ``-(1/P) * dP/dY`` for the annual yield ``Y``, which is why ``modified = macaulay/(1+y)``
@@ -1030,10 +1020,8 @@ def bond_ytm_dated(
     implied by the coupon schedule is returned alongside, so the caller also sees the dirty
     price -- the cash actually paid.
 
-    As with ``bond_ytm``, the search starts just above -100%, so this finds yields > -1 only
-    -- narrower than the range ``bond_price_dated`` can price (ytm > -frequency). Yields
-    that deeply negative have no market interpretation, and restricting the bracket keeps
-    the solve robust.
+    As with ``bond_ytm``, only yields > -1 are searched, although ``bond_price_dated`` can
+    price down to ytm > -frequency.
     """
     if clean_price <= 0.0:
         raise InvalidInput("clean_price must be positive.")

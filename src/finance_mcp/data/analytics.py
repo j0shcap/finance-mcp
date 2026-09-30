@@ -3,10 +3,9 @@
 Assumes strictly positive closes (real adjusted prices); a zero close would divide by zero.
 
 Annualization is expressed in calendar terms supplied by the caller -- ``years`` for
-compounding, ``periods_per_year`` for scaling dispersion. Nothing here infers a trading
-calendar from the bar count: how much wall-clock time a series spans is a property of the
-data source, not of this module, and baking in a constant (252) silently misstates any
-instrument that does not trade on the US equity calendar.
+compounding, ``periods_per_year`` for scaling dispersion. Nothing here assumes a trading
+calendar: how much time a series spans depends on what the instrument trades, which only
+the data source knows.
 
 The risk-adjusted and benchmark-relative statistics return None when a figure is not
 computable (too few returns, or a zero denominator) rather than 0.0, which would assert a
@@ -67,7 +66,7 @@ def annualized_volatility(closes: list[float], periods_per_year: float) -> float
     """Annualized volatility of daily simple returns, in percent; 0.0 with fewer than 2 returns.
 
     ``periods_per_year`` scales the per-observation dispersion up to a yearly figure; derive
-    it from the data with :func:`infer_periods_per_year` rather than assuming 252.
+    it from the data with :func:`infer_periods_per_year`.
     """
     returns = simple_returns(closes)
     if len(returns) < 2:
@@ -100,10 +99,6 @@ def sma(closes: list[float], window: int) -> float | None:
 
 
 # --- risk-adjusted statistics ---------------------------------------------------------
-#
-# These return None when a statistic is not computable (fewer than two returns, or a zero
-# denominator) rather than 0.0: a Sharpe of 0.0 asserts "no excess return per unit of
-# risk", which is a different claim from "there is not enough data to say".
 
 
 def simple_returns(closes: list[float]) -> list[float]:
@@ -121,7 +116,7 @@ def periodic_risk_free(annual_rate: float, periods_per_year: float) -> float:
         raise InvalidInput("risk_free_rate must be greater than -1 (i.e. above -100%).")
     if periods_per_year <= 0:
         raise InvalidInput("periods_per_year must be positive")
-    # Annotated intermediate: float ** float is typed Any (it can yield a complex).
+    # float ** float is typed Any, since it can produce a complex.
     growth: float = (1.0 + annual_rate) ** (1.0 / periods_per_year)
     return growth - 1.0
 
@@ -211,13 +206,10 @@ def align_closes(
 ) -> tuple[list[str], list[float], list[float]]:
     """Inner-join two dated close series on their dates; returns (dates, asset, benchmark).
 
-    An inner join is the only alignment that compares like with like. A 24/7 instrument
-    prints Saturday and Sunday closes an equity benchmark does not have, so the overlap is
-    the weekdays: the alternative -- carrying the Friday equity close across the weekend --
-    would feed the statistics two flat "sessions" that never traded, deflating the
-    benchmark's volatility and with it every beta computed against it. The cost is that
-    the asset's weekend moves are folded into the Monday return, which is what an investor
-    who could only trade the benchmark on weekdays actually experienced.
+    Only shared dates are kept. Carrying a benchmark close forward over days it did not
+    trade (a 24/7 asset's weekends, say) would add flat returns that deflate its volatility
+    and every beta computed against it; instead the asset's weekend move lands in Monday's
+    return.
 
     Dates are compared as the strings the data layer produced (ISO 8601, so lexical order
     is chronological order) and returned oldest-first.
