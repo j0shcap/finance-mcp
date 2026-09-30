@@ -281,6 +281,18 @@ async def test_investment_cashflows_verifies_the_irr_by_repricing() -> None:
     assert "npv (or xnpv) at the IRR must be ~0" in text
 
 
+async def test_investment_cashflows_annualizes_through_convert_rate() -> None:
+    text = await _render("investment_cashflows", REFERENCING_PROMPTS["investment_cashflows"])
+    assert "convert_rate(rate=r x k, periods_per_year=k" in text
+
+
+async def test_investment_cashflows_states_the_hurdle_cushion_per_flow_type() -> None:
+    """Borrowing-type NPV rises with the rate, so its cushion runs the other way."""
+    text = await _render("investment_cashflows", REFERENCING_PROMPTS["investment_cashflows"])
+    assert "investment-type NPV turns negative as the hurdle RISES to the IRR" in text
+    assert "borrowing-type NPV as the hurdle FALLS to it" in text
+
+
 # --- bond_analysis -------------------------------------------------------------------
 
 

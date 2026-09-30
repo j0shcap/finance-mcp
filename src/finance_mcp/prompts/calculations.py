@@ -63,8 +63,9 @@ IRRs and shows how fast the verdict erodes as the rate moves.
 
 ## Step 4 - IRR, read critically
 - Call irr (or xirr) and read is_unique and all_irrs before quoting anything.
-- Unique: report it; convert a sub-annual rate to an annual one as (1 + r)^k - 1 for k periods a \
-year; state the margin over the hurdle. Verify: npv (or xnpv) at the IRR must be ~0.
+- Unique: report it; annualize a per-period rate r with k periods a year through \
+convert_rate(rate=r x k, periods_per_year=k, direction="nominal_to_effective"), which is \
+(1 + r)^k - 1; state the margin over the hurdle. Verify: npv (or xnpv) at the IRR must be ~0.
 - Several roots (is_unique false): there is NO single IRR. Do not present the representative root \
 as "the IRR"; list all_irrs, use the NPV profile to show over which rates NPV is positive, and \
 decide on NPV and MIRR.
@@ -95,8 +96,9 @@ explain that the NPV ranking holds below it and flips above it.
 - The share of total present value that comes from the final flow (a terminal or exit value). If \
 it dominates, the verdict is a bet on that one assumption: recompute NPV with it cut by a stated \
 amount (e.g. 25%).
-- With a unique IRR, the hurdle can rise as far as the IRR before NPV turns negative - state that \
-cushion in percentage points.
+- With a unique IRR, the NPV verdict flips where the hurdle crosses the IRR - state that cushion \
+in percentage points, in the right direction: investment-type NPV turns negative as the hurdle \
+RISES to the IRR, borrowing-type NPV as the hurdle FALLS to it.
 
 ## Output
 1. Verdict first - accept, reject, or "depends on X" - with NPV at the hurdle.
