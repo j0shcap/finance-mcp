@@ -173,6 +173,7 @@ async def test_analyze_stock_warns_that_a_thin_overlap_makes_beta_noisy() -> Non
 #: embedding the glossary (analyze_stock embeds it, by design, and is tested above).
 REFERENCING_PROMPTS: dict[str, dict[str, str]] = {
     "investment_cashflows": {"cashflows": "-1000 now, then 300 a year for 5 years"},
+    "bond_analysis": {"bond": "UST 4% due 2036-01-15, settles 2026-03-15, clean price 92.30"},
 }
 
 
@@ -275,3 +276,62 @@ async def test_investment_cashflows_says_when_to_prefer_mirr_and_its_limits() ->
 async def test_investment_cashflows_verifies_the_irr_by_repricing() -> None:
     text = await _render("investment_cashflows", REFERENCING_PROMPTS["investment_cashflows"])
     assert "npv (or xnpv) at the IRR must be ~0" in text
+
+
+# --- bond_analysis -------------------------------------------------------------------
+
+
+async def test_bond_analysis_arguments() -> None:
+    assert await _prompt_arguments("bond_analysis") == {"bond": True, "shock_bp": False}
+
+
+async def test_bond_analysis_echoes_the_bond_and_defaults_to_a_100bp_shock() -> None:
+    text = await _render("bond_analysis", REFERENCING_PROMPTS["bond_analysis"])
+    assert REFERENCING_PROMPTS["bond_analysis"]["bond"] in text
+    assert "+/-100bp" in text
+    text = await _render("bond_analysis", {"bond": "a 5y 3% corporate at 97", "shock_bp": "50"})
+    assert "+/-50bp" in text
+    assert "+/-100bp" not in text
+
+
+async def test_bond_analysis_picks_the_dated_tools_and_conventions() -> None:
+    text = await _render("bond_analysis", REFERENCING_PROMPTS["bond_analysis"])
+    assert "bond_price_dated" in text
+    assert "bond_ytm_dated" in text
+    assert '"30/360"' in text  # US corporates/munis, not the actual/actual default
+    assert "market quotes are CLEAN" in text
+    assert "subtract accrued interest" in text  # dirty -> clean before solving
+
+
+async def test_bond_analysis_knows_ytm_dated_returns_no_risk_figures() -> None:
+    """bond_ytm_dated returns prices and a yield only; duration needs a repricing call."""
+    text = await _render("bond_analysis", REFERENCING_PROMPTS["bond_analysis"])
+    assert "bond_ytm_dated returns the yield and the prices but no duration" in text
+
+
+async def test_bond_analysis_sanity_checks_premium_and_discount() -> None:
+    text = await _render("bond_analysis", REFERENCING_PROMPTS["bond_analysis"])
+    assert "a coupon_rate above the yield means a premium" in text
+
+
+async def test_bond_analysis_measures_dv01_and_convexity_on_the_dirty_price() -> None:
+    text = await _render("bond_analysis", REFERENCING_PROMPTS["bond_analysis"])
+    assert "DV01 = modified_duration x dirty_price x 0.0001" in text
+    assert "measured on the DIRTY price" in text
+    assert "do not rescale it" in text  # convexity is already in years^2
+
+
+async def test_bond_analysis_cross_checks_the_shock_estimate_by_repricing() -> None:
+    text = await _render("bond_analysis", REFERENCING_PROMPTS["bond_analysis"])
+    assert "-modified_duration x dy + 0.5 x convexity x dy^2" in text
+    assert "Reprice exactly" in text
+    assert "The exact repricing is authoritative" in text
+    assert "same currency amount" in text  # clean and dirty move by the same amount
+
+
+async def test_bond_analysis_names_where_option_free_math_breaks() -> None:
+    text = await _render("bond_analysis", REFERENCING_PROMPTS["bond_analysis"])
+    assert "callable" in text
+    assert "negative convexity" in text
+    assert "not an expected return" in text  # YTM is a promised yield
+    assert '"nominal_to_effective"' in text  # compare yields on one compounding basis

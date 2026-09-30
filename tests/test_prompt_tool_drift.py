@@ -33,6 +33,7 @@ SAMPLE_ARGS: dict[str, dict[str, str]] = {
         "discount_rate": "8%",
         "reinvest_rate": "6%",
     },
+    "bond_analysis": {"bond": "UST 4% due 2036-01-15, clean 92.30", "shock_bp": "50"},
 }
 
 _CALL_SITE = re.compile(r"\b([a-z][a-z0-9_]*)\(")
