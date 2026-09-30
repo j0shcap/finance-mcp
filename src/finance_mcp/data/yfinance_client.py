@@ -60,8 +60,7 @@ MAX_CACHEABLE_BARS = 2000
 # Quotes in a batch are independent single requests, so they are fetched in parallel; the
 # bound keeps a large batch from opening a connection per ticker at once.
 QUOTE_MAX_WORKERS = 8
-# A benchmark comparison is two independent history fetches.
-BENCHMARK_MAX_WORKERS = 2
+BENCHMARK_MAX_WORKERS = 2  # the asset and the benchmark
 # The fewest shared closes that yield a single return to compare.
 MIN_OVERLAP_OBSERVATIONS = 2
 # Each comparison row costs two Yahoo calls (history + info), so the worker bound is lower

@@ -163,7 +163,6 @@ def fake_ticker_factory(
 
 def fake_multi_ticker_factory(
     per_symbol: dict[str, dict[str, Any]],
-    calls: list[str] | None = None,
     gate: threading.Barrier | None = None,
 ) -> Callable[[str], Any]:
     """A ticker factory whose stub differs BY SYMBOL, for multi-symbol scenarios.
@@ -171,16 +170,13 @@ def fake_multi_ticker_factory(
     ``per_symbol`` maps a symbol to the keyword arguments ``fake_ticker_factory`` would take
     for it (``history_df``, ``info``, ``history_error``, ...), so each leg of a comparison
     can succeed or fail independently. A symbol that is absent raises KeyError on every
-    access, which is what yfinance leaks for an unknown symbol. ``calls`` records each
-    symbol constructed; ``gate`` is waited on at construction, so a batch only completes
-    when the symbols are fetched concurrently.
+    access, which is what yfinance leaks for an unknown symbol. ``gate`` is waited on at
+    construction, so a batch only completes when the symbols are fetched concurrently.
     """
     stubs = {symbol: fake_ticker_factory(**kwargs) for symbol, kwargs in per_symbol.items()}
     missing = fake_ticker_factory(error=KeyError("exchangeTimezoneName"))
 
     def factory(symbol: str) -> Any:
-        if calls is not None:
-            calls.append(symbol)
         if gate is not None:
             gate.wait()
         return stubs.get(symbol, missing)(symbol)
@@ -280,16 +276,15 @@ def make_intraday_df(
 def fake_symbol_ticker_factory(
     fast_info: dict[str, dict[str, Any]] | None = None,
     errors: dict[str, Exception] | None = None,
-    calls: list[str] | None = None,
     gate: threading.Barrier | None = None,
 ) -> Callable[[str], Any]:
     """A ticker factory whose behaviour varies BY SYMBOL, for partial-batch scenarios.
 
     ``fast_info`` maps symbol -> that symbol's fast_info dict; ``errors`` maps symbol -> an
     exception raised on ``.fast_info`` access. A symbol in neither raises KeyError, which is
-    what yfinance leaks for an unknown symbol. ``calls`` records the symbols fetched.
-    ``gate`` is waited on before each fast_info read, so a batch only completes if the
-    symbols are fetched concurrently (a sequential fetcher deadlocks the barrier).
+    what yfinance leaks for an unknown symbol. ``gate`` is waited on before each fast_info
+    read, so a batch only completes if the symbols are fetched concurrently (a sequential
+    fetcher deadlocks the barrier).
     """
     quotes = fast_info or {}
     failures = errors or {}
@@ -300,8 +295,6 @@ def fake_symbol_ticker_factory(
 
         @property
         def fast_info(self) -> Any:
-            if calls is not None:
-                calls.append(self._symbol)
             if gate is not None:
                 gate.wait()
             if self._symbol in failures:

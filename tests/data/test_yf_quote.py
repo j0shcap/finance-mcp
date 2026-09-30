@@ -147,10 +147,8 @@ def test_get_quote_all_failing_returns_no_quotes_and_all_errors() -> None:
 
 
 def test_get_quote_deduplicates_equivalent_symbols() -> None:
-    calls: list[str] = []
-    client = make_client(
-        factory=fake_symbol_ticker_factory(fast_info={"AAPL": QUOTE_FI}, calls=calls)
-    )
+    factory, calls = counting(fake_symbol_ticker_factory(fast_info={"AAPL": QUOTE_FI}))
+    client = make_client(factory)
     result = client.get_quote(["AAPL", "aapl", " AAPL "])
     assert [q.symbol for q in result.quotes] == ["AAPL"]
     assert calls == ["AAPL"]

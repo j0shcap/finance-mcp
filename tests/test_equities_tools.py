@@ -235,9 +235,7 @@ async def test_search_symbols_tool() -> None:
 
 
 async def test_search_symbols_tool_empty_is_not_error() -> None:
-    server = create_server(
-        yf_client=make_client(factory=fake_ticker_factory(), search_factory=FakeSearch(quotes=[]))
-    )
+    server = create_server(yf_client=make_client(factory=fake_ticker_factory()))
     async with Client(server) as client:
         result = await client.call_tool("search_symbols", {"query": "zzzznope"})
         assert result.data.matches == []
