@@ -10,14 +10,19 @@ import datetime
 import pytest
 
 from finance_mcp.data.calculators import (
+    MAX_BOND_SPAN_YEARS,
     _add_months,
     _bond_metrics,
     _coupon_schedule,
     _days_30_360_us,
     bond_price,
     bond_price_dated,
+    bond_ytm,
+    bond_ytm_dated,
 )
+from finance_mcp.data.errors import InvalidInput
 from finance_mcp.data.models import BondDatedAnalytics, BondDayCount
+from finance_mcp.tools._inputs import MAX_BOND_YEARS
 
 
 def d(iso: str) -> datetime.date:
@@ -539,3 +544,179 @@ def test_duration_and_convexity_together_predict_a_yield_move() -> None:
     assert actual == pytest.approx(first_order + second_order, rel=1e-5)
     # Duration alone is measurably short, which is why convexity is reported at all.
     assert abs(actual - first_order) > abs(actual - (first_order + second_order))
+
+
+# --------------------------------------------------------------------------------------
+# bond_ytm_dated: solve the yield from a CLEAN price
+# --------------------------------------------------------------------------------------
+
+
+def test_ytm_matches_the_excel_yield_documentation_example() -> None:
+    """Microsoft's YIELD example: settlement 2008-02-15, maturity 2016-11-15, coupon
+    5.75%, pr = 95.04287, redemption 100, frequency 2, basis 0 -> 6.5%.
+
+    The documented price is given to five decimals, which bounds how exactly the yield can
+    come back: 1e-6 on the yield is two orders of magnitude finer than that rounding.
+
+    https://support.microsoft.com/en-us/office/yield-function-f5f5ca43-c4bd-434f-8bd2-ed3c9727a4fe
+    """
+    result = bond_ytm_dated(
+        settlement=d("2008-02-15"),
+        maturity=d("2016-11-15"),
+        coupon_rate=0.0575,
+        clean_price=95.04287,
+        face=100.0,
+        frequency=2,
+        day_count="30/360",
+    )
+    assert result.yield_to_maturity == pytest.approx(0.065, abs=1e-6)
+    assert result.clean_price == 95.04287
+    assert result.accrued_interest == pytest.approx(1.4375, abs=1e-9)
+    assert result.dirty_price == pytest.approx(95.04287 + 1.4375, abs=1e-9)
+
+
+@pytest.mark.parametrize("day_count", ["actual/actual", "30/360"])
+@pytest.mark.parametrize("ytm", [-0.005, 0.0, 0.0125, 0.065, 0.19])
+def test_price_and_yield_round_trip(day_count: BondDayCount, ytm: float) -> None:
+    priced = bond_price_dated(
+        settlement=d("2024-03-07"),
+        maturity=d("2041-09-30"),
+        coupon_rate=0.0425,
+        ytm=ytm,
+        face=1000.0,
+        frequency=2,
+        day_count=day_count,
+    )
+    solved = bond_ytm_dated(
+        settlement=d("2024-03-07"),
+        maturity=d("2041-09-30"),
+        coupon_rate=0.0425,
+        clean_price=priced.clean_price,
+        face=1000.0,
+        frequency=2,
+        day_count=day_count,
+    )
+    assert solved.yield_to_maturity == pytest.approx(ytm, abs=1e-9)
+    assert solved.accrued_interest == pytest.approx(priced.accrued_interest, rel=1e-12)
+    assert solved.dirty_price == pytest.approx(priced.dirty_price, rel=1e-12)
+
+
+def test_ytm_on_a_coupon_date_equals_the_on_coupon_solver() -> None:
+    dated = bond_ytm_dated(
+        settlement=d("2007-11-15"),
+        maturity=d("2017-11-15"),
+        coupon_rate=0.05,
+        clean_price=925.61,
+        face=1000.0,
+        frequency=2,
+    )
+    on_coupon = bond_ytm(
+        face=1000.0, coupon_rate=0.05, years_to_maturity=10.0, price=925.61, frequency=2
+    )
+    assert dated.yield_to_maturity == pytest.approx(on_coupon.yield_to_maturity, abs=1e-9)
+    assert dated.accrued_interest == 0.0
+    assert dated.dirty_price == dated.clean_price
+
+
+def test_a_bond_priced_at_par_on_a_coupon_date_yields_its_coupon() -> None:
+    result = bond_ytm_dated(
+        settlement=d("2007-11-15"),
+        maturity=d("2017-11-15"),
+        coupon_rate=0.06,
+        clean_price=100.0,
+        face=100.0,
+        frequency=2,
+    )
+    assert result.yield_to_maturity == pytest.approx(0.06, abs=1e-9)
+
+
+# --------------------------------------------------------------------------------------
+# Input validation. Every message is written for the model that will read it.
+# --------------------------------------------------------------------------------------
+
+
+def test_the_dated_span_bound_matches_the_tool_boundary_bound() -> None:
+    """The on-coupon tools bound their coupon loop with a years_to_maturity Field; the
+    dated ones cannot, because the loop length is a relationship between two arguments.
+    The two bounds must still be the same number, so pin them together.
+    """
+    assert MAX_BOND_SPAN_YEARS == MAX_BOND_YEARS
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"settlement": d("2017-11-15")}, "strictly before maturity"),
+        ({"settlement": d("2017-11-16")}, "strictly before maturity"),
+        ({"face": 0.0}, "face must be positive"),
+        ({"face": -100.0}, "face must be positive"),
+        ({"frequency": 5}, "divide 12 evenly"),
+        ({"frequency": 7}, "divide 12 evenly"),
+        ({"frequency": 0}, "divide 12 evenly"),
+        ({"frequency": -2}, "divide 12 evenly"),
+        ({"settlement": d("1900-01-01")}, "at most 100 years"),
+    ],
+)
+def test_invalid_dated_inputs_are_rejected(kwargs: dict[str, object], message: str) -> None:
+    defaults: dict[str, object] = {
+        "settlement": d("2008-02-15"),
+        "maturity": d("2017-11-15"),
+        "coupon_rate": 0.05,
+        "face": 100.0,
+        "frequency": 2,
+    }
+    with pytest.raises(InvalidInput, match=message):
+        bond_price_dated(ytm=0.06, **{**defaults, **kwargs})  # type: ignore[arg-type]
+    with pytest.raises(InvalidInput, match=message):
+        bond_ytm_dated(clean_price=95.0, **{**defaults, **kwargs})  # type: ignore[arg-type]
+
+
+def test_a_span_exactly_at_the_bound_is_accepted() -> None:
+    """100 years is allowed; the bound rejects only spans longer than it."""
+    result = bond_price_dated(
+        settlement=d("1917-11-15"),
+        maturity=d("2017-11-15"),
+        coupon_rate=0.05,
+        ytm=0.06,
+        face=100.0,
+        frequency=2,
+    )
+    assert result.periods_remaining == 200
+
+
+@pytest.mark.parametrize(("ytm", "frequency"), [(-2.0, 2), (-3.0, 2), (-1.0, 1), (-12.0, 12)])
+def test_a_yield_at_or_below_minus_frequency_is_rejected(ytm: float, frequency: int) -> None:
+    """The binding constraint is on the discount base 1 + ytm/frequency, exactly as for
+    bond_price -- not ytm > -1."""
+    with pytest.raises(InvalidInput, match="greater than -frequency"):
+        bond_price_dated(
+            settlement=d("2008-02-15"),
+            maturity=d("2017-11-15"),
+            coupon_rate=0.05,
+            ytm=ytm,
+            face=100.0,
+            frequency=frequency,
+        )
+
+
+def test_a_deeply_negative_yield_above_minus_frequency_still_prices() -> None:
+    result = bond_price_dated(
+        settlement=d("2008-02-15"),
+        maturity=d("2017-11-15"),
+        coupon_rate=0.05,
+        ytm=-1.5,
+        face=100.0,
+        frequency=2,
+    )
+    assert result.dirty_price > 0.0
+
+
+@pytest.mark.parametrize("clean_price", [0.0, -1.0])
+def test_a_non_positive_clean_price_is_rejected(clean_price: float) -> None:
+    with pytest.raises(InvalidInput, match="clean_price must be positive"):
+        bond_ytm_dated(
+            settlement=d("2008-02-15"),
+            maturity=d("2017-11-15"),
+            coupon_rate=0.05,
+            clean_price=clean_price,
+        )

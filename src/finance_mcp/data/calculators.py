@@ -19,6 +19,7 @@ from finance_mcp.data.models import (
     AmortizationRow,
     BondAnalytics,
     BondDatedAnalytics,
+    BondDatedYTM,
     BondDayCount,
     BondYTM,
     Compounding,
@@ -975,3 +976,53 @@ def bond_ytm(
         lambda y: bond_price(face, coupon_rate, years_to_maturity, y, frequency).price - price
     )
     return BondYTM(yield_to_maturity=rate)
+
+
+def bond_ytm_dated(
+    settlement: datetime.date,
+    maturity: datetime.date,
+    coupon_rate: float,
+    clean_price: float,
+    face: float = 100.0,
+    frequency: int = 2,
+    day_count: BondDayCount = "actual/actual",
+) -> BondDatedYTM:
+    """Solve the annual yield to maturity from a bond's CLEAN price at a settlement date.
+
+    The dated counterpart to ``bond_ytm``, and the inverse of ``bond_price_dated``. The
+    price is the clean (quoted) one, which is how bonds are quoted; the accrued interest
+    implied by the coupon schedule is returned alongside, so the caller also sees the dirty
+    price -- the cash actually paid.
+
+    As with ``bond_ytm``, the search starts just above -100%, so this finds yields > -1 only
+    -- narrower than the range ``bond_price_dated`` can price (ytm > -frequency). Yields
+    that deeply negative have no market interpretation, and restricting the bracket keeps
+    the solve robust.
+    """
+    if clean_price <= 0.0:
+        raise InvalidInput("clean_price must be positive.")
+    _, _, periods, accrued_days, period_days = _dated_terms(
+        settlement, maturity, face, frequency, day_count
+    )
+    fraction = accrued_days / period_days
+    accrued = face * coupon_rate / frequency * fraction
+    first_fraction = 1.0 - fraction
+
+    def clean_at(ytm: float) -> float:
+        dirty, _, _, _ = _bond_metrics(
+            face=face,
+            coupon_rate=coupon_rate,
+            frequency=frequency,
+            y=ytm / frequency,
+            n=periods,
+            first_fraction=first_fraction,
+        )
+        return dirty - accrued
+
+    rate = _bisect(lambda ytm: clean_at(ytm) - clean_price)
+    return BondDatedYTM(
+        yield_to_maturity=rate,
+        clean_price=clean_price,
+        accrued_interest=accrued,
+        dirty_price=clean_price + accrued,
+    )
