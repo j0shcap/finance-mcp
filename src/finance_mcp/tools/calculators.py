@@ -35,6 +35,78 @@ from finance_mcp.tools._inputs import (
     MAX_PERIODS_PER_YEAR,
 )
 
+# Parameter types shared by the bond tools, so each description is written once.
+CouponRate = Annotated[
+    float,
+    Field(description="Annual coupon rate as a decimal, e.g. 0.05 for 5%."),
+]
+BondFace = Annotated[float, Field(gt=0, description="Face (par) value of the bond.")]
+YearsToMaturity = Annotated[
+    float, Field(gt=0, le=MAX_BOND_YEARS, description="Years until maturity.")
+]
+CouponFrequency = Annotated[
+    int,
+    Field(
+        gt=0,
+        le=MAX_COUPON_FREQUENCY,
+        description="Coupon payments per year, e.g. 2 for semiannual.",
+    ),
+]
+Settlement = Annotated[
+    datetime.date,
+    Field(
+        description="Settlement date (ISO 8601, e.g. 2024-03-07): the date the trade "
+        "settles and the buyer pays. May fall between coupon dates."
+    ),
+]
+Maturity = Annotated[
+    datetime.date,
+    Field(
+        description="Maturity (redemption) date (ISO 8601). Coupon dates are generated "
+        "backward from here, so the schedule sits on this day-of-month."
+    ),
+]
+DatedFace = Annotated[
+    float,
+    Field(
+        gt=0,
+        description="Face (par) value. Defaults to 100, so prices come back per 100 "
+        "of face -- the market quoting convention. Pass the real position size to get "
+        "cash amounts.",
+    ),
+]
+DatedFrequency = Annotated[
+    int,
+    Field(
+        gt=0,
+        le=MAX_COUPON_FREQUENCY,
+        description="Coupon payments per year, e.g. 2 for semiannual. Must divide 12 "
+        "evenly (1, 2, 3, 4, 6 or 12) so coupon dates fall a whole number of months "
+        "apart.",
+    ),
+]
+DayCount = Annotated[
+    BondDayCount,
+    Field(
+        description="Day count for the accrued part of the coupon period. "
+        "'actual/actual' (the default) is Actual/Actual ICMA, used by US Treasuries and "
+        "most sovereigns. '30/360' is the US (NASD) convention for corporates and munis, "
+        "and is what Excel uses by default (basis=0).",
+    ),
+]
+PartPeriodDiscount = Annotated[
+    FirstPeriodDiscount,
+    Field(
+        description="How to discount the part period before the next coupon. "
+        "'compound' (the default) is the street convention, (1+y)**stub, and matches "
+        "Excel's PRICE/YIELD while more than one coupon remains. 'simple' is 1 + stub*y "
+        "-- the US Treasury convention in 31 CFR 356 appendix B, and also what Excel "
+        "switches to in the FINAL coupon period, where 'compound' is ~0.01 per 100 "
+        "higher. They differ by a few thousandths per 100 elsewhere, so use 'simple' to "
+        "match Treasury's published figures or Excel inside the last period.",
+    ),
+]
+
 
 def register(mcp: FastMCP) -> None:
     """Register calculator tools on the given server instance."""
@@ -90,26 +162,14 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool(annotations=calculator("Bond Price, Duration & Convexity"))
     def bond_price(
-        face: Annotated[float, Field(gt=0, description="Face (par) value of the bond.")],
-        coupon_rate: Annotated[
-            float,
-            Field(description="Annual coupon rate as a decimal, e.g. 0.05 for 5%."),
-        ],
-        years_to_maturity: Annotated[
-            float, Field(gt=0, le=MAX_BOND_YEARS, description="Years until maturity.")
-        ],
+        face: BondFace,
+        coupon_rate: CouponRate,
+        years_to_maturity: YearsToMaturity,
         ytm: Annotated[
             float,
             Field(description="Annual yield to maturity as a decimal, e.g. 0.06 for 6%."),
         ],
-        frequency: Annotated[
-            int,
-            Field(
-                gt=0,
-                le=MAX_COUPON_FREQUENCY,
-                description="Coupon payments per year, e.g. 2 for semiannual.",
-            ),
-        ] = 2,
+        frequency: CouponFrequency = 2,
     ) -> BondAnalytics:
         """Price a fixed-coupon bond at a given yield, with duration and convexity."""
         return run_calc(
@@ -124,23 +184,11 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool(annotations=calculator("Bond Yield to Maturity"))
     def bond_ytm(
-        face: Annotated[float, Field(gt=0, description="Face (par) value of the bond.")],
-        coupon_rate: Annotated[
-            float,
-            Field(description="Annual coupon rate as a decimal, e.g. 0.05 for 5%."),
-        ],
-        years_to_maturity: Annotated[
-            float, Field(gt=0, le=MAX_BOND_YEARS, description="Years until maturity.")
-        ],
+        face: BondFace,
+        coupon_rate: CouponRate,
+        years_to_maturity: YearsToMaturity,
         price: Annotated[float, Field(gt=0, description="Current market price of the bond.")],
-        frequency: Annotated[
-            int,
-            Field(
-                gt=0,
-                le=MAX_COUPON_FREQUENCY,
-                description="Coupon payments per year, e.g. 2 for semiannual.",
-            ),
-        ] = 2,
+        frequency: CouponFrequency = 2,
     ) -> BondYTM:
         """Solve the annual yield to maturity that prices the bond at the given market price."""
         return run_calc(
@@ -155,68 +203,17 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool(annotations=calculator("Bond Price by Settlement Date"))
     def bond_price_dated(
-        settlement: Annotated[
-            datetime.date,
-            Field(
-                description="Settlement date (ISO 8601, e.g. 2024-03-07): the date the trade "
-                "settles and the buyer pays. May fall between coupon dates."
-            ),
-        ],
-        maturity: Annotated[
-            datetime.date,
-            Field(
-                description="Maturity (redemption) date (ISO 8601). Coupon dates are generated "
-                "backward from here, so the schedule sits on this day-of-month."
-            ),
-        ],
-        coupon_rate: Annotated[
-            float,
-            Field(description="Annual coupon rate as a decimal, e.g. 0.05 for 5%."),
-        ],
+        settlement: Settlement,
+        maturity: Maturity,
+        coupon_rate: CouponRate,
         ytm: Annotated[
             float,
             Field(description="Annual yield to maturity as a decimal, e.g. 0.065 for 6.5%."),
         ],
-        face: Annotated[
-            float,
-            Field(
-                gt=0,
-                description="Face (par) value. Defaults to 100, so prices come back per 100 "
-                "of face -- the market quoting convention. Pass the real position size to get "
-                "cash amounts.",
-            ),
-        ] = 100.0,
-        frequency: Annotated[
-            int,
-            Field(
-                gt=0,
-                le=MAX_COUPON_FREQUENCY,
-                description="Coupon payments per year, e.g. 2 for semiannual. Must divide 12 "
-                "evenly (1, 2, 3, 4, 6 or 12) so coupon dates fall a whole number of months "
-                "apart.",
-            ),
-        ] = 2,
-        day_count: Annotated[
-            BondDayCount,
-            Field(
-                description="Day count for the accrued part of the coupon period. "
-                "'actual/actual' (the default) is Actual/Actual ICMA, used by US Treasuries and "
-                "most sovereigns. '30/360' is the US (NASD) convention for corporates and munis, "
-                "and is what Excel uses by default (basis=0).",
-            ),
-        ] = "actual/actual",
-        first_period_discount: Annotated[
-            FirstPeriodDiscount,
-            Field(
-                description="How to discount the part period before the next coupon. "
-                "'compound' (the default) is the street convention, (1+y)**stub, and matches "
-                "Excel's PRICE/YIELD while more than one coupon remains. 'simple' is 1 + stub*y "
-                "-- the US Treasury convention in 31 CFR 356 appendix B, and also what Excel "
-                "switches to in the FINAL coupon period, where 'compound' is ~0.01 per 100 "
-                "higher. They differ by a few thousandths per 100 elsewhere, so use 'simple' to "
-                "match Treasury's published figures or Excel inside the last period.",
-            ),
-        ] = "compound",
+        face: DatedFace = 100.0,
+        frequency: DatedFrequency = 2,
+        day_count: DayCount = "actual/actual",
+        first_period_discount: PartPeriodDiscount = "compound",
     ) -> BondDatedAnalytics:
         """Price a bond for a settlement date that may fall BETWEEN coupon dates.
 
@@ -250,24 +247,9 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool(annotations=calculator("Bond Yield by Settlement Date"))
     def bond_ytm_dated(
-        settlement: Annotated[
-            datetime.date,
-            Field(
-                description="Settlement date (ISO 8601, e.g. 2024-03-07): the date the trade "
-                "settles and the buyer pays. May fall between coupon dates."
-            ),
-        ],
-        maturity: Annotated[
-            datetime.date,
-            Field(
-                description="Maturity (redemption) date (ISO 8601). Coupon dates are generated "
-                "backward from here, so the schedule sits on this day-of-month."
-            ),
-        ],
-        coupon_rate: Annotated[
-            float,
-            Field(description="Annual coupon rate as a decimal, e.g. 0.05 for 5%."),
-        ],
+        settlement: Settlement,
+        maturity: Maturity,
+        coupon_rate: CouponRate,
         clean_price: Annotated[
             float,
             Field(
@@ -277,46 +259,10 @@ def register(mcp: FastMCP) -> None:
                 "interest first.",
             ),
         ],
-        face: Annotated[
-            float,
-            Field(
-                gt=0,
-                description="Face (par) value. Defaults to 100, so prices come back per 100 "
-                "of face -- the market quoting convention. Pass the real position size to get "
-                "cash amounts.",
-            ),
-        ] = 100.0,
-        frequency: Annotated[
-            int,
-            Field(
-                gt=0,
-                le=MAX_COUPON_FREQUENCY,
-                description="Coupon payments per year, e.g. 2 for semiannual. Must divide 12 "
-                "evenly (1, 2, 3, 4, 6 or 12) so coupon dates fall a whole number of months "
-                "apart.",
-            ),
-        ] = 2,
-        day_count: Annotated[
-            BondDayCount,
-            Field(
-                description="Day count for the accrued part of the coupon period. "
-                "'actual/actual' (the default) is Actual/Actual ICMA, used by US Treasuries and "
-                "most sovereigns. '30/360' is the US (NASD) convention for corporates and munis, "
-                "and is what Excel uses by default (basis=0).",
-            ),
-        ] = "actual/actual",
-        first_period_discount: Annotated[
-            FirstPeriodDiscount,
-            Field(
-                description="How to discount the part period before the next coupon. "
-                "'compound' (the default) is the street convention, (1+y)**stub, and matches "
-                "Excel's PRICE/YIELD while more than one coupon remains. 'simple' is 1 + stub*y "
-                "-- the US Treasury convention in 31 CFR 356 appendix B, and also what Excel "
-                "switches to in the FINAL coupon period, where 'compound' is ~0.01 per 100 "
-                "higher. They differ by a few thousandths per 100 elsewhere, so use 'simple' to "
-                "match Treasury's published figures or Excel inside the last period.",
-            ),
-        ] = "compound",
+        face: DatedFace = 100.0,
+        frequency: DatedFrequency = 2,
+        day_count: DayCount = "actual/actual",
+        first_period_discount: PartPeriodDiscount = "compound",
     ) -> BondDatedYTM:
         """Solve the annual yield to maturity from a bond's CLEAN price at a settlement date.
 
