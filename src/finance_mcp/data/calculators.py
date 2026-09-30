@@ -513,7 +513,8 @@ def irr(cashflows: list[float]) -> IRRResult:
         raise InvalidInput("irr needs at least two cashflows.")
     if not _has_sign_change(cashflows):
         raise InvalidInput("irr needs at least one sign change in the cashflows.")
-    roots = _find_all_roots(lambda r: npv(r, cashflows).npv)
+    terms = [(cash, float(period)) for period, cash in enumerate(cashflows)]
+    roots = _find_all_roots(lambda r: _discount_sum(r, terms))
     if not roots:
         raise InvalidInput(
             "No internal rate of return exists in (-100%, 1,000,000%]; consider mirr()."
@@ -551,6 +552,12 @@ def mirr(cashflows: list[float], finance_rate: float, reinvest_rate: float) -> M
     return MIRRResult(mirr=result, finance_rate=finance_rate, reinvest_rate=reinvest_rate)
 
 
+def _xnpv_terms(cashflows: list[DatedCashflow]) -> list[tuple[float, float]]:
+    """``(amount, years)`` terms on Actual/365 from the earliest cashflow date."""
+    base = min(cf.date for cf in cashflows)
+    return [(cf.amount, (cf.date - base).days / 365.0) for cf in cashflows]
+
+
 def xnpv(rate: float, cashflows: list[DatedCashflow]) -> NPVResult:
     """Net present value of dated cashflows; base date is the earliest, 365-day basis.
 
@@ -565,8 +572,7 @@ def xnpv(rate: float, cashflows: list[DatedCashflow]) -> NPVResult:
         raise InvalidInput("cashflows must not be empty.")
     if rate <= -1.0:
         raise InvalidInput("rate must be greater than -1 (-100%).")
-    base = min(cf.date for cf in cashflows)
-    total = _discount_sum(rate, ((cf.amount, (cf.date - base).days / 365.0) for cf in cashflows))
+    total = _discount_sum(rate, _xnpv_terms(cashflows))
     return NPVResult(rate=rate, npv=total)
 
 
@@ -579,7 +585,8 @@ def xirr(cashflows: list[DatedCashflow]) -> IRRResult:
         raise InvalidInput("xirr needs at least two cashflows.")
     if not _has_sign_change([cf.amount for cf in cashflows]):
         raise InvalidInput("xirr needs at least one sign change in the cashflows.")
-    roots = _find_all_roots(lambda r: xnpv(r, cashflows).npv)
+    terms = _xnpv_terms(cashflows)
+    roots = _find_all_roots(lambda r: _discount_sum(r, terms))
     if not roots:
         raise InvalidInput(
             "No internal rate of return exists in (-100%, 1,000,000%]; consider mirr()."
@@ -817,6 +824,47 @@ def _bond_metrics(
     return dirty, macaulay, macaulay / (1.0 + y), convexity_periods / frequency**2
 
 
+def _require_bond_yield(ytm: float, frequency: int) -> None:
+    """Reject yields the periodic discount base cannot express.
+
+    Pricing only needs ``1 + ytm/frequency > 0``, so the bound is ytm > -frequency, not -1.
+    """
+    if 1.0 + ytm / frequency <= 0.0:
+        raise InvalidInput(
+            "ytm must be greater than -frequency so that 1 + ytm/frequency is positive "
+            f"(got ytm={ytm} with frequency={frequency})."
+        )
+
+
+def _coupon_periods(
+    face: float, years_to_maturity: float, frequency: int, ytm: float | None = None
+) -> int:
+    """Validate on-coupon-date bond inputs and return the number of coupon periods.
+
+    ``ytm`` is checked when given; ``bond_ytm`` omits it because its search never leaves
+    the valid range.
+    """
+    if face <= 0.0:
+        raise InvalidInput("face must be positive.")
+    if frequency < 1:
+        raise InvalidInput("frequency must be at least 1.")
+    if years_to_maturity <= 0.0:
+        raise InvalidInput("years_to_maturity must be positive.")
+    if ytm is not None:
+        _require_bond_yield(ytm, frequency)
+    periods = years_to_maturity * frequency
+    n = round(periods)
+    if abs(periods - n) > 1e-9:
+        raise InvalidInput(
+            "years_to_maturity * frequency must be a whole number of coupon periods "
+            f"(got {periods}); this calculator prices on a coupon date only. Choose a "
+            "maturity that lands on a coupon date (a multiple of 1/frequency)."
+        )
+    if n < 1:
+        raise InvalidInput("years_to_maturity * frequency must be at least one period.")
+    return n
+
+
 def bond_price(
     face: float,
     coupon_rate: float,
@@ -834,30 +882,7 @@ def bond_price(
     first period (on a coupon date the clean and dirty prices coincide). Therefore
     ``years_to_maturity * frequency`` must be a whole number of coupon periods.
     """
-    if face <= 0.0:
-        raise InvalidInput("face must be positive.")
-    if frequency < 1:
-        raise InvalidInput("frequency must be at least 1.")
-    if years_to_maturity <= 0.0:
-        raise InvalidInput("years_to_maturity must be positive.")
-    if 1.0 + ytm / frequency <= 0.0:
-        # The pricing loop only needs a positive discount base (1 + ytm/frequency);
-        # the binding constraint is ytm > -frequency, not ytm > -1.
-        raise InvalidInput(
-            "ytm must be greater than -frequency so that 1 + ytm/frequency is positive "
-            f"(got ytm={ytm} with frequency={frequency})."
-        )
-
-    periods = years_to_maturity * frequency
-    n = round(periods)
-    if abs(periods - n) > 1e-9:
-        raise InvalidInput(
-            "years_to_maturity * frequency must be a whole number of coupon periods "
-            f"(got {periods}); this calculator prices on a coupon date only. Choose a "
-            "maturity that lands on a coupon date (a multiple of 1/frequency)."
-        )
-    if n < 1:
-        raise InvalidInput("years_to_maturity * frequency must be at least one period.")
+    n = _coupon_periods(face, years_to_maturity, frequency, ytm)
     price, macaulay, modified, convexity = _bond_metrics(
         face=face, coupon_rate=coupon_rate, frequency=frequency, y=ytm / frequency, n=n
     )
@@ -922,16 +947,6 @@ def _dated_terms(
     previous, next_coupon, periods = _coupon_schedule(settlement, maturity, frequency)
     accrued_days, period_days = _accrual(day_count, previous, settlement, next_coupon, frequency)
     return previous, next_coupon, periods, accrued_days, period_days
-
-
-def _require_bond_yield(ytm: float, frequency: int) -> float:
-    """Reject yields the periodic discount base cannot express (same rule as bond_price)."""
-    if 1.0 + ytm / frequency <= 0.0:
-        raise InvalidInput(
-            "ytm must be greater than -frequency so that 1 + ytm/frequency is positive "
-            f"(got ytm={ytm} with frequency={frequency})."
-        )
-    return ytm
 
 
 def bond_price_dated(
@@ -1034,8 +1049,9 @@ def bond_ytm(
     """
     if price <= 0.0:
         raise InvalidInput("price must be positive.")
+    n = _coupon_periods(face, years_to_maturity, frequency)
     rate = _bisect(
-        lambda y: bond_price(face, coupon_rate, years_to_maturity, y, frequency).price - price
+        lambda y: _bond_metrics(face, coupon_rate, frequency, y / frequency, n)[0] - price
     )
     return BondYTM(yield_to_maturity=rate)
 
