@@ -345,3 +345,23 @@ def counting(factory: Callable[[str], Any]) -> tuple[Callable[[str], Any], list[
         return factory(symbol)
 
     return wrapped, calls
+
+
+INCOME = {  # rows: label -> [most-recent, prior]
+    "Total Revenue": [400.0, 380.0],
+    "Net Income": [100.0, float("nan")],
+}
+
+
+# --- currency labelling for cross-currency comparisons (item 2) ---
+
+SAP_INFO = {  # SAP's US listing quotes in USD while it reports its financials in EUR
+    "longName": "SAP SE",
+    "currency": "USD",
+    "financialCurrency": "EUR",
+    "enterpriseValue": 3.42e12,
+    "totalDebt": 9.94e9,
+    "totalCash": 1.16e10,
+    "freeCashflow": 9.09e9,
+    "ebitda": 1.18e10,
+}
