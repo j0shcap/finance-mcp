@@ -60,6 +60,16 @@ MCP prompts — reusable analysis templates the client exposes for you to invoke
 them as slash commands; other clients surface them their own way).
 
 - `analyze_stock` (arguments: `ticker`, optional `horizon`, default `12mo`) — single-stock deep-dive: fundamentals, growth-adjusted peer valuation, risk-adjusted and benchmark-relative risk posture, analyst view, and news catalysts → bull/bear cases and a fair-value range with a horizon-framed verdict, citing the data behind each claim.
+- `compare_stocks` (arguments: `tickers` — 2-10 symbols separated by commas or spaces, optional `horizon`, default `12mo`) — ranks a peer group: a comparability screen, a rubric fixed before the results are read, growth-adjusted valuation derived from the data rather than Yahoo's PEG, risk-adjusted performance checked for stability across a 1y and a 5y window, and currency caveats → a ranked verdict that keeps ties and data gaps apart from real differences.
+- `loan_planner` (arguments: `principal`, `annual_rate`, `term_months`, optional `extra_payment`) — fixed-rate loan or mortgage: payment and total interest verified two ways, note rate vs. a fee-loaded APR vs. the effective annual rate, non-monthly compounding, what extra payments are really worth, and a refinance break-even that a reset term cannot fool.
+- `bond_analysis` (arguments: `bond` — a plain-words description, optional `shock_bp`, default `100`) — price, yield, accrued interest, duration, convexity and DV01 with the day count and clean/dirty basis made explicit, then a ± rate shock estimated from duration and convexity and cross-checked by exact repricing, and where option-free analytics break.
+- `investment_cashflows` (arguments: `cashflows`, optional `discount_rate`, `reinvest_rate`) — NPV/IRR/MIRR/XIRR: timing and rate-period conventions, sign-pattern diagnosis (multiple IRRs, borrowing-type flows), NPV as the decision rule with an NPV profile, and when MIRR is the better single figure.
+
+Every prompt points at the `finance://conventions` resource for unit rules (`compare_stocks`, `loan_planner`, `bond_analysis` and `investment_cashflows`
+reference it rather than restating it; `analyze_stock` also embeds the market-data units
+glossary), and names only tools, parameters and result fields the server actually has — a test
+renders each prompt and checks every tool call, each tool's keyword arguments, and every
+snake_case field name against the tool registry.
 
 ## Resources
 
