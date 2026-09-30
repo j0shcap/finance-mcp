@@ -242,8 +242,8 @@ disclosed APR.
 payment that is.
 - Remaining balance after 5 and 10 years: time_value_of_money(solve_for="fv", pv=principal, \
 pmt=-monthly_payment, rate=annual_rate / 12, nper=60 or 120). The balance is the NEGATIVE of the \
-fv it returns, and can differ from a schedule row by cents because loan_schedule rounds each \
-payment. This avoids pulling a full schedule (include_schedule=True returns every row).
+fv it returns; it can differ from a schedule row by cents because monthly_payment is rounded to \
+the cent. This avoids pulling a full schedule (include_schedule=True returns every row).
 
 ## Step 4 - Extra payments
 Run loan_schedule with extra_payment (the user's figure, or a labelled illustrative one if none \
@@ -334,7 +334,10 @@ def register(mcp: FastMCP) -> None:
         ],
         shock_bp: Annotated[
             str,
-            Field(description="Parallel rate shock in basis points, applied up and down."),
+            Field(
+                description="Parallel rate shock as a number of basis points, applied up and "
+                "down, e.g. '100' (not '1%')."
+            ),
         ] = "100",
     ) -> str:
         """Interpret a fixed-coupon bond: price, yield, accrued interest, duration, convexity
