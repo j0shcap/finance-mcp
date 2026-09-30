@@ -17,39 +17,8 @@ def annotations_of(tool: Tool) -> ToolAnnotations:
     return tool.annotations
 
 
-CALCULATOR_TOOLS = {
-    "time_value_of_money",
-    "bond_price",
-    "bond_ytm",
-    "bond_price_dated",
-    "bond_ytm_dated",
-    "loan_schedule",
-    "npv",
-    "irr",
-    "mirr",
-    "xnpv",
-    "xirr",
-    "convert_rate",
-}
-MARKET_DATA_TOOLS = {
-    "get_quote",
-    "get_price_history",
-    "get_financials",
-    "get_company_profile",
-    "get_analyst_data",
-    "get_news",
-    "search_symbols",
-    "get_key_metrics",
-    "analyze_performance",
-    "compare_to_benchmark",
-    "compare_tickers",
-}
-
-
 async def test_every_tool_is_annotated_read_only(client: Client[FastMCPTransport]) -> None:
-    tools = await client.list_tools()
-    assert {t.name for t in tools} == CALCULATOR_TOOLS | MARKET_DATA_TOOLS
-    for tool in tools:
+    for tool in await client.list_tools():
         assert annotations_of(tool).readOnlyHint is True, tool.name
 
 
@@ -64,7 +33,7 @@ async def test_calculators_are_idempotent_and_closed_world(
     client: Client[FastMCPTransport],
 ) -> None:
     by_name = {t.name: t for t in await client.list_tools()}
-    for name in CALCULATOR_TOOLS:
+    for name in conventions.CALCULATOR_TOOLS:
         annotations = annotations_of(by_name[name])
         assert annotations.idempotentHint is True, name
         assert annotations.openWorldHint is False, name
@@ -74,7 +43,7 @@ async def test_market_data_tools_are_open_world_and_not_idempotent(
     client: Client[FastMCPTransport],
 ) -> None:
     by_name = {t.name: t for t in await client.list_tools()}
-    for name in MARKET_DATA_TOOLS:
+    for name in conventions.MARKET_DATA_TOOLS:
         annotations = annotations_of(by_name[name])
         assert annotations.openWorldHint is True, name
         assert annotations.idempotentHint is not True, name  # live prices move
@@ -108,17 +77,6 @@ async def test_server_reports_its_package_version(client: Client[FastMCPTranspor
 async def test_conventions_resource_is_listed(client: Client[FastMCPTransport]) -> None:
     uris = {str(resource.uri) for resource in await client.list_resources()}
     assert "finance://conventions" in uris
-
-
-async def test_conventions_resource_serves_the_units_glossary(
-    client: Client[FastMCPTransport],
-) -> None:
-    contents = await client.read_resource("finance://conventions")
-    assert isinstance(contents[0], TextResourceContents)
-    text = contents[0].text
-    assert "debt_to_equity" in text
-    assert "recommendation_mean" in text
-    assert "financial_currency" in text
 
 
 async def test_tool_error_messages_still_reach_the_client(
@@ -155,26 +113,26 @@ async def test_instructions_name_exactly_the_registered_tools(
         assert name in instructions, name
 
 
-async def test_conventions_resource_explains_the_risk_adjusted_conventions(
-    client: Client[FastMCPTransport],
-) -> None:
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        # The units glossary.
+        "debt_to_equity",
+        "recommendation_mean",
+        "financial_currency",
+        # The risk-adjusted conventions, including the two figures a model most often
+        # mis-scales: a decimal rate and a percentage-point difference.
+        "risk_free_rate",
+        "sharpe_ratio",
+        "DECIMAL",
+        "percentage POINTS",
+        # How the benchmark comparison aligns two calendars.
+        "overlapping_observations",
+        "compare_to_benchmark",
+        "compare_tickers",
+    ],
+)
+async def test_conventions_resource_explains(client: Client[FastMCPTransport], phrase: str) -> None:
     contents = await client.read_resource("finance://conventions")
     assert isinstance(contents[0], TextResourceContents)
-    text = contents[0].text
-    assert "risk_free_rate" in text
-    assert "sharpe_ratio" in text
-    # The two figures a model is most likely to mis-scale: a decimal rate and a
-    # percentage-point difference.
-    assert "DECIMAL" in text
-    assert "percentage POINTS" in text
-
-
-async def test_conventions_resource_explains_the_benchmark_alignment(
-    client: Client[FastMCPTransport],
-) -> None:
-    contents = await client.read_resource("finance://conventions")
-    assert isinstance(contents[0], TextResourceContents)
-    text = contents[0].text
-    assert "overlapping_observations" in text
-    assert "compare_to_benchmark" in text
-    assert "compare_tickers" in text
+    assert phrase in contents[0].text

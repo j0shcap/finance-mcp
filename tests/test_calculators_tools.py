@@ -1,5 +1,7 @@
 """In-memory MCP protocol tests for the calculator tools."""
 
+from typing import Any
+
 import pytest
 from fastmcp import Client
 from fastmcp.client.transports import FastMCPTransport
@@ -7,11 +9,6 @@ from fastmcp.exceptions import ToolError
 
 from finance_mcp.data.errors import InvalidInput
 from finance_mcp.tools._dispatch import run_calc
-
-
-async def test_tools_are_registered(client: Client[FastMCPTransport]) -> None:
-    names = {tool.name for tool in await client.list_tools()}
-    assert {"time_value_of_money", "loan_schedule"} <= names
 
 
 async def test_time_value_of_money_tool(client: Client[FastMCPTransport]) -> None:
@@ -30,29 +27,7 @@ async def test_loan_schedule_tool(client: Client[FastMCPTransport]) -> None:
     )
     assert result.data.monthly_payment == pytest.approx(1199.101, rel=1e-5)
     assert result.data.n_payments == 360
-
-
-async def test_invalid_input_surfaces_as_tool_error(client: Client[FastMCPTransport]) -> None:
-    with pytest.raises(ToolError):
-        await client.call_tool(
-            "time_value_of_money",
-            {"solve_for": "fv", "pv": -1000.0, "pmt": 0.0, "nper": 10.0},  # missing rate
-        )
-
-
-async def test_loan_schedule_invalid_input_surfaces_as_tool_error(
-    client: Client[FastMCPTransport],
-) -> None:
-    with pytest.raises(ToolError):
-        await client.call_tool(
-            "loan_schedule",
-            {"principal": 1000.0, "annual_rate": 0.05, "term_months": 0},
-        )
-
-
-async def test_new_tools_registered(client: Client[FastMCPTransport]) -> None:
-    names = {t.name for t in await client.list_tools()}
-    assert {"npv", "irr", "xnpv", "xirr", "convert_rate"} <= names
+    assert result.data.schedule == []  # rows only on request
 
 
 async def test_npv_tool(client: Client[FastMCPTransport]) -> None:
@@ -88,14 +63,6 @@ async def test_convert_rate_tool(client: Client[FastMCPTransport]) -> None:
     assert result.data.converted_rate == pytest.approx(0.12682503, rel=1e-7)
 
 
-async def test_loan_schedule_tool_summary_default(client: Client[FastMCPTransport]) -> None:
-    result = await client.call_tool(
-        "loan_schedule", {"principal": 200000.0, "annual_rate": 0.06, "term_months": 360}
-    )
-    assert result.data.schedule == []
-    assert result.data.n_payments == 360
-
-
 async def test_loan_schedule_tool_with_rows(client: Client[FastMCPTransport]) -> None:
     result = await client.call_tool(
         "loan_schedule",
@@ -107,16 +74,6 @@ async def test_loan_schedule_tool_with_rows(client: Client[FastMCPTransport]) ->
         },
     )
     assert len(result.data.schedule) == 360
-
-
-async def test_irr_tool_no_sign_change_errors(client: Client[FastMCPTransport]) -> None:
-    with pytest.raises(ToolError):
-        await client.call_tool("irr", {"cashflows": [100.0, 200.0]})
-
-
-async def test_npv_tool_empty_errors(client: Client[FastMCPTransport]) -> None:
-    with pytest.raises(ToolError):
-        await client.call_tool("npv", {"rate": 0.1, "cashflows": []})
 
 
 async def test_xnpv_tool(client: Client[FastMCPTransport]) -> None:
@@ -132,37 +89,6 @@ async def test_xnpv_tool(client: Client[FastMCPTransport]) -> None:
     )
     # 366 days apart (2020 is a leap year): -1000 + 1100 / 1.1 ** (366 / 365)
     assert result.data.npv == pytest.approx(-0.2609, abs=1e-3)
-
-
-async def test_xnpv_tool_empty_errors(client: Client[FastMCPTransport]) -> None:
-    with pytest.raises(ToolError):
-        await client.call_tool("xnpv", {"rate": 0.1, "cashflows": []})
-
-
-async def test_xirr_tool_no_sign_change_errors(client: Client[FastMCPTransport]) -> None:
-    with pytest.raises(ToolError):
-        await client.call_tool(
-            "xirr",
-            {
-                "cashflows": [
-                    {"date": "2021-01-01", "amount": 100.0},
-                    {"date": "2022-01-01", "amount": 200.0},
-                ]
-            },
-        )
-
-
-async def test_convert_rate_tool_invalid_nominal_errors(client: Client[FastMCPTransport]) -> None:
-    with pytest.raises(ToolError):
-        await client.call_tool(
-            "convert_rate",
-            {"rate": -20.0, "periods_per_year": 12, "direction": "nominal_to_effective"},
-        )
-
-
-async def test_bond_tools_registered(client: Client[FastMCPTransport]) -> None:
-    names = {t.name for t in await client.list_tools()}
-    assert {"bond_price", "bond_ytm"} <= names
 
 
 async def test_bond_price_tool(client: Client[FastMCPTransport]) -> None:
@@ -201,22 +127,6 @@ async def test_tvm_when_begin_tool(client: Client[FastMCPTransport]) -> None:
     assert result.data.solved_value == pytest.approx(1320.679, rel=1e-5)
 
 
-async def test_bond_price_tool_invalid_errors(client: Client[FastMCPTransport]) -> None:
-    # ytm = -frequency makes 1 + ytm/frequency zero. Not schema-blocked, so it reaches
-    # the data layer and surfaces as ToolError.
-    with pytest.raises(ToolError):
-        await client.call_tool(
-            "bond_price",
-            {
-                "face": 1000.0,
-                "coupon_rate": 0.05,
-                "years_to_maturity": 10.0,
-                "ytm": -2.0,
-                "frequency": 2,
-            },
-        )
-
-
 async def test_convert_rate_tool_continuous(client: Client[FastMCPTransport]) -> None:
     result = await client.call_tool(
         "convert_rate",
@@ -231,25 +141,6 @@ async def test_convert_rate_tool_continuous(client: Client[FastMCPTransport]) ->
     assert result.data.compounding == "continuous"
 
 
-async def test_bond_ytm_tool_non_integer_periods_errors(client: Client[FastMCPTransport]) -> None:
-    with pytest.raises(ToolError):
-        await client.call_tool(
-            "bond_ytm",
-            {
-                "face": 1000.0,
-                "coupon_rate": 0.05,
-                "years_to_maturity": 2.5,
-                "price": 950.0,
-                "frequency": 1,
-            },
-        )
-
-
-async def test_mirr_tool_registered(client: Client[FastMCPTransport]) -> None:
-    names = {t.name for t in await client.list_tools()}
-    assert "mirr" in names
-
-
 async def test_mirr_tool(client: Client[FastMCPTransport]) -> None:
     result = await client.call_tool(
         "mirr",
@@ -260,39 +151,6 @@ async def test_mirr_tool(client: Client[FastMCPTransport]) -> None:
         },
     )
     assert result.data.mirr == pytest.approx(0.13168560, rel=1e-6)
-
-
-async def test_mirr_tool_invalid_errors(client: Client[FastMCPTransport]) -> None:
-    with pytest.raises(ToolError):
-        await client.call_tool(
-            "mirr",
-            {"cashflows": [-100.0, -50.0], "finance_rate": 0.1, "reinvest_rate": 0.1},
-        )
-
-
-def test_run_calc_translates_zero_division() -> None:
-    def boom() -> float:
-        return 1.0 / 0.0
-
-    with pytest.raises(ToolError, match="out of range"):
-        run_calc(boom)
-
-
-def test_run_calc_translates_overflow() -> None:
-    def boom() -> float:
-        raise OverflowError("(34, 'Result too large')")
-
-    with pytest.raises(ToolError, match="out of range"):
-        run_calc(boom)
-
-
-def test_run_calc_translates_value_error() -> None:
-    # Covers pydantic ValidationError too, which subclasses ValueError.
-    def boom() -> float:
-        raise ValueError("math domain error")
-
-    with pytest.raises(ToolError, match="out of range"):
-        run_calc(boom)
 
 
 def test_run_calc_passes_through_invalid_input_message() -> None:
@@ -319,18 +177,11 @@ async def test_time_value_of_money_overflow_surfaces_as_tool_error(
     client: Client[FastMCPTransport],
 ) -> None:
     # No Field bound can screen this: (1 + 1e5)**1e5 overflows inside the calculator.
-    # Unhandled, the client saw only the bare "(34, 'Result too large')"; the
-    # defence-in-depth clause in run_calc must frame it as an input problem.
     with pytest.raises(ToolError, match="out of range for this calculation"):
         await client.call_tool(
             "time_value_of_money",
             {"solve_for": "fv", "pv": -1000.0, "pmt": 0.0, "rate": 1e5, "nper": 1e5},
         )
-
-
-async def test_dated_bond_tools_registered(client: Client[FastMCPTransport]) -> None:
-    names = {t.name for t in await client.list_tools()}
-    assert {"bond_price_dated", "bond_ytm_dated"} <= names
 
 
 async def test_bond_price_dated_tool(client: Client[FastMCPTransport]) -> None:
@@ -445,3 +296,55 @@ async def test_bond_price_dated_tool_treasury_convention(
     street = await client.call_tool("bond_price_dated", args)
     assert street.data.first_period_discount == "compound"
     assert street.data.clean_price == pytest.approx(99.738573, abs=1e-6)
+
+
+#: One call per calculator that passes every Field bound but fails the calculator's own checks.
+INVALID_CALLS: dict[str, dict[str, Any]] = {
+    "time_value_of_money": {"solve_for": "fv", "pv": -1000.0, "pmt": 0.0, "nper": 10.0},
+    "loan_schedule": {"principal": 1000.0, "annual_rate": 0.05, "term_months": 0},
+    "irr": {"cashflows": [100.0, 200.0]},
+    "npv": {"rate": 0.1, "cashflows": []},
+    "xnpv": {"rate": 0.1, "cashflows": []},
+    "xirr": {
+        "cashflows": [
+            {"date": "2021-01-01", "amount": 100.0},
+            {"date": "2022-01-01", "amount": 200.0},
+        ]
+    },
+    "convert_rate": {"rate": -20.0, "periods_per_year": 12, "direction": "nominal_to_effective"},
+    # ytm = -frequency makes the discount base 1 + ytm/frequency zero.
+    "bond_price": {"face": 1000.0, "coupon_rate": 0.05, "years_to_maturity": 10.0, "ytm": -2.0},
+    "bond_ytm": {
+        "face": 1000.0,
+        "coupon_rate": 0.05,
+        "years_to_maturity": 2.5,
+        "price": 950.0,
+        "frequency": 1,
+    },
+    "mirr": {"cashflows": [-100.0, -50.0], "finance_rate": 0.1, "reinvest_rate": 0.1},
+}
+
+
+@pytest.mark.parametrize("tool", sorted(INVALID_CALLS))
+async def test_invalid_input_surfaces_as_tool_error(
+    client: Client[FastMCPTransport], tool: str
+) -> None:
+    with pytest.raises(ToolError):
+        await client.call_tool(tool, INVALID_CALLS[tool])
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        ZeroDivisionError("float division by zero"),
+        OverflowError("(34, 'Result too large')"),
+        ValueError("math domain error"),  # pydantic's ValidationError is a ValueError
+    ],
+    ids=lambda e: type(e).__name__,
+)
+def test_run_calc_reports_arithmetic_failures_as_out_of_range(error: Exception) -> None:
+    def boom() -> float:
+        raise error
+
+    with pytest.raises(ToolError, match="out of range"):
+        run_calc(boom)
