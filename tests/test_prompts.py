@@ -424,6 +424,7 @@ async def test_loan_planner_rejects_the_naive_refinance_break_even() -> None:
     assert "naive break-even" in text
     assert "wrong when the term resets" in text
     assert "same remaining term" in text  # isolates the rate effect
+    assert "rolled into the loan are already in its balance" in text  # no double count
 
 
 # --- compare_stocks ------------------------------------------------------------------
@@ -476,6 +477,8 @@ async def test_compare_stocks_derives_growth_adjustment_instead_of_trusting_peg(
     text = await _render("compare_stocks", REFERENCING_PROMPTS["compare_stocks"])
     assert "peg_ratio from Yahoo is often null or stale" in text
     assert "trailing_pe / forward_pe - 1" in text
+    assert "years is the number of annual periods returned minus 1" in text
+    assert "undefined when either endpoint is zero or negative" in text
     assert "ONLY when both are" in text
     assert "Value-trap check" in text
 

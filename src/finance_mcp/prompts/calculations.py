@@ -295,7 +295,8 @@ the loan before selling or refinancing again.
 term resets: spreading the remaining balance over a fresh 30 years lowers the payment without \
 saving anything. Never report it alone.
 - Instead compare the two loans at month h: the payments made over h months plus the balance still \
-owed at h (from time_value_of_money, as in Step 3), plus closing costs on the new loan. The \
+owed at h (from time_value_of_money, as in Step 3), plus the new loan's closing costs paid in \
+cash - costs rolled into the loan are already in its balance, so do not add them again. The \
 cheaper total wins at that horizon; find the h where the two cross.
 - Then discount it: treat the refinance as a cashflow series - closing costs paid now as a \
 negative first flow (none if rolled in, but then the new balance is higher), each month's payment \

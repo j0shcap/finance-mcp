@@ -166,8 +166,9 @@ input, never the only one.
 - Implied forward EPS growth = trailing_pe / forward_pe - 1, meaningful ONLY when both are \
 positive.
 - Historical growth from get_financials: revenue and Diluted EPS CAGR = (latest / earliest) ^ \
-(1 / years) - 1 over the annual periods returned (period_ends run most recent first). It is \
-undefined when the earliest value is zero or negative - say so rather than computing it.
+(1 / years) - 1, where years is the number of annual periods returned minus 1 (period_ends run \
+most recent first). It is undefined when either endpoint is zero or negative - say so rather \
+than computing it.
 - Growth-adjusted P/E = forward_pe / (expected growth in percent). With negative or near-zero \
 earnings the P/E is meaningless: fall back to ev_to_ebitda or price_to_sales, read beside \
 profit_margins.
