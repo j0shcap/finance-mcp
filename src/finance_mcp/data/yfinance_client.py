@@ -12,8 +12,9 @@ import math
 import threading
 import time
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any, cast
 
@@ -285,16 +286,13 @@ class YFinanceClient:
     def _fetch_all_bars(self, symbol: str, period: str, interval: str) -> list[PriceBar]:
         """Fetch and parse the FULL (untruncated) OHLCV bars, dropping non-finite rows."""
         intraday = interval in _INTRADAY_INTERVALS
-        try:
+        no_history = f"No price history for '{symbol}'. Check the symbol/period/interval."
+        with _unavailable_on_error(f"Failed to fetch history for '{symbol}'"):
             df = self._ticker(symbol).history(period=period, interval=interval, auto_adjust=True)
-        except Exception as exc:  # surface any yfinance failure verbatim
-            raise DataUnavailable(f"Failed to fetch history for '{symbol}': {exc}") from exc
         if df is None or df.empty:
-            raise SymbolNotFound(
-                f"No price history for '{symbol}'. Check the symbol/period/interval."
-            )
-        try:
-            all_bars: list[PriceBar] = []
+            raise SymbolNotFound(no_history)
+        all_bars: list[PriceBar] = []
+        with _unavailable_on_error(f"Failed to parse history for '{symbol}'"):
             for idx, row in df.iterrows():
                 o, h, low, c, v = (
                     float(row["Open"]),
@@ -310,15 +308,9 @@ class YFinanceClient:
                         date=_bar_date(idx, intraday), open=o, high=h, low=low, close=c, volume=v
                     )
                 )
-            if not all_bars:
-                raise SymbolNotFound(
-                    f"No price history for '{symbol}'. Check the symbol/period/interval."
-                )
-            return all_bars
-        except SymbolNotFound:
-            raise
-        except Exception as exc:  # surface any parsing failure verbatim
-            raise DataUnavailable(f"Failed to parse history for '{symbol}': {exc}") from exc
+        if not all_bars:
+            raise SymbolNotFound(no_history)
+        return all_bars
 
     def _fetch_history(self, symbol: str, period: str, interval: str) -> PriceHistory:
         all_bars = self._all_bars(symbol, period, interval)
@@ -587,18 +579,14 @@ class YFinanceClient:
     ) -> FinancialStatement:
         attr = _FINANCIALS_ATTR[(statement, period)]
         ticker = self._ticker(symbol)
-        try:
+        with _unavailable_on_error(f"Failed to fetch {statement} statement for '{symbol}'"):
             df = getattr(ticker, attr)
-        except Exception as exc:  # surface any yfinance failure verbatim
-            raise DataUnavailable(
-                f"Failed to fetch {statement} statement for '{symbol}': {exc}"
-            ) from exc
         if df is None or df.empty:
             raise SymbolNotFound(
                 f"No {statement} statement available for '{symbol}'. It may be an ETF, index, or "
                 "other instrument without financial statements, or an invalid symbol."
             )
-        try:
+        with _unavailable_on_error(f"Failed to parse {statement} statement for '{symbol}'"):
             period_ends = [col.date().isoformat() for col in df.columns]
             line_items: dict[str, list[float | None]] = {
                 str(idx): [_opt(v) for v in row] for idx, row in df.iterrows()
@@ -611,10 +599,6 @@ class YFinanceClient:
                 period_ends=period_ends,
                 line_items=line_items,
             )
-        except Exception as exc:  # surface any parsing failure verbatim
-            raise DataUnavailable(
-                f"Failed to parse {statement} statement for '{symbol}': {exc}"
-            ) from exc
 
     def _statement_currency(self, symbol: str, ticker: Any) -> str | None:
         """The currency a statement is reported in, cached per symbol.
@@ -642,7 +626,8 @@ class YFinanceClient:
 
     def _fetch_profile(self, symbol: str) -> CompanyProfile:
         ticker, info = self._ticker_with_info(symbol, "profile", "profile")
-        try:
+        # Also covers the dividends/splits reads, which are separate Yahoo requests.
+        with _unavailable_on_error(f"Failed to parse profile for '{symbol}'"):
             return CompanyProfile(
                 symbol=symbol,
                 name=info.get("longName") or info.get("shortName"),
@@ -661,8 +646,6 @@ class YFinanceClient:
                 recent_dividends=_dividend_events(ticker.dividends, limit=8),
                 splits=_split_events(ticker.splits),
             )
-        except Exception as exc:  # surface any parsing failure verbatim
-            raise DataUnavailable(f"Failed to parse profile for '{symbol}': {exc}") from exc
 
     def get_key_metrics(self, symbol: str) -> KeyMetrics:
         symbol = _norm(symbol)
@@ -672,7 +655,7 @@ class YFinanceClient:
 
     def _fetch_metrics(self, symbol: str) -> KeyMetrics:
         _, info = self._ticker_with_info(symbol, "metrics", "metrics")
-        try:
+        with _unavailable_on_error(f"Failed to parse metrics for '{symbol}'"):
             return KeyMetrics(
                 symbol=symbol,
                 currency=info.get("currency"),
@@ -703,8 +686,6 @@ class YFinanceClient:
                 revenue_per_share=_opt(info.get("revenuePerShare")),
                 book_value=_opt(info.get("bookValue")),
             )
-        except Exception as exc:  # surface any mapping failure verbatim
-            raise DataUnavailable(f"Failed to parse metrics for '{symbol}': {exc}") from exc
 
     def get_analyst_data(self, symbol: str) -> AnalystData:
         symbol = _norm(symbol)
@@ -716,22 +697,22 @@ class YFinanceClient:
 
     def _fetch_analyst(self, symbol: str) -> AnalystData:
         ticker, info = self._ticker_with_info(symbol, "analyst data", "analyst")
-        try:
+        parse_failed = f"Failed to parse analyst data for '{symbol}'"
+        with _unavailable_on_error(parse_failed):
             mean = _opt(info.get("recommendationMean"))
             analysts = _opt_int(info.get("numberOfAnalystOpinions"))
             target_mean = _opt(info.get("targetMeanPrice"))
             target_median = _opt(info.get("targetMedianPrice"))
             target_high = _opt(info.get("targetHighPrice"))
             target_low = _opt(info.get("targetLowPrice"))
-        except Exception as exc:  # non-numeric values from the source
-            raise DataUnavailable(f"Failed to parse analyst data for '{symbol}': {exc}") from exc
         targets = (target_mean, target_median, target_high, target_low)
         if mean is None and analysts is None and all(t is None for t in targets):
             raise DataUnavailable(
                 f"No analyst coverage for '{symbol}'. It may be an ETF, index, or other "
                 "instrument without sell-side analyst data."
             )
-        try:
+        # Also covers the recommendations read, which is a separate Yahoo request.
+        with _unavailable_on_error(parse_failed):
             return AnalystData(
                 symbol=symbol,
                 currency=info.get("currency"),
@@ -745,8 +726,6 @@ class YFinanceClient:
                 target_low_price=target_low,
                 recommendation_trend=_recommendation_trend(ticker.recommendations),
             )
-        except Exception as exc:  # surface any parsing failure verbatim
-            raise DataUnavailable(f"Failed to parse analyst data for '{symbol}': {exc}") from exc
 
     def get_news(self, symbol: str, count: int = 10) -> NewsResult:
         symbol = _norm(symbol)
@@ -757,10 +736,8 @@ class YFinanceClient:
         )
 
     def _fetch_news(self, symbol: str, count: int) -> NewsResult:
-        try:
+        with _unavailable_on_error(f"Failed to fetch news for '{symbol}'"):
             items = self._ticker(symbol).get_news(count=count, tab="news")
-        except Exception as exc:  # a failed news fetch is a data issue, not a missing symbol
-            raise DataUnavailable(f"Failed to fetch news for '{symbol}': {exc}") from exc
         if not items:
             # An empty stream is ambiguous: yfinance turns a 500 from the news endpoint into
             # an empty list, so an outage is indistinguishable from a symbol with no
@@ -769,11 +746,9 @@ class YFinanceClient:
             return NewsResult(
                 symbol=symbol, articles=self._search_news(symbol, count), source="search"
             )
-        try:
+        with _unavailable_on_error(f"Failed to parse news for '{symbol}'"):
             articles = [a for a in (_news_article(it) for it in items) if a is not None][:count]
             return NewsResult(symbol=symbol, articles=articles, source="ticker")
-        except Exception as exc:  # surface any parsing failure verbatim
-            raise DataUnavailable(f"Failed to parse news for '{symbol}': {exc}") from exc
 
     def _search_news(self, symbol: str, count: int) -> list[NewsArticle]:
         """News for `symbol` from the search endpoint, or none if it cannot supply any.
@@ -799,18 +774,14 @@ class YFinanceClient:
         )
 
     def _fetch_search(self, query: str, max_results: int) -> SymbolSearchResult:
-        try:
+        with _unavailable_on_error(f"Search failed for '{query}'"):
             result = self._search(query, max_results=max_results, news_count=0, lists_count=0)
             quotes = result.quotes
-        except Exception as exc:  # a failed search is a data issue, not a missing symbol
-            raise DataUnavailable(f"Search failed for '{query}': {exc}") from exc
         if not quotes:
             return SymbolSearchResult(query=query, matches=[])
-        try:
+        with _unavailable_on_error(f"Failed to parse search results for '{query}'"):
             matches = [_symbol_match(q) for q in quotes if q.get("symbol")]
             return SymbolSearchResult(query=query, matches=matches)
-        except Exception as exc:  # surface any parsing failure verbatim
-            raise DataUnavailable(f"Failed to parse search results for '{query}': {exc}") from exc
 
 
 def _fetch_concurrently[T](
@@ -933,6 +904,19 @@ def _data_error(exc: Exception, fetch_label: str, kind: str, symbol: str) -> Dat
     if _is_no_data_error(exc):
         return SymbolNotFound(_no_data_msg(kind, symbol))
     return DataUnavailable(f"Failed to fetch {fetch_label} for '{symbol}': {exc}")
+
+
+@contextmanager
+def _unavailable_on_error(message: str) -> Iterator[None]:
+    """Re-raise any failure in the block as DataUnavailable("<message>: <error>").
+
+    yfinance and the payloads it returns fail in more ways than can be enumerated, so the
+    underlying error text is passed on for the caller to read.
+    """
+    try:
+        yield
+    except Exception as exc:
+        raise DataUnavailable(f"{message}: {exc}") from exc
 
 
 def _no_data_msg(kind: str, symbol: str) -> str:
