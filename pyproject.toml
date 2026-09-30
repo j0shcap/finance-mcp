@@ -60,6 +60,14 @@ dev = [
   "mypy>=1.11",
   "bandit>=1.7",
   "pre-commit>=3.8",
+  # Test-only oracles and tooling: independent implementations the calculators are
+  # cross-checked against, the property-based driver, and a schema validator for the
+  # e2e suite's check that every advertised tool schema is valid JSON Schema.
+  "hypothesis>=6.100",
+  "jsonschema>=4.0",
+  "types-jsonschema",
+  "numpy-financial>=1.0",
+  "scipy>=1.13",
 ]
 
 [build-system]
@@ -83,7 +91,7 @@ strict = true
 files = ["src", "tests"]
 
 [[tool.mypy.overrides]]
-module = ["yfinance.*", "pandas.*"]
+module = ["yfinance.*", "pandas.*", "numpy_financial.*", "scipy.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
@@ -91,12 +99,13 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
   "live: hits real Yahoo Finance endpoints; deselected by default, run with `make test-live`",
+  "e2e: drives the built wheel over stdio in a subprocess; deselected by default, run with `make e2e`",
 ]
-# `-m 'not live'` keeps the default run (and therefore `make check` and CI) offline and
-# deterministic; `make test-live` passes its own `-m live`, which wins because -m takes a
-# single value. --strict-markers turns a misspelled marker into an error rather than a
+# `-m 'not live and not e2e'` keeps the default run (and therefore `make check`) offline,
+# in-process and deterministic; `make test-live` and `make e2e` pass their own -m, which
+# wins because -m takes a single value. --strict-markers turns a misspelled marker into an error rather than a
 # test that silently never runs. tests/test_live_marker.py pins both.
-addopts = "-m 'not live' --strict-markers --cov=finance_mcp --cov-report=term-missing --cov-report=xml --cov-fail-under=90"
+addopts = "-m 'not live and not e2e' --strict-markers --cov=finance_mcp --cov-report=term-missing --cov-report=xml --cov-fail-under=90"
 
 [tool.coverage.run]
 source = ["finance_mcp"]

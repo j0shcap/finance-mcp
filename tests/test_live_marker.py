@@ -1,8 +1,8 @@
-"""Pins the configuration and completeness of the opt-in live suite.
+"""Pins the configuration and completeness of the opt-in live and e2e suites.
 
-Three things keep `tests/live/` out of `make check`: the `live` marker is registered,
-`addopts` carries `-m "not live"`, and the marker is applied only to items under that
-directory. Each is one edit away from being lost - the first two would make the offline gate
+Three things keep `tests/live/` (and, the same way, `tests/e2e/`) out of `make check`: the
+marker is registered, `addopts` deselects it, and the marker is applied only to items under
+that directory. Each is one edit away from being lost - the first two would make the offline gate
 network-dependent, the third would empty it while leaving the config looking correct. So the
 first two are checked against the loaded config and the third against a real collection pass.
 
@@ -49,6 +49,7 @@ def test_default_run_keeps_the_offline_suite_and_drops_the_live_one() -> None:
         "being applied to items outside tests/live/"
     )
     assert "tests/live/" not in collected, "live tests must not be selected by default"
+    assert "tests/e2e/" not in collected, "e2e tests must not be selected by default"
 
 
 def test_live_run_selects_only_the_live_suite() -> None:
@@ -61,20 +62,42 @@ def test_live_run_selects_only_the_live_suite() -> None:
     )
 
 
-def test_live_marker_is_registered(pytestconfig: pytest.Config) -> None:
-    """`live` is a declared marker, not an ad-hoc one `--strict-markers` would reject."""
+def test_e2e_run_selects_only_the_offline_e2e_suite() -> None:
+    """`make e2e` reaches the stdio suite, minus its Yahoo-backed half, and nothing else."""
+    collected = _collect("-m", "e2e and not live")
+
+    assert "tests/e2e/test_stdio_protocol.py::" in collected, (
+        "`-m 'e2e and not live'` must select the offline e2e suite"
+    )
+    assert "tests/e2e/test_stdio_market_data.py::" not in collected, (
+        "the market-data e2e tests hit Yahoo, so they belong to `make test-live`"
+    )
+    assert "tests/test_server.py::" not in collected
+    assert "tests/live/" not in collected
+
+
+def test_live_run_includes_the_market_data_e2e_tests() -> None:
+    """The Yahoo-backed stdio tests are live tests too, so the nightly run covers them."""
+    assert "tests/e2e/test_stdio_market_data.py::" in _collect("-m", "live")
+
+
+@pytest.mark.parametrize("marker", ["live", "e2e"])
+def test_marker_is_registered(pytestconfig: pytest.Config, marker: str) -> None:
+    """A declared marker, not an ad-hoc one `--strict-markers` would reject."""
     markers = pytestconfig.getini("markers")
-    assert any(m.startswith("live:") for m in markers), (
-        f"the 'live' marker must be registered in [tool.pytest.ini_options] markers, got {markers}"
+    assert any(m.startswith(f"{marker}:") for m in markers), (
+        f"the {marker!r} marker must be registered in [tool.pytest.ini_options] markers, "
+        f"got {markers}"
     )
 
 
-def test_live_tests_are_deselected_by_default(pytestconfig: pytest.Config) -> None:
-    """The default run excludes the live suite, so `make check` stays offline."""
+@pytest.mark.parametrize("marker", ["live", "e2e"])
+def test_marker_is_deselected_by_default(pytestconfig: pytest.Config, marker: str) -> None:
+    """The default run excludes both opt-in suites, so `make check` stays fast and offline."""
     addopts = pytestconfig.getini("addopts")
     assert "-m" in addopts, f"addopts must pass a -m expression, got {addopts}"
-    assert "not live" in addopts[addopts.index("-m") + 1], (
-        f"addopts must deselect the live marker by default, got {addopts}"
+    assert f"not {marker}" in addopts[addopts.index("-m") + 1], (
+        f"addopts must deselect the {marker!r} marker by default, got {addopts}"
     )
 
 
