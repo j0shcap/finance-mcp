@@ -6,7 +6,8 @@ from typing import Annotated
 from fastmcp import FastMCP
 from pydantic import Field
 
-from finance_mcp.conventions import CONVENTIONS_URI, UNITS_GLOSSARY
+from finance_mcp.conventions import UNITS_GLOSSARY
+from finance_mcp.prompts._render import render
 
 _ANALYZE_STOCK_TEMPLATE = """\
 You are a senior equity research analyst. Produce a deep-dive on \
@@ -119,14 +120,8 @@ Structured markdown, scannable: Snapshot (incl. sector lens) -> Financial trends
 valuation -> Performance/technical -> Analyst view & catalysts -> Bull / Bear -> Fair value & \
 verdict -> Disclaimer. Bold the most important numbers; show margins/ROE as percentages.
 
-End with exactly: Disclaimer: This is quantitative analysis for research purposes, not investment \
-advice. Always do your own due diligence.
+End with exactly: {disclaimer}
 """
-
-
-ANALYZE_STOCK_TEMPLATE = _ANALYZE_STOCK_TEMPLATE.replace(
-    "{units_glossary}", UNITS_GLOSSARY
-).replace("{conventions_uri}", CONVENTIONS_URI)
 
 
 def register(mcp: FastMCP) -> None:
@@ -144,6 +139,9 @@ def register(mcp: FastMCP) -> None:
         performance/technical posture, analyst view, and news catalysts, synthesized into
         bull/bear cases and a fair-value range with a horizon-framed verdict. Every claim cites
         the finance-mcp tool and period it came from."""
-        # Token replacement (not str.format) so a future literal brace in the
-        # methodology prose can never raise at call time.
-        return ANALYZE_STOCK_TEMPLATE.replace("{ticker}", ticker).replace("{horizon}", horizon)
+        return render(
+            _ANALYZE_STOCK_TEMPLATE,
+            ticker=ticker,
+            horizon=horizon,
+            units_glossary=UNITS_GLOSSARY,
+        )
