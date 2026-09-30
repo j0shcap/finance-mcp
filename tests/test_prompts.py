@@ -174,6 +174,7 @@ async def test_analyze_stock_warns_that_a_thin_overlap_makes_beta_noisy() -> Non
 REFERENCING_PROMPTS: dict[str, dict[str, str]] = {
     "investment_cashflows": {"cashflows": "-1000 now, then 300 a year for 5 years"},
     "bond_analysis": {"bond": "UST 4% due 2036-01-15, settles 2026-03-15, clean price 92.30"},
+    "loan_planner": {"principal": "400000", "annual_rate": "6.5%", "term_months": "360"},
 }
 
 
@@ -335,3 +336,62 @@ async def test_bond_analysis_names_where_option_free_math_breaks() -> None:
     assert "negative convexity" in text
     assert "not an expected return" in text  # YTM is a promised yield
     assert '"nominal_to_effective"' in text  # compare yields on one compounding basis
+
+
+# --- loan_planner --------------------------------------------------------------------
+
+
+async def test_loan_planner_arguments() -> None:
+    assert await _prompt_arguments("loan_planner") == {
+        "principal": True,
+        "annual_rate": True,
+        "term_months": True,
+        "extra_payment": False,
+    }
+
+
+async def test_loan_planner_echoes_inputs_and_marks_a_missing_extra_payment() -> None:
+    text = await _render("loan_planner", REFERENCING_PROMPTS["loan_planner"])
+    assert "Principal: 400000" in text
+    assert "Annual rate: 6.5%" in text
+    assert "Term: 360 months" in text
+    assert "Extra monthly principal payment: not given" in text
+    text = await _render(
+        "loan_planner", {**REFERENCING_PROMPTS["loan_planner"], "extra_payment": "250"}
+    )
+    assert "Extra monthly principal payment: 250" in text
+
+
+async def test_loan_planner_separates_the_note_rate_from_a_disclosed_apr() -> None:
+    text = await _render("loan_planner", REFERENCING_PROMPTS["loan_planner"])
+    assert "NOT the rate to amortize at" in text  # a TILA APR folds in fees
+    assert '"nominal_to_effective"' in text  # EAR of the note rate
+
+
+async def test_loan_planner_converts_non_monthly_compounding() -> None:
+    text = await _render("loan_planner", REFERENCING_PROMPTS["loan_planner"])
+    assert "Canadian fixed-rate mortgages compound semiannually" in text
+    assert '"effective_to_nominal"' in text
+    assert "adjustable-rate" in text  # the tools assume one fixed rate
+
+
+async def test_loan_planner_verifies_the_payment_and_reads_balances_from_tvm() -> None:
+    text = await _render("loan_planner", REFERENCING_PROMPTS["loan_planner"])
+    assert 'time_value_of_money(solve_for="pmt"' in text
+    assert 'time_value_of_money(solve_for="fv"' in text
+    assert "NEGATIVE of the fv" in text  # the balance comes back as a negative fv
+
+
+async def test_loan_planner_frames_extra_payments_honestly() -> None:
+    text = await _render("loan_planner", REFERENCING_PROMPTS["loan_planner"])
+    assert "undiscounted sum" in text
+    assert "exactly the loan's note rate" in text
+    assert "only a recast" in text
+    assert "prepayment penalties" in text
+
+
+async def test_loan_planner_rejects_the_naive_refinance_break_even() -> None:
+    text = await _render("loan_planner", REFERENCING_PROMPTS["loan_planner"])
+    assert "naive break-even" in text
+    assert "wrong when the term resets" in text
+    assert "same remaining term" in text  # isolates the rate effect
