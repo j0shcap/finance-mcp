@@ -431,6 +431,11 @@ def _discount_sum(rate: float, terms: Iterable[tuple[float, float]]) -> float:
     return math.copysign(math.inf, dominant_sign) if dominant_sign != 0 else total
 
 
+def _npv_terms(cashflows: list[float]) -> list[tuple[float, float]]:
+    """``(amount, period)`` terms with cashflows[0] at period 0."""
+    return [(cash, float(period)) for period, cash in enumerate(cashflows)]
+
+
 def npv(rate: float, cashflows: list[float]) -> NPVResult:
     """Net present value of equally-spaced cashflows, with cashflows[0] at t=0 (undiscounted).
 
@@ -441,8 +446,7 @@ def npv(rate: float, cashflows: list[float]) -> NPVResult:
         raise InvalidInput("cashflows must not be empty.")
     if rate <= -1.0:
         raise InvalidInput("rate must be greater than -1 (-100%).")
-    total = _discount_sum(rate, ((cash, float(period)) for period, cash in enumerate(cashflows)))
-    return NPVResult(rate=rate, npv=total)
+    return NPVResult(rate=rate, npv=_discount_sum(rate, _npv_terms(cashflows)))
 
 
 def _has_sign_change(values: list[float]) -> bool:
@@ -461,7 +465,7 @@ def irr(cashflows: list[float]) -> IRRResult:
         raise InvalidInput("irr needs at least two cashflows.")
     if not _has_sign_change(cashflows):
         raise InvalidInput("irr needs at least one sign change in the cashflows.")
-    terms = [(cash, float(period)) for period, cash in enumerate(cashflows)]
+    terms = _npv_terms(cashflows)
     roots = _find_all_roots(lambda r: _discount_sum(r, terms))
     if not roots:
         raise InvalidInput(
@@ -783,22 +787,17 @@ def _require_bond_yield(ytm: float, frequency: int) -> None:
         )
 
 
-def _coupon_periods(
-    face: float, years_to_maturity: float, frequency: int, ytm: float | None = None
-) -> int:
-    """Validate on-coupon-date bond inputs and return the number of coupon periods.
-
-    ``ytm`` is checked when given; ``bond_ytm`` omits it because its search never leaves
-    the valid range.
-    """
+def _require_bond_terms(face: float, years_to_maturity: float, frequency: int) -> None:
     if face <= 0.0:
         raise InvalidInput("face must be positive.")
     if frequency < 1:
         raise InvalidInput("frequency must be at least 1.")
     if years_to_maturity <= 0.0:
         raise InvalidInput("years_to_maturity must be positive.")
-    if ytm is not None:
-        _require_bond_yield(ytm, frequency)
+
+
+def _coupon_periods(years_to_maturity: float, frequency: int) -> int:
+    """The number of whole coupon periods to maturity, for a bond priced on a coupon date."""
     periods = years_to_maturity * frequency
     n = round(periods)
     if abs(periods - n) > 1e-9:
@@ -829,7 +828,9 @@ def bond_price(
     first period (on a coupon date the clean and dirty prices coincide). Therefore
     ``years_to_maturity * frequency`` must be a whole number of coupon periods.
     """
-    n = _coupon_periods(face, years_to_maturity, frequency, ytm)
+    _require_bond_terms(face, years_to_maturity, frequency)
+    _require_bond_yield(ytm, frequency)
+    n = _coupon_periods(years_to_maturity, frequency)
     price, macaulay, modified, convexity = _bond_metrics(
         face=face, coupon_rate=coupon_rate, frequency=frequency, y=ytm / frequency, n=n
     )
@@ -996,7 +997,8 @@ def bond_ytm(
     """
     if price <= 0.0:
         raise InvalidInput("price must be positive.")
-    n = _coupon_periods(face, years_to_maturity, frequency)
+    _require_bond_terms(face, years_to_maturity, frequency)
+    n = _coupon_periods(years_to_maturity, frequency)
     rate = _bisect(
         lambda y: _bond_metrics(face, coupon_rate, frequency, y / frequency, n)[0] - price
     )
