@@ -191,7 +191,7 @@ def _require(name: str, value: float | None) -> float:
     return value
 
 
-def _require_rate(rate: float) -> float:
+def _require_rate(rate: float) -> None:
     """Reject per-period rates at or below -100%, which the TVM equation cannot express.
 
     At rate == -1 the growth factor (1+rate)**nper is exactly 0 — ``_pv`` divides by it
@@ -202,7 +202,6 @@ def _require_rate(rate: float) -> float:
     """
     if rate <= -1.0:
         raise InvalidInput("rate must be greater than -1 (-100%) per period.")
-    return rate
 
 
 def _fv(pv: float, pmt: float, rate: float, nper: float, due: bool = False) -> float:
@@ -279,6 +278,16 @@ def _rate(pv: float, fv: float, pmt: float, nper: float, due: bool = False) -> f
     return _bisect(lambda r: _fv(pv, pmt, r, nper, due) - fv, high=1.0)
 
 
+# Each solver takes the other four TVM variables as keyword arguments named like the fields.
+_TVM_SOLVERS: dict[TVMVariable, Callable[..., float]] = {
+    "fv": _fv,
+    "pv": _pv,
+    "pmt": _pmt,
+    "nper": _nper,
+    "rate": _rate,
+}
+
+
 def time_value_of_money(
     solve_for: TVMVariable,
     pv: float | None = None,
@@ -295,67 +304,15 @@ def time_value_of_money(
     future value, annuity payments, period count, and CAGR (solve for ``rate`` with
     ``pmt=0``). ``when`` selects end- or begin-of-period payments (begin = annuity-due).
     """
-    due = when == "begin"
-    pmt_known = 0.0 if (pmt is None and solve_for != "pmt") else pmt
-
-    if solve_for == "fv":
-        value = _fv(
-            _require("pv", pv),
-            _require("pmt", pmt_known),
-            _require_rate(_require("rate", rate)),
-            _require("nper", nper),
-            due,
-        )
-    elif solve_for == "pv":
-        value = _pv(
-            _require("fv", fv),
-            _require("pmt", pmt_known),
-            _require_rate(_require("rate", rate)),
-            _require("nper", nper),
-            due,
-        )
-    elif solve_for == "pmt":
-        value = _pmt(
-            _require("pv", pv),
-            _require("fv", fv),
-            _require_rate(_require("rate", rate)),
-            _require("nper", nper),
-            due,
-        )
-    elif solve_for == "nper":
-        value = _nper(
-            _require("pv", pv),
-            _require("fv", fv),
-            _require("pmt", pmt_known),
-            _require_rate(_require("rate", rate)),
-            due,
-        )
-    else:  # rate
-        value = _rate(
-            _require("pv", pv),
-            _require("fv", fv),
-            _require("pmt", pmt_known),
-            _require("nper", nper),
-            due,
-        )
-
-    resolved: dict[str, float | None] = {
-        "pv": pv,
-        "fv": fv,
-        "pmt": pmt_known,
-        "rate": rate,
-        "nper": nper,
-    }
-    resolved[solve_for] = value
-    return TVMResult(
-        solved_for=solve_for,
-        solved_value=value,
-        pv=resolved["pv"] if resolved["pv"] is not None else 0.0,
-        fv=resolved["fv"] if resolved["fv"] is not None else 0.0,
-        pmt=resolved["pmt"] if resolved["pmt"] is not None else 0.0,
-        rate=resolved["rate"] if resolved["rate"] is not None else 0.0,
-        nper=resolved["nper"] if resolved["nper"] is not None else 0.0,
-    )
+    given = {"pv": pv, "fv": fv, "pmt": 0.0 if pmt is None else pmt, "rate": rate, "nper": nper}
+    del given[solve_for]
+    known: dict[str, float] = {}
+    for name, value in given.items():
+        known[name] = _require(name, value)
+        if name == "rate":
+            _require_rate(known[name])
+    solved = _TVM_SOLVERS[solve_for](**known, due=when == "begin")
+    return TVMResult(solved_for=solve_for, solved_value=solved, **known, **{solve_for: solved})
 
 
 def loan_schedule(
