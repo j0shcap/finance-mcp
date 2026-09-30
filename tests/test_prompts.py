@@ -309,6 +309,18 @@ async def test_bond_analysis_echoes_the_bond_and_defaults_to_a_100bp_shock() -> 
     assert "+/-100bp" not in text
 
 
+async def test_bond_analysis_normalizes_the_shock() -> None:
+    text = await _render("bond_analysis", {"bond": "a 5y 3% corporate at 97", "shock_bp": " 25BP "})
+    assert "+/-25bp" in text
+
+
+@pytest.mark.parametrize("shock_bp", ["1%", "0.01", "-50", "abc", "inf", ""])
+async def test_bond_analysis_rejects_a_shock_that_is_not_basis_points(shock_bp: str) -> None:
+    """The error reaches the client despite mask_error_details, naming the problem."""
+    with pytest.raises(McpError, match="shock_bp must be a number of basis points"):
+        await _render("bond_analysis", {"bond": "a 5y 3% corporate at 97", "shock_bp": shock_bp})
+
+
 async def test_bond_analysis_picks_the_dated_tools_and_conventions() -> None:
     text = await _render("bond_analysis", REFERENCING_PROMPTS["bond_analysis"])
     assert "bond_price_dated" in text
@@ -316,6 +328,7 @@ async def test_bond_analysis_picks_the_dated_tools_and_conventions() -> None:
     assert '"30/360"' in text  # US corporates/munis, not the actual/actual default
     assert "market quotes are CLEAN" in text
     assert "subtract accrued interest" in text  # dirty -> clean before solving
+    assert "read accrued_interest from bond_price_dated at any ytm" in text
 
 
 async def test_bond_analysis_knows_ytm_dated_returns_no_risk_figures() -> None:
@@ -327,6 +340,8 @@ async def test_bond_analysis_knows_ytm_dated_returns_no_risk_figures() -> None:
 async def test_bond_analysis_sanity_checks_premium_and_discount() -> None:
     text = await _render("bond_analysis", REFERENCING_PROMPTS["bond_analysis"])
     assert "a coupon_rate above the yield means a premium" in text
+    # A dated bond with coupon == yield prices a few thousandths below 100 clean.
+    assert "Near par that is only approximate" in text
 
 
 async def test_bond_analysis_measures_dv01_and_convexity_on_the_dirty_price() -> None:

@@ -7,9 +7,11 @@ calculator's docstring cannot: which figure decides, when a figure misleads, and
 check the answer through a second tool path.
 """
 
+import math
 from typing import Annotated
 
 from fastmcp import FastMCP
+from fastmcp.exceptions import PromptError
 from pydantic import Field
 
 from finance_mcp.prompts._render import render
@@ -17,6 +19,25 @@ from finance_mcp.prompts._render import render
 #: How an optional argument the user left out is rendered. The templates tell the model
 #: that this phrase means "ask, or state a labelled assumption".
 NOT_GIVEN = "not given"
+
+
+def parse_shock_bp(raw: str) -> str:
+    """Normalize a rate shock ("100", "25bp", " 12.5 ") to a plain number of basis points.
+
+    Raises PromptError (which reaches the client despite error masking) for anything else,
+    including a value below 1bp: "1%" or "0.01" is almost certainly a percent or a decimal,
+    and would otherwise render as garbled text or a shock 100x too small.
+    """
+    try:
+        value = float(raw.strip().lower().removesuffix("bp"))
+    except ValueError:
+        value = math.nan
+    if not (math.isfinite(value) and value >= 1):
+        raise PromptError(
+            f"shock_bp must be a number of basis points >= 1, e.g. '100'; got {raw!r}."
+        )
+    return f"{value:g}"
+
 
 _INVESTMENT_CASHFLOWS_TEMPLATE = """\
 You are a corporate-finance analyst evaluating an investment from its cashflows. Use the \
@@ -134,7 +155,9 @@ dates are known - and then state that accrued interest is taken as zero.
 corporates and munis. Use first_period_discount="simple" only to match US Treasury published \
 prices, or Excel inside the final coupon period.
 - Clean vs dirty: market quotes are CLEAN. If the user gave an invoice (dirty) price, subtract \
-accrued interest before calling bond_ytm_dated. Prices default to per 100 of face; pass face for \
+accrued interest before calling bond_ytm_dated. Accrued interest does not depend on the yield, so \
+read accrued_interest from bond_price_dated at any ytm (e.g. the coupon rate) with the same dates \
+and conventions. Prices default to per 100 of face; pass face for \
 cash amounts, and keep the two apart.
 - bond_ytm_dated returns the yield and the prices but no duration or convexity: call \
 bond_price_dated at the solved yield_to_maturity to get the risk figures.
@@ -143,7 +166,9 @@ bond_price_dated at the solved yield_to_maturity to get the risk figures.
 - Report clean_price, dirty_price, accrued_interest (with accrued_days), next_coupon_date, \
 current_yield, the yield to maturity and the coupon_rate.
 - Sanity check: a coupon_rate above the yield means a premium (clean price above par), below it a \
-discount, equal to it par. If that relationship fails, an input is wrong - stop and resolve it.
+discount. Near par that is only approximate: between coupon dates a bond whose coupon equals its \
+yield prices a few thousandths below 100 clean, which is expected. A clear violation (a coupon \
+well above the yield but a price well below par) means an input is wrong - stop and resolve it.
 - Compare yields only on the same compounding basis: convert_rate(rate=ytm, \
 periods_per_year=frequency, direction="nominal_to_effective") before setting a semiannual bond \
 against an annual-pay one.
@@ -346,7 +371,7 @@ def register(mcp: FastMCP) -> None:
         and DV01, then a +/- rate shock estimated from duration and convexity and
         cross-checked by exact repricing - with the conventions (day count, clean vs dirty)
         and the limits of option-free analytics made explicit."""
-        return render(_BOND_ANALYSIS_TEMPLATE, bond=bond, shock_bp=shock_bp)
+        return render(_BOND_ANALYSIS_TEMPLATE, bond=bond, shock_bp=parse_shock_bp(shock_bp))
 
     @mcp.prompt
     def loan_planner(
