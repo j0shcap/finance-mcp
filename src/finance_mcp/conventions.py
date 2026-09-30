@@ -38,6 +38,8 @@ CALCULATOR_TOOLS = (
     "xirr",
     "bond_price",
     "bond_ytm",
+    "bond_price_dated",
+    "bond_ytm_dated",
     "convert_rate",
 )
 
@@ -103,10 +105,20 @@ the sign of the answer flips (or a rate solve has no solution).
 - Rates are decimals, never percents: 0.05 means 5%.
 - npv, irr, mirr and time_value_of_money take a PER-PERIOD rate matching the cashflow spacing \
 (monthly flows -> monthly rate). xnpv, xirr, bond_price, bond_ytm, loan_schedule and convert_rate \
-take ANNUAL rates; loan_schedule's annual_rate is a nominal APR compounded monthly.
+take ANNUAL rates; loan_schedule's annual_rate is a nominal APR compounded monthly. So do \
+bond_price_dated and bond_ytm_dated.
 - irr and xirr return a per-period and an annualized rate respectively; both can have several \
 roots for non-conventional flows (see all_irrs/is_unique) - prefer mirr then.
-- convert_rate moves between a nominal annual rate (APR) and an effective annual rate (APY/EAR)."""
+- convert_rate moves between a nominal annual rate (APR) and an effective annual rate (APY/EAR).
+- Bond prices come in two flavours and mixing them up misstates the cash by up to a full \
+coupon. The CLEAN price is what the market quotes; the DIRTY (or full/invoice) price is \
+clean + accrued interest, and is what the buyer actually pays. bond_price_dated reports both, \
+per face and per 100 of face; bond_ytm_dated solves from the CLEAN price, so subtract accrued \
+interest first if you were given a dirty one. On a coupon date nothing has accrued and the two \
+coincide, which is why bond_price/bond_ytm report a single price.
+- bond_price_dated and bond_ytm_dated default to the Actual/Actual ICMA day count (US \
+Treasuries and most sovereigns), NOT Excel's default of 30/360 - pass day_count='30/360' to \
+match Excel's PRICE/YIELD or to price a US corporate or municipal bond."""
 
 CONVENTIONS_DOC = f"""\
 # finance-mcp conventions

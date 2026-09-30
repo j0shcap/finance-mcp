@@ -135,6 +135,68 @@ async def test_too_many_line_items_is_rejected(
             "bond_ytm",
             {"face": 1000.0, "coupon_rate": 0.05, "years_to_maturity": 1e9, "price": 900.0},
         ),
+        (
+            # The dated tools have no years_to_maturity field to bound, so the coupon loop
+            # is bounded by the settlement-to-maturity span instead -- a relationship
+            # between two arguments, checked in the calculator.
+            "bond_price_dated",
+            {
+                "settlement": "2024-01-01",
+                "maturity": "3024-01-01",
+                "coupon_rate": 0.05,
+                "ytm": 0.05,
+            },
+        ),
+        (
+            "bond_ytm_dated",
+            {
+                "settlement": "2024-01-01",
+                "maturity": "3024-01-01",
+                "coupon_rate": 0.05,
+                "clean_price": 100.0,
+            },
+        ),
+        (
+            # Settlement on or after maturity: also a two-argument relationship.
+            "bond_price_dated",
+            {
+                "settlement": "2030-01-01",
+                "maturity": "2024-01-01",
+                "coupon_rate": 0.05,
+                "ytm": 0.05,
+            },
+        ),
+        (
+            # A frequency that does not divide 12 cannot produce a whole-month schedule.
+            "bond_price_dated",
+            {
+                "settlement": "2024-01-01",
+                "maturity": "2034-01-01",
+                "coupon_rate": 0.05,
+                "ytm": 0.05,
+                "frequency": 5,
+            },
+        ),
+        (
+            # Over MAX_COUPON_FREQUENCY, so the schema rejects it before the calculator.
+            "bond_price_dated",
+            {
+                "settlement": "2024-01-01",
+                "maturity": "2034-01-01",
+                "coupon_rate": 0.05,
+                "ytm": 0.05,
+                "frequency": 13,
+            },
+        ),
+        (
+            "bond_ytm_dated",
+            {
+                "settlement": "2024-01-01",
+                "maturity": "2034-01-01",
+                "coupon_rate": 0.05,
+                "clean_price": 0.0,
+            },
+        ),
         ("loan_schedule", {"principal": 1000.0, "annual_rate": 0.05, "term_months": 10_000_000}),
         (
             "convert_rate",
