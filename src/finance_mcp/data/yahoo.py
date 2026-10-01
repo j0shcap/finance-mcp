@@ -10,7 +10,6 @@ YahooSource takes symbols already normalized by its caller and never caches: cac
 the choice of what to fetch together belong to YFinanceClient.
 """
 
-import itertools
 import math
 import random
 import threading
@@ -71,10 +70,16 @@ RETRY_BASE_DELAY_SECONDS = 2.0
 #: A retry is only started if it can begin within this long of the first attempt. yfinance's
 #: own request timeout is 30s, so this keeps a retried call well inside an MCP client's.
 RETRY_BUDGET_SECONDS = 15.0
-#: curl_cffi failures that happen fast, before a response: worth another try. A ReadTimeout
-#: (or plain Timeout) has already spent yfinance's 30s, and SSL or proxy errors don't heal.
-_TRANSIENT_ERROR_NAMES = frozenset({"ConnectTimeout", "ConnectionError", "ChunkedEncodingError"})
+#: How the transport fails fast and transiently, matched by class name anywhere in an
+#: exception's hierarchy (curl_cffi's classes, without importing it): a dropped or refused
+#: connection or a DNS blip (ConnectionError, DNSError), and a truncated body
+#: (IncompleteRead). SSL and proxy errors subclass or sit beside them but don't heal, so
+#: they are excluded first; a Timeout has already spent yfinance's 30s and isn't retried.
+_TRANSIENT_ERROR_NAMES = frozenset({"ConnectionError", "IncompleteRead"})
 _PERMANENT_ERROR_NAMES = frozenset({"SSLError", "ProxyError"})
+#: curl error codes curl_cffi raises as a bare HTTPError: HTTP2 (16), HTTP2_STREAM (92) -
+#: "stream was not closed cleanly", the classic transient failure against Yahoo.
+_TRANSIENT_CURL_CODES = frozenset({16, 92})
 
 # Indirections the tests replace, so backoff is instant and jitter-free under test.
 _sleep: Callable[[float], None] = time.sleep
@@ -94,7 +99,9 @@ def is_transient(exc: BaseException) -> bool:
     names = {cls.__name__ for cls in type(exc).__mro__}
     if names & _PERMANENT_ERROR_NAMES:
         return False
-    if type(exc).__name__ in _TRANSIENT_ERROR_NAMES:
+    if names & _TRANSIENT_ERROR_NAMES:
+        return True
+    if "CurlError" in names and getattr(exc, "code", None) in _TRANSIENT_CURL_CODES:
         return True
     status = getattr(getattr(exc, "response", None), "status_code", None)
     return status == 429 or (isinstance(status, int) and 500 <= status < 600)
@@ -137,15 +144,14 @@ class YahooSource:
         """
         if getattr(_gate_holder, "held", False):
             raise RuntimeError("nested Yahoo request: wrap only the request itself in _request")
-        delays = self._retry_delays if retry else ()
         started = time.monotonic()
-        for attempt in itertools.count():
+        # Each wait precedes the next attempt; None marks the last attempt.
+        for wait in (*map(_jitter, self._retry_delays if retry else ()), None):
             with self._gate:
                 _gate_holder.held = True
                 try:
                     return fetch()
                 except Exception as exc:
-                    wait = _jitter(delays[attempt]) if attempt < len(delays) else None
                     out_of_budget = (
                         wait is not None
                         and time.monotonic() - started + wait > RETRY_BUDGET_SECONDS
@@ -155,7 +161,7 @@ class YahooSource:
                 finally:
                     _gate_holder.held = False
             _sleep(wait)
-        raise AssertionError("unreachable")  # pragma: no cover - itertools.count is endless
+        raise AssertionError("unreachable")  # pragma: no cover - the last attempt returns or raises
 
     def _ticker_with_info(
         self, symbol: str, fetch_label: str, kind: str, *, retry: bool = True

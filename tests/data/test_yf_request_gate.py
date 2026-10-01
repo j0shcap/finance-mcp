@@ -6,6 +6,8 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from curl_cffi.const import CurlECode
+from curl_cffi.requests.exceptions import code2error
 from yfinance.exceptions import YFRateLimitError
 
 from finance_mcp.data import yahoo
@@ -194,9 +196,10 @@ def test_jitter_spreads_a_delay_by_up_to_half_either_way() -> None:
 # --- what counts as transient -------------------------------------------------------------
 
 
-def _named(name: str, base: type[Exception] = Exception) -> Exception:
-    cls: type[Exception] = type(name, (base,), {})
-    return cls()
+def _curl(code: CurlECode) -> Exception:
+    """The exception curl_cffi itself raises for a curl error code."""
+    error: Exception = code2error(code, "message")("message", code)
+    return error
 
 
 def _status(code: int) -> Exception:
@@ -209,24 +212,27 @@ def _status(code: int) -> Exception:
     ("exc", "transient"),
     [
         (YFRateLimitError(), True),
-        (_named("ConnectTimeout"), True),
-        (_named("ConnectionError"), True),
-        (_named("ChunkedEncodingError"), True),
+        (_curl(CurlECode.COULDNT_CONNECT), True),
+        (_curl(CurlECode.RECV_ERROR), True),
+        (_curl(CurlECode.COULDNT_RESOLVE_HOST), True),  # DNSError
+        (_curl(CurlECode.HTTP2_STREAM), True),
+        (_curl(CurlECode.HTTP2), True),
+        (_curl(CurlECode.PARTIAL_FILE), True),  # IncompleteRead
         (_status(429), True),
         (_status(503), True),
-        # a read timeout has already spent yfinance's 30s
-        (_named("ReadTimeout"), False),
-        (_named("Timeout"), False),
-        # curl_cffi's SSLError subclasses its ConnectionError, but doesn't heal
-        (_named("SSLError", type("ConnectionError", (Exception,), {})), False),
-        (_named("ProxyError"), False),
+        # a timeout has already spent yfinance's 30s
+        (_curl(CurlECode.OPERATION_TIMEDOUT), False),
+        # SSL failures subclass ConnectionError but don't heal
+        (_curl(CurlECode.SSL_CONNECT_ERROR), False),
+        (_curl(CurlECode.PEER_FAILED_VERIFICATION), False),
+        (_curl(CurlECode.COULDNT_RESOLVE_PROXY), False),
         (_status(404), False),
         (FakeHTTPError(404), False),
         (KeyError("exchangeTimezoneName"), False),
     ],
-    ids=lambda value: value if isinstance(value, bool) else type(value).__name__,
+    ids=lambda value: str(value) if isinstance(value, bool) else repr(value)[:40],
 )
-def test_is_transient(exc: Exception, transient: bool) -> None:
+def test_is_transient_for_what_curl_cffi_really_raises(exc: Exception, transient: bool) -> None:
     assert is_transient(exc) is transient
 
 
