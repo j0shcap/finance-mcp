@@ -205,8 +205,8 @@ def test_get_news_clamps_to_count_and_passes_args_to_source() -> None:
     client = make_client(factory=factory)
     result = client.get_news("AAPL", count=2)
     assert len(result.articles) == 2
-    assert factory.captured_news_count["count"] == 2  # type: ignore[attr-defined]
-    assert factory.captured_news_count["tab"] == "news"  # type: ignore[attr-defined]
+    assert factory.captured_news_call["count"] == 2  # type: ignore[attr-defined]
+    assert factory.captured_news_call["tab"] == "news"  # type: ignore[attr-defined]
 
 
 def test_get_news_parse_error_is_data_unavailable() -> None:

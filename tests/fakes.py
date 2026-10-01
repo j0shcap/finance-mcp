@@ -104,7 +104,7 @@ def fake_ticker_factory(
     hist_exc = history_error or error
     financials_map = financials or {}
     # The ``count`` and ``tab`` the last get_news call received.
-    captured_news_count: dict[str, int | str] = {}
+    captured_news_call: dict[str, int | str] = {}
     # Every attribute the client may read a statement from, so the stub cannot drift.
     statement_attrs = frozenset(_FINANCIALS_ATTR.values())
 
@@ -147,8 +147,8 @@ def fake_ticker_factory(
         def get_news(self, count: int = 10, tab: str = "news") -> list[dict[str, Any]]:
             if news_error is not None:
                 raise news_error
-            captured_news_count["count"] = count
-            captured_news_count["tab"] = tab
+            captured_news_call["count"] = count
+            captured_news_call["tab"] = tab
             return news or []
 
         def __getattr__(self, name: str) -> Any:
@@ -161,7 +161,7 @@ def fake_ticker_factory(
     def factory(_symbol: str) -> Any:
         return _Ticker()
 
-    factory.captured_news_count = captured_news_count  # type: ignore[attr-defined]
+    factory.captured_news_call = captured_news_call  # type: ignore[attr-defined]
     return factory
 
 
@@ -282,32 +282,17 @@ def fake_symbol_ticker_factory(
     errors: dict[str, Exception] | None = None,
     gate: threading.Barrier | None = None,
 ) -> Callable[[str], Any]:
-    """A ticker factory whose behaviour varies BY SYMBOL, for partial-batch scenarios.
+    """Shorthand for fake_multi_ticker_factory when only quotes matter.
 
     ``fast_info`` maps symbol -> that symbol's fast_info dict; ``errors`` maps symbol -> an
-    exception raised on ``.fast_info`` access. A symbol in neither raises KeyError, which is
-    what yfinance leaks for an unknown symbol. ``gate`` is waited on before each fast_info
-    read, so a batch only completes if the symbols are fetched concurrently (a sequential
-    fetcher deadlocks the barrier).
+    exception raised on ``.fast_info`` access. Any other symbol raises KeyError, as for an
+    unknown symbol.
     """
-    quotes = fast_info or {}
-    failures = errors or {}
-
-    class _Ticker:
-        def __init__(self, symbol: str) -> None:
-            self._symbol = symbol
-
-        @property
-        def fast_info(self) -> Any:
-            if gate is not None:
-                gate.wait()
-            if self._symbol in failures:
-                raise failures[self._symbol]
-            if self._symbol not in quotes:
-                raise KeyError("exchangeTimezoneName")
-            return SimpleNamespace(**quotes[self._symbol])
-
-    return _Ticker
+    per_symbol: dict[str, dict[str, Any]] = {
+        symbol: {"fast_info": quote} for symbol, quote in (fast_info or {}).items()
+    }
+    per_symbol.update({symbol: {"fast_info_error": exc} for symbol, exc in (errors or {}).items()})
+    return fake_multi_ticker_factory(per_symbol, gate=gate)
 
 
 def make_client(
@@ -350,7 +335,7 @@ def counting(factory: Callable[[str], Any]) -> tuple[Callable[[str], Any], list[
     return wrapped, calls
 
 
-INCOME = {  # rows: label -> [most-recent, prior]
+INCOME_WITH_NAN = {  # rows: label -> [most-recent, prior]
     "Total Revenue": [400.0, 380.0],
     "Net Income": [100.0, float("nan")],
 }
