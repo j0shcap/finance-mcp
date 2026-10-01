@@ -1,4 +1,4 @@
-.PHONY: install test test-live e2e snapshot release-prep release lint format typecheck security check build run clean
+.PHONY: install test test-live e2e snapshot record-shapes release-prep release lint format typecheck security check build run clean
 
 install:
 	uv sync
@@ -26,6 +26,12 @@ e2e:
 # pydantic bump. Review the result with `git diff --word-diff` before committing it.
 snapshot:
 	uv run pytest tests/test_contract_snapshot.py --update-snapshots --no-cov -q -rs
+
+# Record the shapes of real Yahoo payloads into tests/shapes/yahoo.json - index kinds,
+# dtypes, key types, the unknown-symbol exception; none of Yahoo's values - merged with any
+# committed recording. `uv run python -m scripts.record_shapes --check` reports new shapes.
+record-shapes:
+	uv run python -m scripts.record_shapes
 
 # Cut a release in CHANGELOG.md: move [Unreleased] under VERSION and update the compare
 # links. Commit it in a PR; merging that PR is the release PR.

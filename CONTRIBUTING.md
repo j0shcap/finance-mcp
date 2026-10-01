@@ -43,6 +43,14 @@ need the network or a built wheel are marked `live` or `e2e` and are deselected 
   model. Don't swallow exceptions or return placeholder values: missing data is `null` or an
   error, never a guess.
 
+## Yahoo payload shapes
+
+`make record-shapes` records the *shape* of every kind of payload `data/yahoo.py` parses -
+index kinds and timezones, column dtypes, the type of each key it reads (found by scanning
+`yahoo.py`), what an unknown symbol raises - into `tests/shapes/yahoo.json`, with none of
+Yahoo's values. `tests/fakes.py` builds data of those shapes, so the unit suite parses
+realistic payloads; keep new fakes to them.
+
 ## The contract snapshot
 
 `tests/snapshots/contract/` holds everything a client receives that steers the model: the
