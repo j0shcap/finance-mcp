@@ -10,7 +10,7 @@ contain breaking changes, and each one is listed under **Breaking changes**.
 ### Fixed
 - `get_company_profile` no longer downloads the company's whole daily price history to list
   its dividends and splits. It reads them from weekly history: about a quarter of the data,
-  with identical dates, so the call is far less likely to time out on a slow connection.
+  with identical dates, so the call is far less likely to time out on a slow connection (#51).
 
 ## [0.5.0] - 2026-10-01
 
