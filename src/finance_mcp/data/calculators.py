@@ -185,13 +185,6 @@ def _find_all_roots(
     return deduped
 
 
-def _irr_result(roots: list[float]) -> IRRResult:
-    """Build an IRRResult, choosing a deterministic representative scalar root."""
-    non_negative = [r for r in roots if r >= 0.0]
-    primary = min(non_negative) if non_negative else max(roots)
-    return IRRResult(irr=primary, all_irrs=roots, is_unique=len(roots) == 1)
-
-
 def _require(name: str, value: float | None) -> float:
     if value is None:
         raise InvalidInput(f"'{name}' is required when it is not the variable being solved for.")
@@ -335,11 +328,9 @@ def time_value_of_money(
         "nper": nper,
     }
     del given[solve_for]
-    known: dict[str, float] = {}
-    for name, value in given.items():
-        known[name] = _require(name, value)
-        if name == "rate":
-            _require_rate(known[name])
+    known = {name: _require(name, value) for name, value in given.items()}
+    if "rate" in known:
+        _require_rate(known["rate"])
     try:
         solved = _TVM_SOLVERS[solve_for](**known, due=when == "begin")
     except InvalidInput as exc:
@@ -523,8 +514,24 @@ def npv(rate: float, cashflows: list[float]) -> NPVResult:
 
 
 def _has_sign_change(values: list[float]) -> bool:
+    """Whether ``values`` holds at least one positive and one negative entry."""
     signs = {value > 0.0 for value in values if value != 0.0}
     return len(signs) > 1
+
+
+def _solve_irr(terms: list[tuple[float, float]]) -> IRRResult:
+    """Find every root of the discounted sum of ``terms`` and pick a deterministic headline.
+
+    The headline is the smallest non-negative root, else the largest negative one.
+    """
+    roots = _find_all_roots(lambda r: _discount_sum(r, terms))
+    if not roots:
+        raise InvalidInput(
+            "No internal rate of return exists in (-100%, 1,000,000%]; consider mirr()."
+        )
+    non_negative = [r for r in roots if r >= 0.0]
+    primary = min(non_negative) if non_negative else max(roots)
+    return IRRResult(irr=primary, all_irrs=roots, is_unique=len(roots) == 1)
 
 
 def irr(cashflows: list[float]) -> IRRResult:
@@ -538,13 +545,7 @@ def irr(cashflows: list[float]) -> IRRResult:
         raise InvalidInput("irr needs at least two cashflows.")
     if not _has_sign_change(cashflows):
         raise InvalidInput("irr needs at least one sign change in the cashflows.")
-    terms = _npv_terms(cashflows)
-    roots = _find_all_roots(lambda r: _discount_sum(r, terms))
-    if not roots:
-        raise InvalidInput(
-            "No internal rate of return exists in (-100%, 1,000,000%]; consider mirr()."
-        )
-    return _irr_result(roots)
+    return _solve_irr(_npv_terms(cashflows))
 
 
 def mirr(cashflows: list[float], finance_rate: float, reinvest_rate: float) -> MIRRResult:
@@ -562,7 +563,7 @@ def mirr(cashflows: list[float], finance_rate: float, reinvest_rate: float) -> M
         raise InvalidInput("mirr needs at least two cashflows.")
     if finance_rate <= -1.0 or reinvest_rate <= -1.0:
         raise InvalidInput("finance_rate and reinvest_rate must be greater than -1 (-100%).")
-    if not any(c > 0.0 for c in cashflows) or not any(c < 0.0 for c in cashflows):
+    if not _has_sign_change(cashflows):
         raise InvalidInput("mirr needs at least one negative and one positive cashflow.")
     n = len(cashflows) - 1
     fv_pos = 0.0
@@ -610,13 +611,7 @@ def xirr(cashflows: list[DatedCashflow]) -> IRRResult:
         raise InvalidInput("xirr needs at least two cashflows.")
     if not _has_sign_change([cf.amount for cf in cashflows]):
         raise InvalidInput("xirr needs at least one sign change in the cashflows.")
-    terms = _xnpv_terms(cashflows)
-    roots = _find_all_roots(lambda r: _discount_sum(r, terms))
-    if not roots:
-        raise InvalidInput(
-            "No internal rate of return exists in (-100%, 1,000,000%]; consider mirr()."
-        )
-    return _irr_result(roots)
+    return _solve_irr(_xnpv_terms(cashflows))
 
 
 def convert_rate(
@@ -636,6 +631,8 @@ def convert_rate(
     """
     if periods_per_year < 1:
         raise InvalidInput("periods_per_year must be at least 1.")
+    if direction == "effective_to_nominal" and 1.0 + rate <= 0.0:
+        raise InvalidInput("Effective rate must be greater than -1 (-100%).")
     if compounding == "continuous":
         if direction == "nominal_to_effective":
             try:
@@ -643,8 +640,6 @@ def convert_rate(
             except OverflowError as exc:
                 raise InvalidInput("rate is too large to convert: exp(rate) overflowed.") from exc
         else:
-            if 1.0 + rate <= 0.0:
-                raise InvalidInput("Effective rate must be greater than -1 (-100%).")
             converted = math.log(1.0 + rate)
     elif direction == "nominal_to_effective":
         if 1.0 + rate / periods_per_year <= 0.0:
@@ -657,8 +652,6 @@ def convert_rate(
                 "(1 + rate/periods_per_year)**periods_per_year overflowed."
             ) from exc
     else:
-        if 1.0 + rate <= 0.0:
-            raise InvalidInput("Effective rate must be greater than -1 (-100%).")
         converted = periods_per_year * ((1.0 + rate) ** (1.0 / periods_per_year) - 1.0)
     return RateConversionResult(
         input_rate=rate,
@@ -1107,7 +1100,7 @@ def bond_ytm_dated(
     accrued = face * coupon_rate / frequency * fraction
     first_fraction = 1.0 - fraction
 
-    def clean_at(ytm: float) -> float:
+    def clean_price_error(ytm: float) -> float:
         dirty, _, _, _ = _bond_metrics(
             face=face,
             coupon_rate=coupon_rate,
@@ -1117,9 +1110,9 @@ def bond_ytm_dated(
             first_fraction=first_fraction,
             first_period_discount=first_period_discount,
         )
-        return dirty - accrued
+        return dirty - accrued - clean_price
 
-    rate = _bisect(lambda ytm: clean_at(ytm) - clean_price)
+    rate = _bisect(clean_price_error)
     return BondDatedYTM(
         yield_to_maturity=rate,
         clean_price=clean_price,
