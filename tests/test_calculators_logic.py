@@ -119,6 +119,65 @@ def test_loan_extra_payment_shortens_term() -> None:
     assert faster.total_interest < base.total_interest
 
 
+def test_loan_extra_payment_reports_what_it_saves() -> None:
+    # 400k at 6.5% over 30 years: 360 payments and 510,177.95 of interest without the
+    # extra 500/month, 233 payments and 304,620.81 with it.
+    faster = loan_schedule(
+        principal=400000.0, annual_rate=0.065, term_months=360, extra_payment=500.0
+    )
+    assert faster.n_payments == 233
+    assert faster.payments_saved == 127
+    assert faster.interest_saved == 205557.14
+
+
+def test_loan_savings_are_measured_against_the_same_loan_without_the_extra() -> None:
+    base = loan_schedule(principal=250000.0, annual_rate=0.0725, term_months=300)
+    faster = loan_schedule(
+        principal=250000.0, annual_rate=0.0725, term_months=300, extra_payment=137.5
+    )
+    assert faster.payments_saved == base.n_payments - faster.n_payments
+    # Saved interest is rounded once from the unrounded totals, so it can differ by a cent
+    # from subtracting the two rounded totals.
+    assert faster.interest_saved == pytest.approx(
+        base.total_interest - faster.total_interest, abs=0.01
+    )
+
+
+def test_loan_without_extra_payment_saves_nothing() -> None:
+    result = loan_schedule(principal=200000.0, annual_rate=0.06, term_months=360)
+    assert result.payments_saved == 0
+    assert result.interest_saved == 0.0
+
+
+def test_loan_savings_at_zero_rate_are_payments_only() -> None:
+    result = loan_schedule(principal=1200.0, annual_rate=0.0, term_months=12, extra_payment=100.0)
+    assert result.n_payments == 6
+    assert result.payments_saved == 6
+    assert result.interest_saved == 0.0
+
+
+def test_loan_extra_payment_clearing_the_loan_at_once() -> None:
+    # One payment retires the loan: the saving is every later payment and all the interest
+    # after the first month.
+    base = loan_schedule(principal=10000.0, annual_rate=0.12, term_months=24)
+    result = loan_schedule(
+        principal=10000.0, annual_rate=0.12, term_months=24, extra_payment=20000.0
+    )
+    assert result.n_payments == 1
+    assert result.payments_saved == 23
+    assert result.total_interest == 100.0
+    assert result.interest_saved == pytest.approx(base.total_interest - 100.0, abs=0.01)
+
+
+def test_loan_savings_do_not_depend_on_returning_the_rows() -> None:
+    summary = loan_schedule(300000.0, 0.055, 360, extra_payment=250.0)
+    with_rows = loan_schedule(300000.0, 0.055, 360, extra_payment=250.0, include_schedule=True)
+    assert (summary.interest_saved, summary.payments_saved) == (
+        with_rows.interest_saved,
+        with_rows.payments_saved,
+    )
+
+
 def test_loan_invalid_term_raises() -> None:
     with pytest.raises(InvalidInput):
         loan_schedule(principal=1000.0, annual_rate=0.05, term_months=0)

@@ -274,7 +274,8 @@ the cent. This avoids pulling a full schedule (include_schedule=True returns eve
 
 ## Step 4 - Extra payments
 Run loan_schedule with extra_payment (the user's figure, or a labelled illustrative one if none \
-was given). Report the months saved (from n_payments) and the total interest saved. Then frame it \
+was given). It reports payments_saved (months off the term) and interest_saved against the same \
+loan without the extra payment - quote those rather than subtracting two runs. Then frame it \
 honestly:
 - "Interest saved" is an undiscounted sum of future dollars, so it overstates the benefit. The \
 economic return on each prepaid dollar is exactly the loan's note rate - guaranteed and \

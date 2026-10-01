@@ -91,6 +91,14 @@ class LoanSchedule(BaseModel):
     n_payments: int = Field(description="Number of payments until payoff.")
     total_paid: float = Field(description="Sum of all payments made.")
     total_interest: float = Field(description="Total interest paid over the loan.")
+    interest_saved: float = Field(
+        description="Interest the extra payment saves versus the same loan without it; "
+        "0 when extra_payment is 0."
+    )
+    payments_saved: int = Field(
+        description="Monthly payments the extra payment saves (months off the term) versus "
+        "the same loan without it; 0 when extra_payment is 0."
+    )
     schedule: list[AmortizationRow] = Field(description="Per-period amortization rows.")
 
 

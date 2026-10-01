@@ -12,7 +12,7 @@ import calendar
 import datetime
 import math
 from collections.abc import Callable, Iterable
-from typing import Literal
+from typing import Literal, NamedTuple
 
 from finance_mcp.data.errors import InvalidInput
 from finance_mcp.data.models import (
@@ -367,10 +367,13 @@ def loan_schedule(
     additional amount applied to principal each month; it shortens the term.
     The summary (payment, totals, payoff count) is always computed; the full
     per-period rows are returned only when ``include_schedule`` is True.
+    ``interest_saved`` and ``payments_saved`` compare against the same loan without the
+    extra payment, and are 0 when ``extra_payment`` is 0.
 
     Rounding: ``monthly_payment`` and the per-row ``payment``/``principal``/``interest``/
     ``balance`` amounts are rounded to cents for presentation, while ``total_paid`` and
-    ``total_interest`` accumulate the unrounded values and are rounded only at the end.
+    ``total_interest`` accumulate the unrounded values and are rounded only at the end, as
+    is ``interest_saved``, the difference of the two unrounded interest totals.
     Summing the rounded rows can therefore differ from the reported totals by a few
     cents. The last period's payment is adjusted to clear the remaining balance exactly,
     so the schedule always ends at a zero balance and the principal is fully amortized.
@@ -403,6 +406,45 @@ def loan_schedule(
         else:
             payment = principal * monthly_rate * growth / (growth - 1.0)
 
+    actual = _amortize(
+        principal, monthly_rate, payment, term_months, extra_payment, include_schedule
+    )
+    # The savings compare against the same loan run through the same loop without the
+    # extra payment, so the two totals share every rounding and final-payment rule.
+    baseline = (
+        _amortize(principal, monthly_rate, payment, term_months, 0.0, include_schedule=False)
+        if extra_payment > 0.0
+        else actual
+    )
+    return LoanSchedule(
+        monthly_payment=round(payment, 2),
+        n_payments=actual.n_payments,
+        total_paid=round(actual.total_paid, 2),
+        total_interest=round(actual.total_interest, 2),
+        interest_saved=round(baseline.total_interest - actual.total_interest, 2),
+        payments_saved=baseline.n_payments - actual.n_payments,
+        schedule=actual.rows,
+    )
+
+
+class _Amortization(NamedTuple):
+    """One run of the amortization loop; totals are unrounded."""
+
+    n_payments: int
+    total_paid: float
+    total_interest: float
+    rows: list[AmortizationRow]
+
+
+def _amortize(
+    principal: float,
+    monthly_rate: float,
+    payment: float,
+    term_months: int,
+    extra_payment: float,
+    include_schedule: bool,
+) -> _Amortization:
+    """Pay ``payment + extra_payment`` each month until the balance or the term runs out."""
     rows: list[AmortizationRow] = []
     balance = principal
     total_paid = 0.0
@@ -431,14 +473,7 @@ def loan_schedule(
                     balance=round(balance, 2),
                 )
             )
-
-    return LoanSchedule(
-        monthly_payment=round(payment, 2),
-        n_payments=period,
-        total_paid=round(total_paid, 2),
-        total_interest=round(total_interest, 2),
-        schedule=rows,
-    )
+    return _Amortization(period, total_paid, total_interest, rows)
 
 
 def _discount_sum(rate: float, terms: Iterable[tuple[float, float]]) -> float:

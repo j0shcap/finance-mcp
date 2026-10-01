@@ -73,6 +73,17 @@ async def test_convert_rate_tool(client: Client[FastMCPTransport]) -> None:
     assert result.data.converted_rate == pytest.approx(0.12682503, rel=1e-7)
 
 
+async def test_loan_schedule_tool_reports_the_extra_payment_savings(
+    client: Client[FastMCPTransport],
+) -> None:
+    result = await client.call_tool(
+        "loan_schedule",
+        {"principal": 400000.0, "annual_rate": 0.065, "term_months": 360, "extra_payment": 500},
+    )
+    assert result.data.payments_saved == 127
+    assert result.data.interest_saved == 205557.14
+
+
 async def test_loan_schedule_tool_with_rows(client: Client[FastMCPTransport]) -> None:
     result = await client.call_tool(
         "loan_schedule",

@@ -33,7 +33,7 @@ and deterministic financial calculators.
 **Time value & loans**
 
 - `time_value_of_money` — solve any one of present/future value, payment, rate, or periods (compound interest, annuities, CAGR); supports begin-of-period (annuity-due).
-- `loan_schedule` — monthly payment, total interest, and optional amortization schedule for a fixed-rate loan/mortgage (nominal APR compounded monthly).
+- `loan_schedule` — monthly payment, total interest, and optional amortization schedule for a fixed-rate loan/mortgage (nominal APR compounded monthly); with an extra monthly payment, also the interest and payments it saves.
 
 **Cashflow valuation**
 
