@@ -26,14 +26,15 @@ _UNFILLED = re.compile(r"\{[a-z_]+\}")
 
 
 async def test_initialize_reports_name_version_and_instructions(server: Server) -> None:
-    init = server.client.initialize_result
-    assert init is not None
+    info = server.client.server_info
+    assert info is not None
 
-    assert init.serverInfo.name == "finance-mcp"
+    assert info.name == "finance-mcp"
     # Read from the installed distribution's metadata; a mismatch means a stale wheel.
-    assert init.serverInfo.version == PROJECT_VERSION
-    assert init.instructions == SERVER_INSTRUCTIONS
-    assert CONVENTIONS_URI in init.instructions
+    assert info.version == PROJECT_VERSION
+    instructions = server.client.instructions
+    assert instructions == SERVER_INSTRUCTIONS
+    assert CONVENTIONS_URI in instructions
 
 
 async def test_lists_every_tool_with_annotations_and_valid_schemas(server: Server) -> None:
@@ -44,14 +45,14 @@ async def test_lists_every_tool_with_annotations_and_valid_schemas(server: Serve
     for name, tool in tools.items():
         hints = tool.annotations
         assert hints is not None and hints.title, f"{name} has no annotations/title"
-        assert hints.readOnlyHint is True and hints.destructiveHint is False, name
+        assert hints.read_only_hint is True and hints.destructive_hint is False, name
         is_calculator = name in CALCULATOR_TOOLS
-        assert hints.idempotentHint is is_calculator, name
-        assert hints.openWorldHint is not is_calculator, name
+        assert hints.idempotent_hint is is_calculator, name
+        assert hints.open_world_hint is not is_calculator, name
         assert tool.description, f"{name} has no description"
-        Draft202012Validator.check_schema(tool.inputSchema)
-        assert tool.outputSchema is not None, f"{name} advertises no output schema"
-        Draft202012Validator.check_schema(tool.outputSchema)
+        Draft202012Validator.check_schema(tool.input_schema)
+        assert tool.output_schema is not None, f"{name} advertises no output schema"
+        Draft202012Validator.check_schema(tool.output_schema)
 
 
 async def test_every_prompt_renders(server: Server) -> None:
@@ -69,7 +70,7 @@ async def test_every_prompt_renders(server: Server) -> None:
 async def test_conventions_resource_is_listed_and_readable(server: Server) -> None:
     (resource,) = await server.client.list_resources()
     assert str(resource.uri) == CONVENTIONS_URI
-    assert resource.mimeType == "text/markdown"
+    assert resource.mime_type == "text/markdown"
 
     (contents,) = await server.client.read_resource(CONVENTIONS_URI)
     assert isinstance(contents, TextResourceContents)
@@ -82,10 +83,11 @@ async def test_starts_cleanly(server: Server) -> None:
     Deliberately not "stderr is empty": fastmcp may log a startup line there, which is
     exactly where a stdio server's logs belong.
     """
-    assert await server.client.ping()
+    assert await server.client.list_tools()
     assert not server.protocol.errors, f"non-JSON-RPC output on stdout: {server.protocol.errors}"
     stderr = server.stderr()
     assert "Traceback" not in stderr, stderr
     assert "ERROR" not in stderr, stderr
-    # No banner, and so no PyPI update check telling users to upgrade past fastmcp<4.
+    # No banner, and so no PyPI update check telling users to upgrade past the fastmcp
+    # major this package pins.
     assert "Update available" not in stderr and "gofastmcp.com" not in stderr, stderr

@@ -228,7 +228,7 @@ async def test_rate_bounds_are_visible_in_the_tool_schema(
         ("mirr", "reinvest_rate"),
         ("time_value_of_money", "rate"),
     ]:
-        schema = by_name[tool].inputSchema["properties"][field]
+        schema = by_name[tool].input_schema["properties"][field]
         # time_value_of_money's rate is optional, so its constraint sits in the union branch.
         branches = schema.get("anyOf", [schema])
         assert any(branch.get("exclusiveMinimum") == -1 for branch in branches), (tool, field)
@@ -239,7 +239,7 @@ async def test_cashflow_list_bounds_are_visible_in_the_tool_schema(
 ) -> None:
     by_name = {tool.name: tool for tool in await client.list_tools()}
     for tool, min_items in [("npv", 1), ("irr", 2), ("mirr", 2), ("xnpv", 1), ("xirr", 2)]:
-        schema = by_name[tool].inputSchema["properties"]["cashflows"]
+        schema = by_name[tool].input_schema["properties"]["cashflows"]
         assert schema["minItems"] == min_items, tool
         assert schema["maxItems"] == MAX_CASHFLOWS, tool
 
@@ -248,7 +248,7 @@ async def test_ticker_pattern_is_visible_in_the_tool_schema(
     client: Client[FastMCPTransport],
 ) -> None:
     by_name = {tool.name: tool for tool in await client.list_tools()}
-    assert by_name["get_company_profile"].inputSchema["properties"]["ticker"]["pattern"] == (
+    assert by_name["get_company_profile"].input_schema["properties"]["ticker"]["pattern"] == (
         TICKER_PATTERN
     )
 

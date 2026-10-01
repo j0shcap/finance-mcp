@@ -72,8 +72,8 @@ def vocabulary(tools: list[Tool]) -> set[str]:
     """The identifiers a prompt may legitimately name, derived from the registry."""
     words = {tool.name for tool in tools}
     for tool in tools:
-        words.update(_schema_words(tool.inputSchema))
-        words.update(_schema_words(tool.outputSchema or {}))
+        words.update(_schema_words(tool.input_schema))
+        words.update(_schema_words(tool.output_schema or {}))
     return words
 
 
@@ -167,7 +167,8 @@ async def test_prompts_pass_each_tool_only_its_own_parameters(
     client: Client[FastMCPTransport],
 ) -> None:
     parameters = {
-        tool.name: set(tool.inputSchema.get("properties", {})) for tool in await client.list_tools()
+        tool.name: set(tool.input_schema.get("properties", {}))
+        for tool in await client.list_tools()
     }
     for name, text in (await _rendered_prompts(client)).items():
         unknown = unknown_keywords(text, parameters)

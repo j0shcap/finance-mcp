@@ -112,10 +112,16 @@ class _Positive(BaseModel):
     value: Annotated[float, Field(gt=0)]
 
 
+def _assert_masked_server_error(text: str) -> None:
+    assert text == "Error calling tool 'broken'"
+
+
 async def test_a_validation_error_from_a_tool_body_is_not_reworded() -> None:
     # A result model rejecting a value is a server bug, not a bad call: it must not be
-    # reported as the caller's invalid arguments.
-    mcp = FastMCP("body-error")
+    # reported as the caller's invalid arguments. fastmcp 4 would turn it into a
+    # JSON-RPC "Invalid request parameters" error, which call_tool raises as MCPError
+    # rather than returning as a tool error.
+    mcp = FastMCP("body-error", mask_error_details=True)
     mcp.add_middleware(ArgumentErrorMiddleware())
 
     @mcp.tool
@@ -124,7 +130,19 @@ async def test_a_validation_error_from_a_tool_body_is_not_reworded() -> None:
 
     async with Client(mcp) as client:
         result = await client.call_tool("broken", {}, raise_on_error=False)
-    assert "Invalid arguments" not in _text(result)
+    _assert_masked_server_error(_text(result))
+
+
+async def test_a_validation_error_from_a_tool_body_is_masked_by_the_server() -> None:
+    server = create_server()
+
+    @server.tool
+    def broken() -> _Positive:
+        return _Positive(value=-1.0)
+
+    async with Client(server) as client:
+        result = await client.call_tool("broken", {}, raise_on_error=False)
+    _assert_masked_server_error(_text(result))
 
 
 async def test_other_tool_errors_pass_through_unchanged() -> None:

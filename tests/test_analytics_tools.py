@@ -58,7 +58,7 @@ async def test_analyze_performance_tool_nulls_annualized_fields_on_short_window(
 async def test_analyze_performance_schema_documents_the_short_window_null() -> None:
     async with connect(fake_ticker_factory()) as client:
         [tool] = [t for t in await client.list_tools() if t.name == "analyze_performance"]
-        schema = (tool.outputSchema or {})["properties"]
+        schema = (tool.output_schema or {})["properties"]
         assert "85 days" in schema["annualized_return_percent"]["description"]
         assert "252 trading days" not in schema["annualized_return_percent"]["description"]
         assert "252-day" not in schema["annualized_volatility_percent"]["description"]
@@ -133,13 +133,13 @@ async def test_analyze_performance_schema_states_the_risk_free_default_in_the_ou
     # reading a Sharpe knows whether it is an excess figure.
     async with connect(fake_ticker_factory()) as client:
         [tool] = [t for t in await client.list_tools() if t.name == "analyze_performance"]
-        properties = (tool.outputSchema or {})["properties"]
+        properties = (tool.output_schema or {})["properties"]
         assert "T-bill" in properties["risk_free_rate"]["description"]
         assert "RAW" in properties["risk_free_rate"]["description"]
         assert "unavailable" in properties["risk_free_rate_source"]["description"]
         assert "downside_deviation" in properties["sortino_ratio"]["description"]
         assert tool.description is not None and "Sharpe" in tool.description
-        input_rate = tool.inputSchema["properties"]["risk_free_rate"]
+        input_rate = tool.input_schema["properties"]["risk_free_rate"]
         assert input_rate.get("default") is None
         assert "T-bill" in input_rate["description"]
 
@@ -173,7 +173,7 @@ async def test_compare_to_benchmark_tool_rejects_a_self_comparison_as_a_tool_err
 async def test_compare_to_benchmark_schema_explains_the_inner_join() -> None:
     async with connect(fake_ticker_factory()) as client:
         [tool] = [t for t in await client.list_tools() if t.name == "compare_to_benchmark"]
-        properties = (tool.outputSchema or {})["properties"]
+        properties = (tool.output_schema or {})["properties"]
         assert "inner join" in properties["overlapping_observations"]["description"]
         assert tool.description is not None
         assert "inner-joined" in tool.description

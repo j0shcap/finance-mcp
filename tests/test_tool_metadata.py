@@ -19,7 +19,7 @@ def annotations_of(tool: Tool) -> ToolAnnotations:
 
 async def test_every_tool_is_annotated_read_only(client: Client[FastMCPTransport]) -> None:
     for tool in await client.list_tools():
-        assert annotations_of(tool).readOnlyHint is True, tool.name
+        assert annotations_of(tool).read_only_hint is True, tool.name
 
 
 async def test_every_tool_has_a_human_readable_title(client: Client[FastMCPTransport]) -> None:
@@ -35,8 +35,8 @@ async def test_calculators_are_idempotent_and_closed_world(
     by_name = {t.name: t for t in await client.list_tools()}
     for name in conventions.CALCULATOR_TOOLS:
         annotations = annotations_of(by_name[name])
-        assert annotations.idempotentHint is True, name
-        assert annotations.openWorldHint is False, name
+        assert annotations.idempotent_hint is True, name
+        assert annotations.open_world_hint is False, name
 
 
 async def test_market_data_tools_are_open_world_and_not_idempotent(
@@ -45,21 +45,19 @@ async def test_market_data_tools_are_open_world_and_not_idempotent(
     by_name = {t.name: t for t in await client.list_tools()}
     for name in conventions.MARKET_DATA_TOOLS:
         annotations = annotations_of(by_name[name])
-        assert annotations.openWorldHint is True, name
-        assert annotations.idempotentHint is not True, name  # live prices move
+        assert annotations.open_world_hint is True, name
+        assert annotations.idempotent_hint is not True, name  # live prices move
 
 
 async def test_no_tool_claims_to_be_destructive(client: Client[FastMCPTransport]) -> None:
     for tool in await client.list_tools():
-        assert annotations_of(tool).destructiveHint is not True, tool.name
+        assert annotations_of(tool).destructive_hint is not True, tool.name
 
 
 async def test_server_advertises_instructions_over_the_protocol(
     client: Client[FastMCPTransport],
 ) -> None:
-    initialized = client.initialize_result
-    assert initialized is not None
-    instructions = initialized.instructions
+    instructions = client.instructions
     assert instructions
     assert "finance://conventions" in instructions
     # The sign convention and the Yahoo unit quirks are the two things a model
@@ -69,9 +67,8 @@ async def test_server_advertises_instructions_over_the_protocol(
 
 
 async def test_server_reports_its_package_version(client: Client[FastMCPTransport]) -> None:
-    initialized = client.initialize_result
-    assert initialized is not None
-    assert initialized.serverInfo.version == __version__
+    assert client.server_info is not None
+    assert client.server_info.version == __version__
 
 
 async def test_conventions_resource_is_listed(client: Client[FastMCPTransport]) -> None:
@@ -104,9 +101,7 @@ async def test_instructions_name_exactly_the_registered_tools(
 ) -> None:
     """The instructions map the server for the model by naming both tool families. A tool
     added, removed, or renamed without updating those lists would leave a stale map."""
-    initialized = client.initialize_result
-    assert initialized is not None
-    instructions = initialized.instructions or ""
+    instructions = client.instructions or ""
     families = set(conventions.MARKET_DATA_TOOLS) | set(conventions.CALCULATOR_TOOLS)
     assert families == {tool.name for tool in await client.list_tools()}
     for name in families:

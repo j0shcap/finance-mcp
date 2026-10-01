@@ -5,7 +5,7 @@ import re
 import pytest
 from fastmcp import Client
 from fastmcp.client.transports import FastMCPTransport
-from mcp.shared.exceptions import McpError
+from fastmcp.exceptions import McpError
 from mcp.types import TextContent
 
 from finance_mcp.conventions import (

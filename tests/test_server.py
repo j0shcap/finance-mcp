@@ -62,7 +62,7 @@ def test_create_server_returns_fastmcp() -> None:
 
 def test_main_runs_without_the_fastmcp_banner(monkeypatch: pytest.MonkeyPatch) -> None:
     # The banner would be written into the client's log on every launch, with a PyPI update
-    # check whose advice ("pip install --upgrade fastmcp") steps outside pyproject's fastmcp<4.
+    # check whose advice ("pip install --upgrade fastmcp") can step outside pyproject's fastmcp<5.
     kwargs_seen: list[dict[str, object]] = []
 
     def fake_run(self: FastMCP, *args: object, **kwargs: object) -> None:
