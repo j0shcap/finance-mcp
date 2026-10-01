@@ -64,6 +64,20 @@ class MarketData(BaseModel):
         return _round_floats(handler(value))
 
 
+#: Shared by every result that echoes a risk-free rate, so the three stay word-for-word alike.
+_RISK_FREE_SOURCE_DESCRIPTION = (
+    "Where risk_free_rate came from. 'caller': the rate passed in. 'treasury_bill': none was "
+    "passed, so it is the 13-week US T-bill yield (Yahoo ^IRX) averaged over the measured dates "
+    "and converted from its discount quote to an effective annual rate. 'unavailable': none was "
+    "passed and that average could not be formed - see risk_free_rate_note; the figures that "
+    "need a rate are null."
+)
+_RISK_FREE_NOTE_DESCRIPTION = (
+    "Why the rate is unavailable and how to proceed (pass risk_free_rate explicitly); null "
+    "otherwise."
+)
+
+
 class TVMResult(BaseModel):
     """Result of a time-value-of-money computation."""
 
@@ -777,18 +791,8 @@ class PerformanceStats(MarketData):
             "short to use it."
         ),
     )
-    risk_free_rate_source: RiskFreeSource = Field(
-        description="Where risk_free_rate came from. 'caller': the rate passed in. "
-        "'treasury_bill': none was passed, so it is the 13-week US T-bill yield (Yahoo ^IRX) "
-        "averaged over the measured dates and converted from its discount quote to an "
-        "effective annual rate. 'unavailable': none was passed and that average could not be "
-        "formed - see risk_free_rate_note; the figures that need a rate are null."
-    )
-    risk_free_rate_note: str | None = Field(
-        default=None,
-        description="Why the rate is unavailable and how to proceed (pass risk_free_rate "
-        "explicitly); null otherwise.",
-    )
+    risk_free_rate_source: RiskFreeSource = Field(description=_RISK_FREE_SOURCE_DESCRIPTION)
+    risk_free_rate_note: str | None = Field(default=None, description=_RISK_FREE_NOTE_DESCRIPTION)
     sharpe_ratio: float | None = Field(
         default=None,
         description=(
@@ -874,18 +878,8 @@ class BenchmarkComparison(MarketData):
         "dates; with a beta of exactly 1 it cancels out of alpha entirely. Null when no rate "
         "was passed and the T-bill average could not be formed, and alpha is then null too.",
     )
-    risk_free_rate_source: RiskFreeSource = Field(
-        description="Where risk_free_rate came from. 'caller': the rate passed in. "
-        "'treasury_bill': none was passed, so it is the 13-week US T-bill yield (Yahoo ^IRX) "
-        "averaged over the measured dates and converted from its discount quote to an "
-        "effective annual rate. 'unavailable': none was passed and that average could not be "
-        "formed - see risk_free_rate_note; the figures that need a rate are null."
-    )
-    risk_free_rate_note: str | None = Field(
-        default=None,
-        description="Why the rate is unavailable and how to proceed (pass risk_free_rate "
-        "explicitly); null otherwise.",
-    )
+    risk_free_rate_source: RiskFreeSource = Field(description=_RISK_FREE_SOURCE_DESCRIPTION)
+    risk_free_rate_note: str | None = Field(default=None, description=_RISK_FREE_NOTE_DESCRIPTION)
     total_return_percent: float = Field(
         description="The asset's total return over the shared dates (e.g. 12.3 = 12.3%)."
     )
@@ -1001,18 +995,8 @@ class TickerComparisonRow(MarketData):
         "average over THIS row's dates (a younger listing covers fewer of them). Null when "
         "the T-bill average could not be formed."
     )
-    risk_free_rate_source: RiskFreeSource = Field(
-        description="Where risk_free_rate came from. 'caller': the rate passed in. "
-        "'treasury_bill': none was passed, so it is the 13-week US T-bill yield (Yahoo ^IRX) "
-        "averaged over the measured dates and converted from its discount quote to an "
-        "effective annual rate. 'unavailable': none was passed and that average could not be "
-        "formed - see risk_free_rate_note; the figures that need a rate are null."
-    )
-    risk_free_rate_note: str | None = Field(
-        default=None,
-        description="Why the rate is unavailable and how to proceed (pass risk_free_rate "
-        "explicitly); null otherwise.",
-    )
+    risk_free_rate_source: RiskFreeSource = Field(description=_RISK_FREE_SOURCE_DESCRIPTION)
+    risk_free_rate_note: str | None = Field(default=None, description=_RISK_FREE_NOTE_DESCRIPTION)
     sharpe_ratio: float | None = Field(
         default=None,
         description="Annualized Sharpe against this row's risk_free_rate; null under 85 days, "
