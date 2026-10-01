@@ -56,7 +56,7 @@ def test_get_quote_without_a_finite_price_is_symbol_not_found(price: float | Non
         fake_ticker_factory(fast_info={"last_price": price, "previous_close": 1.0})
     )
     with pytest.raises(SymbolNotFound, match="No quote data for 'BAD'"):
-        client._fetch_quote("BAD")
+        client._source.quote("BAD")
 
 
 def test_get_quote_surfaces_yfinance_error_message() -> None:
@@ -64,7 +64,7 @@ def test_get_quote_surfaces_yfinance_error_message() -> None:
         factory=fake_ticker_factory(fast_info_error=YFException("yahoo says: rate limited"))
     )
     with pytest.raises(DataUnavailable) as exc:
-        client._fetch_quote("AAPL")
+        client._source.quote("AAPL")
     assert "yahoo says: rate limited" in str(exc.value)
 
 
@@ -91,7 +91,7 @@ class _RaisingCurrencyFastInfo:
 def test_get_quote_fast_info_attr_error_becomes_data_unavailable() -> None:
     client = make_client(lambda _symbol: SimpleNamespace(fast_info=_RaisingCurrencyFastInfo()))
     with pytest.raises(DataUnavailable) as exc:
-        client._fetch_quote("X")
+        client._source.quote("X")
     assert "boom" in str(exc.value)
 
 

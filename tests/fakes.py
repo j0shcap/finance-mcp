@@ -10,7 +10,8 @@ import pandas as pd
 from fastmcp import Client
 from fastmcp.client.transports import FastMCPTransport
 
-from finance_mcp.data.yfinance_client import _FINANCIALS_ATTR, YFinanceClient
+from finance_mcp.data.yahoo import FINANCIALS_ATTR
+from finance_mcp.data.yfinance_client import YFinanceClient
 from finance_mcp.server import create_server
 
 #: fast_info for a healthy quote.
@@ -106,7 +107,7 @@ def fake_ticker_factory(
     # The ``count`` and ``tab`` the last get_news call received.
     captured_news_call: dict[str, int | str] = {}
     # Every attribute the client may read a statement from, so the stub cannot drift.
-    statement_attrs = frozenset(_FINANCIALS_ATTR.values())
+    statement_attrs = frozenset(FINANCIALS_ATTR.values())
 
     class _Ticker:
         @property

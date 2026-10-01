@@ -43,7 +43,7 @@ TRANSPORT_ERRORS = [
 def test_quote_transport_failure_is_data_unavailable_not_symbol_not_found(exc: Exception) -> None:
     client = make_client(factory=fake_ticker_factory(fast_info_error=exc))
     with pytest.raises(DataUnavailable) as raised:
-        client._fetch_quote("AAPL")
+        client._source.quote("AAPL")
     assert not isinstance(raised.value, SymbolNotFound)
     assert str(exc) in str(raised.value)  # underlying message preserved
     assert "may be invalid or delisted" not in str(raised.value)
@@ -72,7 +72,7 @@ NO_DATA_ERRORS = [
 def test_quote_no_data_signals_are_symbol_not_found(exc: Exception) -> None:
     client = make_client(factory=fake_ticker_factory(fast_info_error=exc))
     with pytest.raises(SymbolNotFound) as raised:
-        client._fetch_quote("NOPE")
+        client._source.quote("NOPE")
     assert str(raised.value) == "No quote data for 'NOPE'. The symbol may be invalid or delisted."
 
 
@@ -87,7 +87,7 @@ def test_info_no_data_signals_are_symbol_not_found(exc: Exception) -> None:
 def test_rate_limit_error_stays_data_unavailable() -> None:
     client = make_client(factory=fake_ticker_factory(fast_info_error=YFRateLimitError()))
     with pytest.raises(DataUnavailable) as raised:
-        client._fetch_quote("AAPL")
+        client._source.quote("AAPL")
     assert not isinstance(raised.value, SymbolNotFound)
     assert "Rate limited" in str(raised.value)
 
