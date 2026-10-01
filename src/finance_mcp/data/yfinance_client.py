@@ -587,11 +587,16 @@ class YFinanceClient:
         return _filter_line_items(full, line_items)
 
     def _fetch_financials(
-        self,
-        symbol: str,
-        statement: Statement,
-        period: StatementPeriod,
+        self, symbol: str, statement: Statement, period: StatementPeriod
     ) -> FinancialStatement:
+        """The statement, labelled with its reporting currency once it has parsed."""
+        parsed = self._fetch_statement(symbol, statement, period)
+        return parsed.model_copy(update={"currency": self._statement_currency(symbol)})
+
+    def _fetch_statement(
+        self, symbol: str, statement: Statement, period: StatementPeriod
+    ) -> FinancialStatement:
+        """The parsed statement, without its currency (that comes from another endpoint)."""
         attr = _FINANCIALS_ATTR[(statement, period)]
         ticker = self._ticker(symbol)
         with _unavailable_on_error(f"Failed to fetch {statement} statement for '{symbol}'"):
@@ -610,12 +615,12 @@ class YFinanceClient:
                 symbol=symbol,
                 statement=statement,
                 period=period,
-                currency=self._statement_currency(symbol, ticker),
+                currency=None,
                 period_ends=period_ends,
                 line_items=line_items,
             )
 
-    def _statement_currency(self, symbol: str, ticker: Any) -> str | None:
+    def _statement_currency(self, symbol: str) -> str | None:
         """The currency a statement is reported in, cached per symbol.
 
         It comes from ``.info``, a separate Yahoo endpoint shared by all six statements, so
@@ -626,7 +631,7 @@ class YFinanceClient:
             return self._cached(
                 ("statement_currency", symbol),
                 self._fundamentals_ttl,
-                lambda: _read_statement_currency(ticker),
+                lambda: _read_statement_currency(self._ticker(symbol)),
             )
         except Exception:  # labelling is best-effort, never fatal
             return None
