@@ -87,3 +87,5 @@ async def test_starts_cleanly(server: Server) -> None:
     stderr = server.stderr()
     assert "Traceback" not in stderr, stderr
     assert "ERROR" not in stderr, stderr
+    # No banner, and so no PyPI update check telling users to upgrade past fastmcp<4.
+    assert "Update available" not in stderr and "gofastmcp.com" not in stderr, stderr

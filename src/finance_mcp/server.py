@@ -43,8 +43,12 @@ def create_server(yf_client: YFinanceClient | None = None) -> FastMCP:
 
 
 def main() -> None:
-    """Console entry point: run the server over stdio."""
-    create_server().run()
+    """Console entry point: run the server over stdio.
+
+    Without fastmcp's banner, which would print on every launch and check PyPI for a
+    fastmcp release this package may not support.
+    """
+    create_server().run(show_banner=False)
 
 
 if __name__ == "__main__":
