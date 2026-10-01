@@ -1,8 +1,12 @@
+from typing import Any
+
 import pandas as pd
 import pytest
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
+from finance_mcp.data import analytics
+from finance_mcp.data.yfinance_client import TREASURY_BILL_SYMBOL
 from finance_mcp.server import create_server
 from tests.fakes import (
     fake_multi_ticker_factory,
@@ -110,12 +114,44 @@ async def test_analyze_performance_tool_reports_risk_adjusted_stats() -> None:
         assert result.data.downside_deviation_percent is not None
 
 
-async def test_analyze_performance_tool_defaults_the_risk_free_rate_to_zero() -> None:
+def _performance_factory() -> Any:
+    """An asset plus the T-bill history the default risk-free rate is drawn from."""
+    closes = [100.0 + (i % 5) + i * 0.3 for i in range(120)]
+    return fake_multi_ticker_factory(
+        {
+            "AAPL": {"history_df": make_history_df(closes)},
+            TREASURY_BILL_SYMBOL: {"history_df": make_history_df([4.03] * 120)},
+        }
+    )
+
+
+@pytest.mark.parametrize("arguments", [{}, {"risk_free_rate": None}])
+async def test_analyze_performance_tool_defaults_to_the_treasury_bill_rate(
+    arguments: dict[str, Any],
+) -> None:
+    server = create_server(yf_client=make_client(factory=_performance_factory()))
+    async with Client(server) as client:
+        result = await client.call_tool(
+            "analyze_performance", {"ticker": "AAPL", "period": "6mo", **arguments}
+        )
+        assert result.data.risk_free_rate == pytest.approx(
+            analytics.treasury_bill_effective_rate(4.03), rel=1e-6
+        )
+        assert result.data.risk_free_rate_source == "treasury_bill"
+        assert result.data.sharpe_ratio is not None
+
+
+async def test_analyze_performance_tool_reports_an_unavailable_rate_without_failing() -> None:
     df = make_history_df([100.0 + (i % 5) + i * 0.3 for i in range(120)])
-    server = create_server(yf_client=make_client(factory=fake_ticker_factory(history_df=df)))
+    factory = fake_multi_ticker_factory({"AAPL": {"history_df": df}})  # no T-bill history
+    server = create_server(yf_client=make_client(factory=factory))
     async with Client(server) as client:
         result = await client.call_tool("analyze_performance", {"ticker": "AAPL", "period": "6mo"})
-        assert result.data.risk_free_rate == 0.0
+        assert result.data.risk_free_rate is None
+        assert result.data.risk_free_rate_source == "unavailable"
+        assert result.data.risk_free_rate_note is not None
+        assert result.data.sharpe_ratio is None
+        assert result.data.annualized_return_percent is not None
 
 
 async def test_analyze_performance_schema_states_the_risk_free_default_in_the_output() -> None:
@@ -125,10 +161,14 @@ async def test_analyze_performance_schema_states_the_risk_free_default_in_the_ou
     async with Client(server) as client:
         [tool] = [t for t in await client.list_tools() if t.name == "analyze_performance"]
         properties = (tool.outputSchema or {})["properties"]
-        assert "Defaults to 0" in properties["risk_free_rate"]["description"]
+        assert "T-bill" in properties["risk_free_rate"]["description"]
         assert "RAW" in properties["risk_free_rate"]["description"]
+        assert "unavailable" in properties["risk_free_rate_source"]["description"]
         assert "downside_deviation" in properties["sortino_ratio"]["description"]
         assert tool.description is not None and "Sharpe" in tool.description
+        input_rate = tool.inputSchema["properties"]["risk_free_rate"]
+        assert input_rate.get("default") is None
+        assert "T-bill" in input_rate["description"]
 
 
 async def test_compare_to_benchmark_tool() -> None:

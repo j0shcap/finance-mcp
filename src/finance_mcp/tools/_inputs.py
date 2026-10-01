@@ -58,17 +58,19 @@ MAX_LINE_ITEMS = 100
 #: bound is what keeps a single tool call from opening dozens of connections.
 MAX_COMPARE_TICKERS = 10
 
-#: An annual risk-free rate for the risk-adjusted statistics. Bounded well outside any real
-#: policy rate but away from -100%, where de-annualizing the rate is undefined.
+#: An annual risk-free rate for the risk-adjusted statistics, or None for the T-bill default.
+#: Bounded well outside any real policy rate but away from -100%, where de-annualizing the
+#: rate is undefined.
 RiskFreeRate = Annotated[
-    float,
+    float | None,
     Field(
         ge=-0.5,
         le=1.0,
         description=(
-            "Annual risk-free rate as a DECIMAL, not a percent: 0.045 means 4.5%. Defaults "
-            "to 0, which makes the Sharpe and Sortino ratios raw return per unit of risk "
-            "rather than excess return over cash."
+            "Annual risk-free rate as a DECIMAL, not a percent: 0.045 means 4.5%. Leave it out "
+            "to use the 13-week US T-bill yield averaged over the measured dates, so the "
+            "Sharpe, Sortino and alpha are excess return over cash. Pass 0 for RAW return per "
+            "unit of risk."
         ),
     ),
 ]

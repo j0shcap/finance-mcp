@@ -223,11 +223,11 @@ def test_compare_tickers_returns_one_row_per_ticker_in_request_order() -> None:
     assert [row.symbol for row in table.rows] == ["MSFT", "AAPL"]
     assert table.errors == []
     assert table.period == "1y"
-    assert table.risk_free_rate == 0.0
+    assert table.risk_free_rate is None  # none passed: the rows carry the T-bill default
 
 
 def test_compare_tickers_rows_carry_performance_and_valuation() -> None:
-    table = make_client(_rows_factory()).compare_tickers(["AAPL", "MSFT"], "1y")
+    table = make_client(_rows_factory()).compare_tickers(["AAPL", "MSFT"], "1y", 0.0)
     row = table.rows[0]
     assert row.total_return_percent is not None
     assert row.annualized_volatility_percent is not None
@@ -267,7 +267,7 @@ def test_compare_tickers_short_window_row_has_no_periods_per_year() -> None:
 
 
 def test_compare_tickers_applies_the_risk_free_rate_to_every_row() -> None:
-    raw = make_client(_rows_factory()).compare_tickers(["AAPL", "MSFT"], "1y")
+    raw = make_client(_rows_factory()).compare_tickers(["AAPL", "MSFT"], "1y", 0.0)
     excess = make_client(_rows_factory()).compare_tickers(
         ["AAPL", "MSFT"], "1y", risk_free_rate=0.05
     )
@@ -378,5 +378,6 @@ def test_compare_tickers_fetches_rows_concurrently() -> None:
         },
         gate=gate,
     )
-    table = make_client(factory).compare_tickers(symbols, "1y")
+    # An explicit rate, so no T-bill fetch takes a turn at the barrier.
+    table = make_client(factory).compare_tickers(symbols, "1y", 0.0)
     assert [row.symbol for row in table.rows] == symbols

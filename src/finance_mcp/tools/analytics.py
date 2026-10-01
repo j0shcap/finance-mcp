@@ -43,7 +43,7 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
         period: Annotated[
             HistoryPeriod, Field(description="Look-back window for the statistics.")
         ] = "1y",
-        risk_free_rate: RiskFreeRate = 0.0,
+        risk_free_rate: RiskFreeRate = None,
     ) -> PerformanceStats:
         """Return and risk stats from daily auto-adjusted closes over the window.
 
@@ -61,9 +61,11 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
         under 85 days (just under three months), because annualizing a sub-quarter move
         extrapolates noise into a yearly rate.
 
-        risk_free_rate defaults to 0, so the Sharpe and Sortino ratios are raw return per
-        unit of risk unless you pass a rate; the value used is echoed in the result. For
-        beta, alpha or a comparison against an index, use compare_to_benchmark.
+        Left out, risk_free_rate is the 13-week US T-bill yield averaged over the same
+        dates, so Sharpe, Sortino and downside deviation are excess over cash; pass 0 for
+        raw figures. The rate and its source are echoed in the result, and if the T-bill
+        average cannot be formed those three are null with risk_free_rate_note saying why.
+        For beta, alpha or a comparison against an index, use compare_to_benchmark.
         """
         return await run_data(lambda: client.analyze_performance(ticker, period, risk_free_rate))
 
@@ -82,7 +84,7 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
         period: Annotated[
             HistoryPeriod, Field(description="Look-back window for the comparison.")
         ] = "1y",
-        risk_free_rate: RiskFreeRate = 0.0,
+        risk_free_rate: RiskFreeRate = None,
     ) -> BenchmarkComparison:
         """Beta, correlation, Jensen's alpha, tracking error, information ratio and excess
         return versus a benchmark, over the dates the two instruments share.
@@ -94,8 +96,9 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
 
         Annualized figures (both CAGRs, alpha, tracking error, information ratio) are null
         when the overlap spans under 85 days; beta, correlation and excess return are not,
-        since they need no annualization. risk_free_rate defaults to 0 and only affects
-        alpha. Returns are in each instrument's own quote currency, so a cross-currency
+        since they need no annualization. risk_free_rate only affects alpha; left out, it is
+        the 13-week T-bill yield averaged over the overlapping dates (alpha is null if that
+        cannot be formed). Returns are in each instrument's own quote currency, so a cross-currency
         pair folds an FX move into every figure - say so rather than reading it straight.
         """
         return await run_data(
@@ -118,12 +121,14 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
         period: Annotated[
             HistoryPeriod, Field(description="Look-back window applied to every row.")
         ] = "1y",
-        risk_free_rate: RiskFreeRate = 0.0,
+        risk_free_rate: RiskFreeRate = None,
     ) -> TickerComparison:
         """Side-by-side performance and key valuation metrics for 2-10 tickers.
 
         Each row carries total/annualized return, volatility, max drawdown and the
-        risk-adjusted ratios over `period`, plus Yahoo's valuation metrics (P/E, forward
+        risk-adjusted ratios over `period` - measured against the caller's risk_free_rate,
+        or by default the 13-week T-bill yield over that row's own dates (each row echoes
+        its rate) - plus Yahoo's valuation metrics (P/E, forward
         P/E, P/B, P/S, PEG, EV/EBITDA, margins, ROE, debt/equity) in their as-reported
         units - margins and ROE are fractions, debt_to_equity is already a percent. Rank
         peers on PEG or growth-vs-multiple rather than raw P/E.

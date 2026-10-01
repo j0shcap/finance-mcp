@@ -81,10 +81,13 @@ ticker you are pricing, never by position: any ticker that failed is in errors i
 positions shift. A ticker in errors was not fetched at all - say so rather than substituting \
 another source's price.
 - risk_free_rate (analyze_performance, compare_to_benchmark, compare_tickers) is an ANNUAL \
-DECIMAL: 0.045 = 4.5%. It defaults to 0, which makes sharpe_ratio and sortino_ratio RAW return \
-per unit of risk rather than excess-over-cash figures - the rate used is echoed in every result, \
-so read it before calling a Sharpe "excess". Pass a current T-bill yield when the comparison is \
-against cash.
+DECIMAL: 0.045 = 4.5%. Left out, it is the 13-week US T-bill yield (Yahoo ^IRX) averaged over \
+the dates measured and converted to an effective annual rate, so sharpe_ratio, sortino_ratio, \
+downside_deviation_percent and alpha_percent are excess-over-cash figures. Every result echoes \
+the rate with risk_free_rate_source: "caller", "treasury_bill", or "unavailable" - the T-bill \
+average could not be formed (see risk_free_rate_note), so those figures are null; pass a rate \
+explicitly to get them, and never read a null as a 0 rate. Pass 0 only to get RAW return per \
+unit of risk.
 - sharpe_ratio, sortino_ratio, calmar_ratio, beta, correlation and information_ratio are \
 DIMENSIONLESS ratios - never percents. downside_deviation_percent, tracking_error_percent, \
 alpha_percent and excess_return_percent are PERCENTS; the last two are percentage POINTS of \

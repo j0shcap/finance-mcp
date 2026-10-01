@@ -9,13 +9,14 @@ else, transport failures included, stays a plain DataUnavailable.
 
 import difflib
 import math
+import statistics
 import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any, NamedTuple, cast
 
 import yfinance as yf
@@ -43,6 +44,7 @@ from finance_mcp.data.models import (
     QuoteResult,
     RecommendationPeriod,
     RelevanceCheck,
+    RiskFreeSource,
     SplitEvent,
     Statement,
     StatementPeriod,
@@ -78,6 +80,12 @@ SMA_LONG_WINDOW = 200
 # period="3mo" window spans 87-95 elapsed days depending on the call date, and the same
 # request should not gain and lose its annualized fields from one day to the next.
 MIN_ANNUALIZATION_DAYS = 85
+#: Yahoo's 13-week US Treasury bill yield, the default risk-free rate. Quoted in percent on
+#: a bank-discount basis; see analytics.treasury_bill_effective_rate.
+TREASURY_BILL_SYMBOL = "^IRX"
+#: How far inside a measured window the T-bill history may start or end and still count as
+#: covering it, so a bond-market holiday at either edge is not a gap.
+RISK_FREE_EDGE_TOLERANCE_DAYS = 7
 
 _FINANCIALS_ATTR = {
     ("income", "annual"): "income_stmt",
@@ -87,6 +95,19 @@ _FINANCIALS_ATTR = {
     ("cashflow", "annual"): "cashflow",
     ("cashflow", "quarterly"): "quarterly_cashflow",
 }
+
+
+class _RiskFree(NamedTuple):
+    """The risk-free rate one computation used, and how it was chosen."""
+
+    rate: float | None
+    source: RiskFreeSource
+    note: str | None = None
+
+
+#: The T-bill history a computation draws its default rate from: the bars, or why they
+#: could not be fetched. None when the caller passed a rate, so nothing was fetched.
+_Bills = list[PriceBar] | str | None
 
 
 class _Identity(NamedTuple):
@@ -327,80 +348,58 @@ class YFinanceClient:
         )
 
     def analyze_performance(
-        self, symbol: str, period: str, risk_free_rate: float = 0.0
+        self, symbol: str, period: str, risk_free_rate: float | None = None
     ) -> PerformanceStats:
+        """Return and risk statistics over ``period``.
+
+        With no ``risk_free_rate``, the Sharpe, Sortino and downside figures are measured
+        against the 13-week T-bill yield averaged over the same dates.
+        """
         symbol = _norm(symbol)
         # The bars this reads are usually cached by _all_bars, but a history past
         # MAX_CACHEABLE_BARS is not retained -- without an entry here every call to a long
         # window would go back to the network. PerformanceStats is a few hundred bytes.
-        # risk_free_rate is part of the key because the Sharpe, Sortino and downside figures
-        # are computed from it: keying on (symbol, period) alone would serve the first
-        # caller's rate to every later one.
+        # The rate is part of the key because the Sharpe, Sortino and downside figures are
+        # computed from it: keying on (symbol, period) alone would serve the first caller's
+        # rate to every later one. A result whose default rate could not be resolved is not
+        # kept, so the next call retries the T-bill fetch instead of replaying the gap.
         return self._cached(
-            ("performance", symbol, period, str(risk_free_rate)),
+            ("performance", symbol, period, _rate_key(risk_free_rate)),
             self._history_ttl,
-            lambda: self._compute_performance(symbol, period, risk_free_rate),
+            lambda: self._fetch_performance(symbol, period, risk_free_rate),
+            cacheable=lambda stats: stats.risk_free_rate_source != "unavailable",
         )
 
-    def _compute_performance(
-        self, symbol: str, period: str, risk_free_rate: float
+    def _fetch_performance(
+        self, symbol: str, period: str, risk_free_rate: float | None
     ) -> PerformanceStats:
-        bars = self._all_bars(symbol, period, "1d")
-        if len(bars) < 2:
-            raise DataUnavailable(
-                f"Not enough price history to compute performance for '{symbol}'."
-            )
-        closes = [b.close for b in bars]
-        # Annualize off wall-clock time, not the bar count: how many bars a year holds is a
-        # property of the instrument's trading calendar (~252 weekday, ~365 for crypto), so
-        # both the CAGR exponent and the volatility factor are read from the dates.
-        elapsed_days = _elapsed_days(bars[0].date, bars[-1].date)
-        annualized_return: float | None = None
-        annualized_volatility: float | None = None
-        periods_per_year: float | None = None
-        # Every risk-adjusted figure needs periods_per_year (Calmar needs the CAGR), so they
-        # share the annualization gate.
-        sharpe: float | None = None
-        sortino: float | None = None
-        downside: float | None = None
-        calmar: float | None = None
-        max_drawdown = analytics.max_drawdown(closes)
-        if elapsed_days >= MIN_ANNUALIZATION_DAYS:
-            years = elapsed_days / analytics.DAYS_PER_YEAR
-            periods_per_year = analytics.infer_periods_per_year(len(bars), years)
-            annualized_return = analytics.annualized_return(closes, years)
-            annualized_volatility = analytics.annualized_volatility(closes, periods_per_year)
-            sharpe = analytics.sharpe_ratio(closes, periods_per_year, risk_free_rate)
-            sortino = analytics.sortino_ratio(closes, periods_per_year, risk_free_rate)
-            downside = analytics.downside_deviation(closes, periods_per_year, risk_free_rate)
-            calmar = analytics.calmar_ratio(annualized_return, max_drawdown)
-        return PerformanceStats(
-            symbol=symbol,
-            period=period,
-            bars=len(bars),
-            start_date=bars[0].date,
-            end_date=bars[-1].date,
-            total_return_percent=analytics.total_return(closes),
-            annualized_return_percent=annualized_return,
-            annualized_volatility_percent=annualized_volatility,
-            periods_per_year=periods_per_year,
-            max_drawdown_percent=max_drawdown,
-            risk_free_rate=risk_free_rate,
-            sharpe_ratio=sharpe,
-            sortino_ratio=sortino,
-            downside_deviation_percent=downside,
-            calmar_ratio=calmar,
-            sma_50=analytics.sma(closes, SMA_SHORT_WINDOW),
-            sma_200=analytics.sma(closes, SMA_LONG_WINDOW),
+        bars, bills = _in_parallel(
+            lambda: self._all_bars(symbol, period, "1d"),
+            lambda: self._bills_for(period, risk_free_rate),
         )
+        return _performance(symbol, period, bars, _resolve_risk_free(risk_free_rate, bills, bars))
+
+    def _bills_for(self, period: str, risk_free_rate: float | None) -> _Bills:
+        """The T-bill history for a default rate; nothing when the caller gave a rate.
+
+        A failed fetch is returned as its message rather than raised: only the rate-
+        dependent figures need it, so it must not fail the whole computation.
+        """
+        if risk_free_rate is not None:
+            return None
+        try:
+            return self._all_bars(TREASURY_BILL_SYMBOL, period, "1d")
+        except DataUnavailable as exc:
+            return str(exc)
 
     def compare_to_benchmark(
-        self, symbol: str, benchmark: str, period: str, risk_free_rate: float = 0.0
+        self, symbol: str, benchmark: str, period: str, risk_free_rate: float | None = None
     ) -> BenchmarkComparison:
         """Benchmark-relative statistics over the dates the two instruments share.
 
-        The two histories are independent fetches, so they run in parallel; both are the
-        same cached ``_all_bars`` entries the other analytics tools use.
+        The two histories (and, for a default rate, the T-bill history) are independent
+        fetches, so they run in parallel; all are the same cached ``_all_bars`` entries the
+        other analytics tools use.
         """
         symbol, bench = _norm(symbol), _norm(benchmark)
         if symbol == bench:
@@ -408,10 +407,13 @@ class YFinanceClient:
                 f"A benchmark comparison needs two different symbols; '{symbol}' was given "
                 "for both. Use analyze_performance for a single instrument."
             )
-        asset_bars, bench_bars = _fetch_concurrently(
-            [symbol, bench],
-            lambda s: self._all_bars(s, period, "1d"),
-            BENCHMARK_MAX_WORKERS,
+        (asset_bars, bench_bars), bills = _in_parallel(
+            lambda: _fetch_concurrently(
+                [symbol, bench],
+                lambda s: self._all_bars(s, period, "1d"),
+                BENCHMARK_MAX_WORKERS,
+            ),
+            lambda: self._bills_for(period, risk_free_rate),
         )
         dates, asset_closes, bench_closes = analytics.align_closes(
             [(b.date, b.close) for b in asset_bars], [(b.date, b.close) for b in bench_bars]
@@ -422,6 +424,8 @@ class YFinanceClient:
                 f"over '{period}', so there is nothing to compare. Try a longer period, or "
                 "check that both symbols traded over this window."
             )
+        # Alpha's risk-free leg spans the dates actually compared, not either full history.
+        risk_free = _risk_free_over(risk_free_rate, bills, dates[0], dates[-1])
         elapsed_days = _elapsed_days(dates[0], dates[-1])
         periods_per_year: float | None = None
         asset_cagr: float | None = None
@@ -439,8 +443,13 @@ class YFinanceClient:
             tracking = analytics.tracking_error(asset_closes, bench_closes, periods_per_year)
             info_ratio = analytics.information_ratio(asset_closes, bench_closes, periods_per_year)
         alpha: float | None = None
-        if asset_beta is not None and asset_cagr is not None and bench_cagr is not None:
-            alpha = analytics.jensen_alpha(asset_cagr, bench_cagr, asset_beta, risk_free_rate)
+        if (
+            asset_beta is not None
+            and asset_cagr is not None
+            and bench_cagr is not None
+            and risk_free.rate is not None
+        ):
+            alpha = analytics.jensen_alpha(asset_cagr, bench_cagr, asset_beta, risk_free.rate)
         asset_total = analytics.total_return(asset_closes)
         bench_total = analytics.total_return(bench_closes)
         return BenchmarkComparison(
@@ -451,7 +460,9 @@ class YFinanceClient:
             start_date=dates[0],
             end_date=dates[-1],
             periods_per_year=periods_per_year,
-            risk_free_rate=risk_free_rate,
+            risk_free_rate=risk_free.rate,
+            risk_free_rate_source=risk_free.source,
+            risk_free_rate_note=risk_free.note,
             total_return_percent=asset_total,
             benchmark_total_return_percent=bench_total,
             excess_return_percent=asset_total - bench_total,
@@ -465,19 +476,24 @@ class YFinanceClient:
         )
 
     def compare_tickers(
-        self, symbols: list[str], period: str, risk_free_rate: float = 0.0
+        self, symbols: list[str], period: str, risk_free_rate: float | None = None
     ) -> TickerComparison:
         """Side-by-side performance and valuation for a small batch, fetched concurrently.
 
         Each row is two independent lookups over the cached fetchers the single-ticker tools
         already use, so a batch costs no more than calling them one at a time -- and one
         ticker's failure reports itself instead of discarding the rows that worked.
+
+        For a default rate the T-bill history is fetched ONCE, before the rows, and each
+        row averages it over its own dates: a period="max" history is too long to cache,
+        so fetching it per row would cost a round trip per ticker.
         """
         pending, failures = _normalize_batch(symbols)
         errors = [ComparisonError(symbol=raw, error=reason) for raw, reason in failures]
+        bills = self._bills_for(period, risk_free_rate) if pending else None
         built = _fetch_concurrently(
             pending,
-            lambda s: self._comparison_row(s, period, risk_free_rate),
+            lambda s: self._comparison_row(s, period, risk_free_rate, bills),
             COMPARE_MAX_WORKERS,
         )
         rows = [r for r in built if isinstance(r, TickerComparisonRow)]
@@ -488,6 +504,7 @@ class YFinanceClient:
         return TickerComparison(
             period=period,
             risk_free_rate=risk_free_rate,
+            risk_free_rate_source="caller" if risk_free_rate is not None else "treasury_bill",
             base_currency=base_currency,
             mixed_currencies=any(row.currency_differs for row in rows),
             rows=rows,
@@ -495,7 +512,7 @@ class YFinanceClient:
         )
 
     def _comparison_row(
-        self, symbol: str, period: str, risk_free_rate: float
+        self, symbol: str, period: str, risk_free_rate: float | None, bills: _Bills
     ) -> TickerComparisonRow | ComparisonError:
         """One ticker's row, or the reason it has none.
 
@@ -506,7 +523,10 @@ class YFinanceClient:
         return figures that did arrive.
         """
         try:
-            perf = self._compute_performance(symbol, period, risk_free_rate)
+            bars = self._all_bars(symbol, period, "1d")
+            perf = _performance(
+                symbol, period, bars, _resolve_risk_free(risk_free_rate, bills, bars)
+            )
         except DataUnavailable as exc:
             return ComparisonError(symbol=symbol, error=str(exc))
         metrics: KeyMetrics | None = None
@@ -530,6 +550,9 @@ class YFinanceClient:
             sortino_ratio=perf.sortino_ratio,
             calmar_ratio=perf.calmar_ratio,
             periods_per_year=perf.periods_per_year,
+            risk_free_rate=perf.risk_free_rate,
+            risk_free_rate_source=perf.risk_free_rate_source,
+            risk_free_rate_note=perf.risk_free_rate_note,
             trailing_pe=metrics.trailing_pe if metrics else None,
             forward_pe=metrics.forward_pe if metrics else None,
             price_to_book=metrics.price_to_book if metrics else None,
@@ -832,6 +855,127 @@ def _fetch_concurrently[T](
         return []
     with ThreadPoolExecutor(max_workers=min(max_workers, len(items))) as pool:
         return list(pool.map(fetch, items))
+
+
+def _performance(
+    symbol: str, period: str, bars: list[PriceBar], risk_free: _RiskFree
+) -> PerformanceStats:
+    """Return and risk statistics for ``bars``, with the rate-dependent set at ``risk_free``."""
+    if len(bars) < 2:
+        raise DataUnavailable(f"Not enough price history to compute performance for '{symbol}'.")
+    closes = [b.close for b in bars]
+    # Annualize off wall-clock time, not the bar count: how many bars a year holds is a
+    # property of the instrument's trading calendar (~252 weekday, ~365 for crypto), so
+    # both the CAGR exponent and the volatility factor are read from the dates.
+    elapsed_days = _elapsed_days(bars[0].date, bars[-1].date)
+    annualized_return: float | None = None
+    annualized_volatility: float | None = None
+    periods_per_year: float | None = None
+    # Every risk-adjusted figure needs periods_per_year (Calmar needs the CAGR), so they
+    # share the annualization gate. Sharpe, Sortino and downside also need a rate.
+    sharpe: float | None = None
+    sortino: float | None = None
+    downside: float | None = None
+    calmar: float | None = None
+    max_drawdown = analytics.max_drawdown(closes)
+    if elapsed_days >= MIN_ANNUALIZATION_DAYS:
+        years = elapsed_days / analytics.DAYS_PER_YEAR
+        periods_per_year = analytics.infer_periods_per_year(len(bars), years)
+        annualized_return = analytics.annualized_return(closes, years)
+        annualized_volatility = analytics.annualized_volatility(closes, periods_per_year)
+        if risk_free.rate is not None:
+            sharpe = analytics.sharpe_ratio(closes, periods_per_year, risk_free.rate)
+            sortino = analytics.sortino_ratio(closes, periods_per_year, risk_free.rate)
+            downside = analytics.downside_deviation(closes, periods_per_year, risk_free.rate)
+        calmar = analytics.calmar_ratio(annualized_return, max_drawdown)
+    return PerformanceStats(
+        symbol=symbol,
+        period=period,
+        bars=len(bars),
+        start_date=bars[0].date,
+        end_date=bars[-1].date,
+        total_return_percent=analytics.total_return(closes),
+        annualized_return_percent=annualized_return,
+        annualized_volatility_percent=annualized_volatility,
+        periods_per_year=periods_per_year,
+        max_drawdown_percent=max_drawdown,
+        risk_free_rate=risk_free.rate,
+        risk_free_rate_source=risk_free.source,
+        risk_free_rate_note=risk_free.note,
+        sharpe_ratio=sharpe,
+        sortino_ratio=sortino,
+        downside_deviation_percent=downside,
+        calmar_ratio=calmar,
+        sma_50=analytics.sma(closes, SMA_SHORT_WINDOW),
+        sma_200=analytics.sma(closes, SMA_LONG_WINDOW),
+    )
+
+
+def _rate_key(risk_free_rate: float | None) -> str:
+    """Cache-key component: the caller's rate, or a marker for the T-bill default."""
+    return "treasury_bill" if risk_free_rate is None else str(risk_free_rate)
+
+
+def _resolve_risk_free(
+    risk_free_rate: float | None, bills: _Bills, bars: list[PriceBar]
+) -> _RiskFree:
+    """The rate for a computation over ``bars`` (never empty): see :func:`_risk_free_over`."""
+    return _risk_free_over(risk_free_rate, bills, bars[0].date, bars[-1].date)
+
+
+def _risk_free_over(risk_free_rate: float | None, bills: _Bills, start: str, end: str) -> _RiskFree:
+    """The caller's rate, else the mean effective T-bill rate over ``start``..``end``.
+
+    The window average, not today's yield: a Sharpe over 2021-2026 measured against a
+    4% hurdle would charge the years when bills paid nothing as if they had paid 4%. The
+    T-bill history must reach both ends of the window (within a holiday's tolerance) --
+    averaging only part of it would understate or overstate the cash return foregone.
+    """
+    if risk_free_rate is not None:
+        return _RiskFree(risk_free_rate, "caller")
+    how_to_proceed = (
+        "Pass risk_free_rate explicitly to get the rate-dependent figures (0 gives raw "
+        "return per unit of risk)."
+    )
+    # _bills_for fetches whenever no rate was given, so bills is the history or the
+    # reason it could not be fetched.
+    if not isinstance(bills, list):
+        return _RiskFree(
+            None,
+            "unavailable",
+            f"The 13-week T-bill yield ({TREASURY_BILL_SYMBOL}) could not be fetched: "
+            f"{bills}. {how_to_proceed}",
+        )
+    first_day, last_day = _day(start), _day(end)
+    inside = [b for b in bills if first_day <= _day(b.date) <= last_day]
+    tolerance = RISK_FREE_EDGE_TOLERANCE_DAYS
+    if (
+        not inside
+        or (_day(inside[0].date) - first_day).days > tolerance
+        or (last_day - _day(inside[-1].date)).days > tolerance
+    ):
+        return _RiskFree(
+            None,
+            "unavailable",
+            f"The 13-week T-bill history ({TREASURY_BILL_SYMBOL}) covers {bills[0].date} to "
+            f"{bills[-1].date}, which does not span the measured window {start} to {end}. "
+            f"{how_to_proceed}",
+        )
+    try:
+        rates = [analytics.treasury_bill_effective_rate(b.close) for b in inside]
+    except InvalidInput as exc:
+        return _RiskFree(
+            None,
+            "unavailable",
+            f"The 13-week T-bill history ({TREASURY_BILL_SYMBOL}) has an implausible "
+            f"quote: {exc} {how_to_proceed}",
+        )
+    return _RiskFree(statistics.fmean(rates), "treasury_bill")
+
+
+def _day(timestamp: str) -> date:
+    """The calendar date of a PriceBar date or timestamp."""
+    return datetime.fromisoformat(timestamp).date()
 
 
 def _in_parallel[A, B](first: Callable[[], A], second: Callable[[], B]) -> tuple[A, B]:

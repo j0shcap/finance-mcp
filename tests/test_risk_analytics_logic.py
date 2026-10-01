@@ -22,6 +22,7 @@ from finance_mcp.data.analytics import (
     simple_returns,
     sortino_ratio,
     tracking_error,
+    treasury_bill_effective_rate,
 )
 from finance_mcp.data.errors import InvalidInput
 
@@ -310,3 +311,43 @@ def test_information_ratio_needs_two_returns() -> None:
 def test_information_ratio_rejects_unaligned_series() -> None:
     with pytest.raises(InvalidInput):
         information_ratio(ASSET, BENCH[:-1], 252.0)
+
+
+# --- T-bill discount yield -> effective annual rate ----------------------------------
+
+
+def test_treasury_bill_effective_rate_converts_the_discount_basis() -> None:
+    # A 4.03% discount on a 91-day bill: price = 1 - 0.0403 * 91/360 = 0.989813056, and
+    # compounding the 91-day return over a 365.25-day year: 0.989813056 ** (-365.25/91)
+    # - 1 = 0.041954.
+    assert treasury_bill_effective_rate(4.03) == pytest.approx(0.041954, abs=1e-6)
+
+
+def test_treasury_bill_effective_rate_exceeds_the_bond_equivalent_yield() -> None:
+    # Treasury's bond-equivalent "investment rate" for the same bill is simple interest:
+    # 365 * d / (360 - 91 * d) = 4.128%. Compounding it can only add.
+    bond_equivalent = 365 * 0.0403 / (360 - 91 * 0.0403)
+    assert bond_equivalent == pytest.approx(0.041280, abs=1e-6)
+    assert treasury_bill_effective_rate(4.03) > bond_equivalent
+
+
+@pytest.mark.parametrize(
+    ("discount_percent", "expected"),
+    [
+        (0.0, 0.0),
+        # 1 - (-0.00105 * 91/360) = 1.000265417; ** (-365.25/91) - 1 = -0.001065.
+        (-0.105, -0.001065),
+        # The January 1981 peak: 1 - 0.1714 * 91/360 = 0.956672; ** (-4.013736) - 1.
+        (17.14, 0.194562),
+    ],
+)
+def test_treasury_bill_effective_rate_handles_zero_negative_and_high_yields(
+    discount_percent: float, expected: float
+) -> None:
+    assert treasury_bill_effective_rate(discount_percent) == pytest.approx(expected, abs=1e-6)
+
+
+def test_treasury_bill_effective_rate_rejects_a_yield_implying_a_non_positive_price() -> None:
+    # 360/91 = 395.6%: at or above it the discount exceeds the face value.
+    with pytest.raises(InvalidInput):
+        treasury_bill_effective_rate(400.0)

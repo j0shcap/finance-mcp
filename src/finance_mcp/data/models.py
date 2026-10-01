@@ -10,6 +10,7 @@ TVMVariable = Literal["pv", "fv", "pmt", "rate", "nper"]
 Statement = Literal["income", "balance", "cashflow"]
 NewsSource = Literal["ticker", "search"]
 RelevanceCheck = Literal["applied", "not_an_equity", "unavailable"]
+RiskFreeSource = Literal["caller", "treasury_bill", "unavailable"]
 StatementPeriod = Literal["annual", "quarterly"]
 HistoryPeriod = Literal["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "max"]
 HistoryInterval = Literal["1m", "5m", "15m", "30m", "1h", "1d", "1wk", "1mo"]
@@ -758,14 +759,27 @@ class PerformanceStats(MarketData):
     max_drawdown_percent: float = Field(
         description="Largest peak-to-trough decline, as a negative percent (e.g. -23.4 = -23.4%)."
     )
-    risk_free_rate: float = Field(
-        default=0.0,
+    risk_free_rate: float | None = Field(
         description=(
-            "Annual risk-free rate used for the risk-adjusted figures, as a decimal "
-            "(0.045 = 4.5%). Defaults to 0, which makes sharpe_ratio and sortino_ratio RAW "
-            "return per unit of risk rather than excess-return figures - pass a T-bill yield "
-            "to compare against cash. Echoed even when the window is too short to use it."
+            "Annual risk-free rate the Sharpe, Sortino and downside figures are measured "
+            "against, as an effective annual DECIMAL (0.042 = 4.2%). By default the 13-week "
+            "T-bill yield over the window, so those figures are excess-over-cash; a caller's "
+            "rate of 0 makes them RAW return per unit of risk. Null when no rate was passed "
+            "and the T-bill average could not be formed. Echoed even when the window is too "
+            "short to use it."
         ),
+    )
+    risk_free_rate_source: RiskFreeSource = Field(
+        description="Where risk_free_rate came from. 'caller': the rate passed in. "
+        "'treasury_bill': none was passed, so it is the 13-week US T-bill yield (Yahoo ^IRX) "
+        "averaged over the measured dates and converted from its discount quote to an "
+        "effective annual rate. 'unavailable': none was passed and that average could not be "
+        "formed - see risk_free_rate_note; the figures that need a rate are null."
+    )
+    risk_free_rate_note: str | None = Field(
+        default=None,
+        description="Why the rate is unavailable and how to proceed (pass risk_free_rate "
+        "explicitly); null otherwise.",
     )
     sharpe_ratio: float | None = Field(
         default=None,
@@ -773,7 +787,8 @@ class PerformanceStats(MarketData):
             "Annualized Sharpe ratio: mean return in excess of risk_free_rate divided by the "
             "standard deviation of those excess returns, scaled by periods_per_year. "
             "Dimensionless, so it is comparable across instruments. Null when the window is "
-            "under 85 days (no periods_per_year to scale by) or the returns never varied."
+            "under 85 days (no periods_per_year to scale by), the returns never varied, or "
+            "risk_free_rate is null."
         ),
     )
     sortino_ratio: float | None = Field(
@@ -784,8 +799,8 @@ class PerformanceStats(MarketData):
             "penalized. When the numerator is POSITIVE it sits above the Sharpe if the "
             "dispersion was mostly upside; when the numerator is negative the comparison "
             "inverts, so only read the gap between the two on a positive Sharpe. Null "
-            "when the window is under 85 days or nothing fell below the risk-free target - "
-            "null there means 'no downside observed', not 'bad'."
+            "when the window is under 85 days, risk_free_rate is null, or nothing fell below "
+            "the risk-free target - null there means 'no downside observed', not 'bad'."
         ),
     )
     downside_deviation_percent: float | None = Field(
@@ -795,7 +810,8 @@ class PerformanceStats(MarketData):
             "denominator of sortino_ratio. Measured as a root-mean-square shortfall below "
             "the target rather than a spread around the mean, so it can EXCEED "
             "annualized_volatility_percent when most returns fell short. Null when the "
-            "window is under 85 days; 0.0 means no return fell below the target."
+            "window is under 85 days or risk_free_rate is null; 0.0 means no return fell "
+            "below the target."
         ),
     )
     calmar_ratio: float | None = Field(
@@ -844,10 +860,23 @@ class BenchmarkComparison(MarketData):
         "252 when either leg trades weekdays only, even if the other trades every day. "
         "Null when the overlap spans under 85 days.",
     )
-    risk_free_rate: float = Field(
-        default=0.0,
-        description="Annual risk-free rate used for alpha, as a decimal (0.045 = 4.5%). "
-        "Defaults to 0; with a beta of exactly 1 it cancels out of alpha entirely.",
+    risk_free_rate: float | None = Field(
+        description="Annual risk-free rate used for alpha, as an effective annual decimal "
+        "(0.042 = 4.2%). By default the 13-week T-bill yield averaged over the overlapping "
+        "dates; with a beta of exactly 1 it cancels out of alpha entirely. Null when no rate "
+        "was passed and the T-bill average could not be formed, and alpha is then null too.",
+    )
+    risk_free_rate_source: RiskFreeSource = Field(
+        description="Where risk_free_rate came from. 'caller': the rate passed in. "
+        "'treasury_bill': none was passed, so it is the 13-week US T-bill yield (Yahoo ^IRX) "
+        "averaged over the measured dates and converted from its discount quote to an "
+        "effective annual rate. 'unavailable': none was passed and that average could not be "
+        "formed - see risk_free_rate_note; the figures that need a rate are null."
+    )
+    risk_free_rate_note: str | None = Field(
+        default=None,
+        description="Why the rate is unavailable and how to proceed (pass risk_free_rate "
+        "explicitly); null otherwise.",
     )
     total_return_percent: float = Field(
         description="The asset's total return over the shared dates (e.g. 12.3 = 12.3%)."
@@ -886,7 +915,7 @@ class BenchmarkComparison(MarketData):
         default=None,
         description="Annualized Jensen's alpha in percentage POINTS: (Ra - Rf) - beta * "
         "(Rb - Rf), the return earned beyond what the beta exposure predicted. Null when "
-        "beta or either annualized return is null.",
+        "beta, either annualized return, or risk_free_rate is null.",
     )
     tracking_error_percent: float | None = Field(
         default=None,
@@ -958,14 +987,33 @@ class TickerComparisonRow(MarketData):
     max_drawdown_percent: float = Field(
         description="Largest peak-to-trough decline, as a negative percent."
     )
+    risk_free_rate: float | None = Field(
+        description="Annual risk-free rate this row's Sharpe and Sortino are measured against, "
+        "as an effective annual decimal: the caller's rate, or by default the 13-week T-bill "
+        "average over THIS row's dates (a younger listing covers fewer of them). Null when "
+        "the T-bill average could not be formed."
+    )
+    risk_free_rate_source: RiskFreeSource = Field(
+        description="Where risk_free_rate came from. 'caller': the rate passed in. "
+        "'treasury_bill': none was passed, so it is the 13-week US T-bill yield (Yahoo ^IRX) "
+        "averaged over the measured dates and converted from its discount quote to an "
+        "effective annual rate. 'unavailable': none was passed and that average could not be "
+        "formed - see risk_free_rate_note; the figures that need a rate are null."
+    )
+    risk_free_rate_note: str | None = Field(
+        default=None,
+        description="Why the rate is unavailable and how to proceed (pass risk_free_rate "
+        "explicitly); null otherwise.",
+    )
     sharpe_ratio: float | None = Field(
         default=None,
-        description="Annualized Sharpe against the table's risk_free_rate; null under 85 days "
-        "or when returns never varied.",
+        description="Annualized Sharpe against this row's risk_free_rate; null under 85 days, "
+        "when returns never varied, or when the row has no rate.",
     )
     sortino_ratio: float | None = Field(
         default=None,
-        description="Annualized Sortino; null under 85 days or with no downside.",
+        description="Annualized Sortino against this row's risk_free_rate; null under 85 "
+        "days, with no downside, or when the row has no rate.",
     )
     calmar_ratio: float | None = Field(
         default=None,
@@ -1025,10 +1073,15 @@ class TickerComparison(MarketData):
     """
 
     period: str = Field(description="Look-back window used for every row, e.g. '1y'.")
-    risk_free_rate: float = Field(
-        default=0.0,
-        description="Annual risk-free rate applied to every row's Sharpe and Sortino, as a "
-        "decimal (0.045 = 4.5%). Defaults to 0, making those raw rather than excess figures.",
+    risk_free_rate: float | None = Field(
+        description="The annual risk-free rate the caller passed, applied to every row, as a "
+        "decimal (0.045 = 4.5%). Null when none was passed: each row then carries its own "
+        "13-week T-bill average over its own dates - read the rows' risk_free_rate.",
+    )
+    risk_free_rate_source: Literal["caller", "treasury_bill"] = Field(
+        description="'caller': every row uses risk_free_rate. 'treasury_bill': each row uses "
+        "the T-bill yield over its own dates (see each row's risk_free_rate_source, which is "
+        "'unavailable' where that could not be formed)."
     )
     base_currency: str | None = Field(
         default=None,

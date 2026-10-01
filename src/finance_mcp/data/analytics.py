@@ -121,6 +121,31 @@ def periodic_risk_free(annual_rate: float, periods_per_year: float) -> float:
     return growth - 1.0
 
 
+TREASURY_BILL_DAYS = 91
+"""Term of a 13-week Treasury bill, the instrument ^IRX quotes."""
+
+
+def treasury_bill_effective_rate(discount_yield_percent: float) -> float:
+    """Convert a 13-week T-bill's quoted discount yield to an effective annual rate.
+
+    Bills are quoted on a bank-discount basis: the percent of FACE a buyer is discounted,
+    scaled to a 360-day year, so a 4.03% quote means paying 1 - 0.0403 * 91/360 per 1 of
+    face. The analytics de-annualize the risk-free rate geometrically
+    (:func:`periodic_risk_free`), so this returns the rate that compounds to the bill's
+    91-day return over a DAYS_PER_YEAR year -- the same year the returns are annualized
+    on. 4.03% quoted is 4.195% effective (Treasury's simple-interest "investment rate"
+    for the same bill is 4.128%).
+    """
+    price = 1.0 - discount_yield_percent / 100.0 * TREASURY_BILL_DAYS / 360.0
+    if price <= 0.0:
+        raise InvalidInput(
+            f"A {discount_yield_percent}% discount yield implies a non-positive bill price."
+        )
+    # float ** float is typed Any, since it can produce a complex.
+    growth: float = price ** (-DAYS_PER_YEAR / TREASURY_BILL_DAYS)
+    return growth - 1.0
+
+
 def _excess_returns(
     closes: list[float], periods_per_year: float, risk_free_rate: float
 ) -> list[float]:
