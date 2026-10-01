@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, SerializerFunctionWrapHandler, field_seri
 TVMVariable = Literal["pv", "fv", "pmt", "rate", "nper"]
 Statement = Literal["income", "balance", "cashflow"]
 NewsSource = Literal["ticker", "search"]
+RelevanceCheck = Literal["applied", "not_an_equity", "unavailable"]
 StatementPeriod = Literal["annual", "quarterly"]
 HistoryPeriod = Literal["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "max"]
 HistoryInterval = Literal["1m", "5m", "15m", "30m", "1h", "1d", "1wk", "1mo"]
@@ -644,6 +645,14 @@ class NewsArticle(MarketData):
     summary: str | None = Field(
         default=None, description="Short blurb summarizing the article; may be empty or None."
     )
+    mentions_company: bool | None = Field(
+        default=None,
+        description="True if the title or summary names the company or its ticker; False if "
+        "neither does, which usually means a market-wide story Yahoo filed under the ticker. "
+        "It is a whole-word text match: brand and executive names ('Google' for Alphabet, "
+        "'Musk' for Tesla) do not count, so read a False article's title before discarding "
+        "it. Null when not assessed - see the result's relevance_check.",
+    )
 
 
 class NewsResult(MarketData):
@@ -661,6 +670,15 @@ class NewsResult(MarketData):
             "when that stream returns nothing: it still carries title, publisher, link and "
             "publish time, but NO summary, so every summary is null for a reason unrelated to "
             "the articles themselves - do not read that as the stories being contentless."
+        ),
+    )
+    relevance_check: RelevanceCheck = Field(
+        default="unavailable",
+        description=(
+            "Whether each article's mentions_company was assessed. 'applied': it was. "
+            "'not_an_equity': the symbol is an ETF, index, fund, coin or currency pair, where "
+            "market-wide news is relevant, so every flag is null. 'unavailable': the company's "
+            "name could not be fetched, so every flag is null; the articles are unaffected."
         ),
     )
 

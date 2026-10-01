@@ -95,7 +95,9 @@ From get_quote: where the price sits in its 52-week range (context, not a signal
 From get_analyst_data: consensus recommendation, implied upside % to the mean/median target, the \
 high-low spread as a disagreement/uncertainty signal, and the 4-period recommendation trend \
 (upgrades vs downgrades) as sentiment momentum. From get_news: material, company-specific \
-catalysts weighted to the {horizon} horizon.
+catalysts weighted to the {horizon} horizon. Articles with mentions_company false are usually \
+market-wide stories filed under the ticker - read the title, and use one only if it bears on \
+{ticker} specifically.
 
 ## Phase 7 - Synthesis
 - Earnings-quality flags, including the forward-P/E credibility check: forward_eps above \

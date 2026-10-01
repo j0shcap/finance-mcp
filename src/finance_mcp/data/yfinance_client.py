@@ -16,12 +16,12 @@ from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from typing import Any, cast
+from typing import Any, NamedTuple, cast
 
 import yfinance as yf
 from yfinance.exceptions import YFTickerMissingError
 
-from finance_mcp.data import analytics
+from finance_mcp.data import analytics, relevance
 from finance_mcp.data.errors import DataUnavailable, InvalidInput, SymbolNotFound
 from finance_mcp.data.models import (
     AnalystData,
@@ -33,6 +33,7 @@ from finance_mcp.data.models import (
     KeyMetrics,
     NewsArticle,
     NewsResult,
+    NewsSource,
     PerformanceStats,
     PriceBar,
     PriceHistory,
@@ -41,6 +42,7 @@ from finance_mcp.data.models import (
     QuoteError,
     QuoteResult,
     RecommendationPeriod,
+    RelevanceCheck,
     SplitEvent,
     Statement,
     StatementPeriod,
@@ -85,6 +87,14 @@ _FINANCIALS_ATTR = {
     ("cashflow", "annual"): "cashflow",
     ("cashflow", "quarterly"): "quarterly_cashflow",
 }
+
+
+class _Identity(NamedTuple):
+    """What the relevance flags need to know about a symbol, from Yahoo's ``info``."""
+
+    quote_type: str | None
+    long_name: str | None
+    short_name: str | None
 
 
 class YFinanceClient:
@@ -711,9 +721,20 @@ class YFinanceClient:
             ("news", symbol, str(count)),
             self._history_ttl,
             lambda: self._fetch_news(symbol, count),
+            # Unflagged news from a transient identity failure is retried, not pinned.
+            cacheable=lambda result: result.relevance_check != "unavailable",
         )
 
     def _fetch_news(self, symbol: str, count: int) -> NewsResult:
+        # The identity behind the relevance flags is an independent request.
+        (articles, source), identity = _in_parallel(
+            lambda: self._news_articles(symbol, count),
+            lambda: self._identity_or_none(symbol),
+        )
+        check = _flag_mentions(articles, symbol, identity)
+        return NewsResult(symbol=symbol, articles=articles, source=source, relevance_check=check)
+
+    def _news_articles(self, symbol: str, count: int) -> tuple[list[NewsArticle], NewsSource]:
         with _unavailable_on_error(f"Failed to fetch news for '{symbol}'"):
             items = self._ticker(symbol).get_news(count=count, tab="news")
         if not items:
@@ -721,12 +742,31 @@ class YFinanceClient:
             # an empty list, so an outage is indistinguishable from a symbol with no
             # coverage. Cross-check against search rather than reporting "no recent news",
             # which the model would read as "no catalysts" and put in a research note.
-            return NewsResult(
-                symbol=symbol, articles=self._search_news(symbol, count), source="search"
-            )
+            return self._search_news(symbol, count), "search"
         with _unavailable_on_error(f"Failed to parse news for '{symbol}'"):
             articles = [a for a in (_news_article(it) for it in items) if a is not None][:count]
-            return NewsResult(symbol=symbol, articles=articles, source="ticker")
+        return articles, "ticker"
+
+    def _identity_or_none(self, symbol: str) -> _Identity | None:
+        """The symbol's instrument type and names, or None if Yahoo cannot supply them.
+
+        Only the relevance flags depend on this, so a failure degrades them to null rather
+        than failing the news call.
+        """
+        try:
+            return self._cached(
+                ("identity", symbol), self._fundamentals_ttl, lambda: self._fetch_identity(symbol)
+            )
+        except DataUnavailable:
+            return None
+
+    def _fetch_identity(self, symbol: str) -> _Identity:
+        _, info = self._ticker_with_info(symbol, "company identity", "identity")
+        return _Identity(
+            quote_type=info.get("quoteType"),
+            long_name=info.get("longName"),
+            short_name=info.get("shortName"),
+        )
 
     def _search_news(self, symbol: str, count: int) -> list[NewsArticle]:
         """News for `symbol` from the search endpoint, or none if it cannot supply any.
@@ -792,6 +832,32 @@ def _fetch_concurrently[T](
         return []
     with ThreadPoolExecutor(max_workers=min(max_workers, len(items))) as pool:
         return list(pool.map(fetch, items))
+
+
+def _in_parallel[A, B](first: Callable[[], A], second: Callable[[], B]) -> tuple[A, B]:
+    """Run two independent blocking fetches at once; either one's exception propagates."""
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first_future = pool.submit(first)
+        second_future = pool.submit(second)
+        return first_future.result(), second_future.result()
+
+
+def _flag_mentions(
+    articles: list[NewsArticle], symbol: str, identity: _Identity | None
+) -> RelevanceCheck:
+    """Set each article's mentions_company, and say whether that could be assessed."""
+    if identity is None:
+        return "unavailable"
+    # Only a company has a name a headline can omit; for an ETF, index, fund, coin or
+    # currency pair the market-wide stories are the relevant ones.
+    if identity.quote_type != "EQUITY":
+        return "not_an_equity"
+    names = relevance.company_aliases(identity.long_name, identity.short_name)
+    symbols = relevance.symbol_aliases(symbol)
+    for article in articles:
+        text = f"{article.title} {article.summary or ''}"
+        article.mentions_company = relevance.mentions_company(text, names, symbols)
+    return "applied"
 
 
 def _elapsed_days(start: str, end: str) -> int:

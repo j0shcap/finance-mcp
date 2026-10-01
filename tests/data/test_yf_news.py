@@ -1,5 +1,8 @@
 """YFinanceClient.get_news and its search fallback."""
 
+import threading
+from typing import Any
+
 import pytest
 from yfinance.exceptions import (
     YFException,
@@ -13,11 +16,14 @@ from tests.fakes import (
     FakeClock,
     FakeSearch,
     counting,
+    fake_multi_ticker_factory,
     fake_ticker_factory,
     make_client,
     make_news_item,
     make_search_news_item,
 )
+
+APPLE_INFO = {"quoteType": "EQUITY", "longName": "Apple Inc.", "shortName": "Apple Inc."}
 
 NEWS_ITEMS = [
     make_news_item(
@@ -223,12 +229,113 @@ def test_get_news_parse_error_is_data_unavailable() -> None:
 
 
 def test_get_news_caches_within_ttl_and_expires() -> None:
-    factory, calls = counting(fake_ticker_factory(news=NEWS_ITEMS))
+    # Each fetch is the news stream plus the company identity behind the relevance flags;
+    # the identity is a fundamentals entry, so it outlives the news TTL.
+    factory, calls = counting(fake_ticker_factory(news=NEWS_ITEMS, info=APPLE_INFO))
     clock = FakeClock()
-    client = make_client(factory, clock=clock, history_ttl=300.0)
+    client = make_client(factory, clock=clock, history_ttl=300.0, fundamentals_ttl=3600.0)
     client.get_news("AAPL")
-    client.get_news("AAPL")
-    assert len(calls) == 1
-    clock.advance(301.0)
     client.get_news("AAPL")
     assert len(calls) == 2
+    clock.advance(301.0)
+    client.get_news("AAPL")
+    assert len(calls) == 3
+
+
+# --- mentions_company --------------------------------------------------------------
+
+MIXED_NEWS = [
+    make_news_item("Apple unveils a new iPhone", summary="The launch event ran long."),
+    make_news_item("S&P 500 dips after inflation data", summary="Stocks slipped broadly."),
+    make_news_item("Chipmakers rally", summary="AAPL suppliers led the gains."),
+]
+
+
+def _flags(result: NewsResult) -> list[bool | None]:
+    return [a.mentions_company for a in result.articles]
+
+
+def test_get_news_flags_which_articles_name_the_company() -> None:
+    client = make_client(fake_ticker_factory(news=MIXED_NEWS, info=APPLE_INFO))
+    result = client.get_news("AAPL")
+    # By name in the title; by neither; by ticker in the summary.
+    assert _flags(result) == [True, False, True]
+    assert result.relevance_check == "applied"
+
+
+def test_get_news_keeps_every_article_in_order_whatever_its_flag() -> None:
+    client = make_client(fake_ticker_factory(news=MIXED_NEWS, info=APPLE_INFO))
+    titles = [a.title for a in client.get_news("AAPL").articles]
+    assert titles == [item["content"]["title"] for item in MIXED_NEWS]
+
+
+def test_get_news_matches_the_ticker_root_of_a_share_class() -> None:
+    info = {"quoteType": "EQUITY", "longName": "Berkshire Hathaway Inc."}
+    news = [make_news_item("BRK.B slips after the annual letter"), make_news_item("Fed holds")]
+    client = make_client(fake_ticker_factory(news=news, info=info))
+    assert _flags(client.get_news("BRK-B")) == [True, False]
+
+
+@pytest.mark.parametrize("quote_type", ["ETF", "INDEX", "CRYPTOCURRENCY", "CURRENCY"])
+def test_get_news_does_not_assess_a_non_equity(quote_type: str) -> None:
+    # Market-wide news IS relevant to an index, ETF, coin or currency pair.
+    info = {"quoteType": quote_type, "longName": "SPDR S&P 500 ETF Trust"}
+    client = make_client(fake_ticker_factory(news=MIXED_NEWS, info=info))
+    result = client.get_news("SPY")
+    assert _flags(result) == [None, None, None]
+    assert result.relevance_check == "not_an_equity"
+
+
+@pytest.mark.parametrize(
+    "factory_kwargs",
+    [
+        {"info_error": YFException("info endpoint down")},
+        {"info": {}},  # Yahoo's empty info for a symbol it cannot describe
+    ],
+)
+def test_get_news_without_a_company_identity_still_returns_the_news(
+    factory_kwargs: dict[str, Any],
+) -> None:
+    client = make_client(fake_ticker_factory(news=MIXED_NEWS, **factory_kwargs))
+    result = client.get_news("AAPL")
+    assert len(result.articles) == 3
+    assert _flags(result) == [None, None, None]
+    assert result.relevance_check == "unavailable"
+
+
+def test_get_news_does_not_cache_a_result_whose_flags_could_not_be_assessed() -> None:
+    # A transient info failure must not pin unflagged news for the whole TTL.
+    factory, calls = counting(
+        fake_ticker_factory(news=MIXED_NEWS, info_error=YFException("info endpoint down"))
+    )
+    client = make_client(factory)
+    client.get_news("AAPL")
+    client.get_news("AAPL")
+    assert len(calls) == 4  # news + identity, twice
+
+
+def test_get_news_flags_search_fallback_articles_too() -> None:
+    search = FakeSearch(
+        news=[make_search_news_item("Apple beats"), make_search_news_item("Oil climbs")]
+    )
+    client = make_client(fake_ticker_factory(news=[], info=APPLE_INFO), search_factory=search)
+    result = client.get_news("AAPL")
+    assert result.source == "search"
+    assert _flags(result) == [True, False]
+
+
+def test_get_news_fetches_the_stream_and_the_identity_concurrently() -> None:
+    # The barrier only opens when both ticker lookups are in flight at once.
+    gate = threading.Barrier(2, timeout=10)
+    factory = fake_multi_ticker_factory(
+        {"AAPL": {"news": MIXED_NEWS, "info": APPLE_INFO}}, gate=gate
+    )
+    assert _flags(make_client(factory).get_news("AAPL")) == [True, False, True]
+
+
+def test_get_news_reuses_the_identity_across_counts() -> None:
+    factory, calls = counting(fake_ticker_factory(news=MIXED_NEWS, info=APPLE_INFO))
+    client = make_client(factory)
+    client.get_news("AAPL", count=3)
+    client.get_news("AAPL", count=2)
+    assert len(calls) == 3  # identity once, the stream once per count
