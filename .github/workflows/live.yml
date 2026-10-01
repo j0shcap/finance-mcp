@@ -50,7 +50,7 @@ jobs:
         if: always()
         run: |
           set -o pipefail
-          uv run python -m scripts.record_shapes --check 2>&1 | tee -a live-output.txt
+          uv run python -m scripts.record_shapes --check 2>&1 | tee shapes-output.txt
       - name: Summarize the run
         if: always()
         # A fully throttled run skips everything and still exits 0, so the counts go in the
@@ -61,6 +61,12 @@ jobs:
             echo
             echo '```'
             tail -n 20 live-output.txt || echo "no output captured"
+            echo '```'
+            echo
+            echo "## Payload shapes"
+            echo
+            echo '```'
+            tail -n 20 shapes-output.txt || echo "no output captured"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Report a contract failure
@@ -76,7 +82,7 @@ jobs:
             --description "The nightly live Yahoo contract suite is failing" \
             --color B60205 2>/dev/null || true
           body=$(printf 'The live contract suite failed.\n\nRun: %s\n\nLast lines:\n\n```\n%s\n```\n' \
-            "$RUN_URL" "$(tail -n 30 live-output.txt || true)")
+            "$RUN_URL" "$(tail -n 30 live-output.txt shapes-output.txt 2>/dev/null || true)")
           existing=$(gh issue list --label "$label" --state open --limit 1 --json number \
             --jq '.[0].number // empty')
           if [ -n "$existing" ]; then

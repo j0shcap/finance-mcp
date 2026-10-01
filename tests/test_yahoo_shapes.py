@@ -1,10 +1,12 @@
 """scripts/yahoo_shapes.py: describing payload shapes, merging recordings, spotting drift."""
 
 import math
+import sys
 from types import SimpleNamespace
 
 import pandas as pd
 import pytest
+from scripts import record_shapes
 from scripts.record_shapes import is_transient
 from scripts.yahoo_shapes import (
     attribute_shape,
@@ -155,3 +157,33 @@ def test_an_http_status_is_transient_only_for_throttling_and_server_errors(
 
 def test_a_no_data_error_is_not_transient() -> None:
     assert not is_transient(KeyError("exchangeTimezoneName"))
+
+
+def test_a_failure_still_transient_after_every_retry_makes_the_run_inconclusive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(record_shapes, "RETRY_DELAYS", (0, 0, 0))
+    calls: list[int] = []
+
+    def throttled() -> None:
+        calls.append(1)
+        raise YFRateLimitError()
+
+    # Even where an exception is the shape being recorded: a throttle is not a 404.
+    with pytest.raises(record_shapes.Unreachable):
+        record_shapes._raised(throttled)
+    assert len(calls) == len(record_shapes.RETRY_DELAYS) + 1
+
+
+def test_an_inconclusive_check_passes_but_an_inconclusive_recording_fails(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def unreachable() -> dict[str, object]:
+        raise record_shapes.Unreachable("YFRateLimitError: Too Many Requests")
+
+    monkeypatch.setattr(record_shapes, "record", unreachable)
+    monkeypatch.setattr(sys, "argv", ["record_shapes", "--check"])
+    assert record_shapes.main() == 0
+    monkeypatch.setattr(sys, "argv", ["record_shapes"])
+    assert record_shapes.main() == 1
+    assert "shapes not checked" in capsys.readouterr().err

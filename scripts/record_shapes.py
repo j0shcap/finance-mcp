@@ -1,7 +1,7 @@
 """Record the shapes of real yfinance payloads into tests/shapes/yahoo.json (no values).
 
-    uv run python scripts/record_shapes.py          # rewrite tests/shapes/yahoo.json
-    uv run python scripts/record_shapes.py --check  # exit 1, with a diff, if Yahoo drifted
+    uv run python -m scripts.record_shapes          # rewrite tests/shapes/yahoo.json
+    uv run python -m scripts.record_shapes --check  # exit 1, with a diff, if Yahoo drifted
 
 About fifteen live calls cover every kind of payload src/finance_mcp/data/yahoo.py parses. The
 nightly live job runs --check, so a change in what Yahoo, yfinance or pandas return shows up
@@ -106,14 +106,20 @@ def _news_content_shape(contents: list[dict[str, Any]], keys: list[str]) -> dict
 RETRY_DELAYS = (5.0, 15.0, 45.0)
 
 
+class Unreachable(Exception):
+    """Yahoo kept failing transiently, so this run says nothing about payload shapes."""
+
+
 def _fetch[T](call: Callable[[], T]) -> T:
     """``call()``, retried on transient failures: those say nothing about payload shapes."""
     for delay in (*RETRY_DELAYS, None):
         try:
             return call()
         except Exception as exc:
-            if delay is None or not is_transient(exc):
+            if not is_transient(exc):
                 raise
+            if delay is None:
+                raise Unreachable(f"{type(exc).__name__}: {exc}") from exc
             print(f"transient {type(exc).__name__}; retrying in {delay:.0f}s", file=sys.stderr)
             time.sleep(delay)
     raise AssertionError("unreachable")
@@ -127,6 +133,8 @@ def is_transient(exc: BaseException) -> bool:
 def _raised(call: Callable[[], Any]) -> dict[str, Any]:
     try:
         result = _fetch(call)
+    except Unreachable:
+        raise
     except Exception as exc:
         return exception_shape(exc)
     return {"no exception": value_type(result) if not hasattr(result, "empty") else "frame"}
@@ -140,7 +148,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--check", action="store_true", help="compare instead of writing")
     args = parser.parse_args()
-    fresh = record()
+    try:
+        fresh = record()
+    except Unreachable as exc:
+        # Like the live suite's skips: throttling is not drift, so --check does not fail on it.
+        print(f"Yahoo kept failing transiently ({exc}); shapes not checked.", file=sys.stderr)
+        return 0 if args.check else 1
     committed = json.loads(SHAPES.read_text(encoding="utf-8")) if SHAPES.exists() else {}
     if not args.check:
         SHAPES.parent.mkdir(parents=True, exist_ok=True)
