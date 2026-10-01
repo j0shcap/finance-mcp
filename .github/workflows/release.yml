@@ -1,23 +1,48 @@
 name: Publish to PyPI
 
-# Publishes to PyPI when a GitHub Release is published.
-# Auth is via PyPI Trusted Publishing (OIDC) — no API token/secret is stored.
-# The version uploaded is `project.version` in pyproject.toml, so the `verify`
-# job refuses to publish unless the release tag names that same version
-# (PyPI versions are immutable — a mismatch cannot be undone).
+# Publishes to PyPI when a GitHub Release tagged vX.Y.Z is published (by a person or a PAT:
+# a release created with GITHUB_TOKEN does not trigger workflows).
+#
+# The version comes from the tag (hatch-vcs), so verify builds the release from a clean
+# checkout of the tag, refuses any artifact whose version is not exactly X.Y.Z, and runs
+# the e2e suite against that exact wheel BEFORE anything is uploaded - PyPI versions are
+# immutable. Publishing uploads those same files; smoke then checks what PyPI serves.
+#
+# Rehearse without publishing: `gh workflow run release.yml -f version=X.Y.Z` runs verify
+# against a local-only tag on the dispatched ref. Nothing is published from a dispatch.
+#
+# Do not rename this file: PyPI's trusted publisher is pinned to it.
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "X.Y.Z to rehearse (verify only; nothing is published)"
+        required: true
 
 permissions:
   contents: read
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || format('v{0}', inputs.version) }}
+
 jobs:
   verify:
-    name: Verify tag and run quality gate
+    name: Verify, build and test the release artifacts
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          # hatch-vcs reads the version from tags; the ancestry check needs master.
+          fetch-depth: 0
       - name: Install uv
         # Exact version, not a major tag: setup-uv stopped publishing floating
         # major tags after v7 (and that v7 tag no longer tracks the 7.x line).
@@ -26,39 +51,113 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
-      - name: Check release tag matches project.version
-        env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+      - name: Check the tag
+        id: version
         run: |
-          version="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
-          if [ "$RELEASE_TAG" != "v$version" ] && [ "$RELEASE_TAG" != "$version" ]; then
-            echo "::error::Release tag '$RELEASE_TAG' does not match project.version '$version' (expected 'v$version'). Bump the version in pyproject.toml or retag." >&2
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::'$TAG' is not a release tag (vX.Y.Z); pre-releases are not published." >&2
             exit 1
           fi
-          echo "Publishing version $version from tag $RELEASE_TAG"
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            if [ -n "$(git tag --points-at HEAD)" ]; then
+              echo "::error::HEAD is already tagged ($(git tag --points-at HEAD | xargs)); rehearse from a later commit." >&2
+              exit 1
+            fi
+            git tag "$TAG"  # local only, never pushed: lets hatch-vcs build the rehearsed version
+          elif ! git merge-base --is-ancestor "$TAG" origin/master; then
+            echo "::error::$TAG is not on master." >&2
+            exit 1
+          fi
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+      - name: Check the changelog has notes for this version
+        run: python3 scripts/changelog.py notes "${TAG#v}" > /dev/null
       - name: Install dependencies
-        run: uv sync
+        # --locked: a stale uv.lock is an error, not a rewrite that dirties the tree.
+        run: uv sync --locked
       - name: Run quality gate
         run: make check
+      - name: Build and check the version
+        run: |
+          # A modified tracked file would build X.Y.(Z+1).dev0 instead of X.Y.Z.
+          git diff --exit-code
+          rm -rf dist
+          uv build
+          version="${TAG#v}"
+          ls "dist/mcp_finance-$version-py3-none-any.whl" "dist/mcp_finance-$version.tar.gz"
+          if [ "$(ls dist | wc -l)" -ne 2 ]; then
+            echo "::error::expected exactly the $version wheel and sdist in dist/:" >&2
+            ls dist >&2
+            exit 1
+          fi
+      - name: Run the e2e suite against the built wheel
+        run: |
+          FINANCE_MCP_E2E_WHEEL="$PWD/dist/mcp_finance-${TAG#v}-py3-none-any.whl" \
+          FINANCE_MCP_E2E_EXPECT_VERSION="${TAG#v}" \
+            make e2e
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
 
   pypi-publish:
-    name: Build and publish
+    name: Publish the verified artifacts
     needs: verify
+    # PyPI's trusted publisher doesn't check the event, so a dispatch must never get here.
+    if: github.event_name == 'release'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
-      contents: read # checkout the repo
-      id-token: write # required for OIDC trusted publishing
+      id-token: write # OIDC for PyPI trusted publishing
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.2.0
+      - name: Publish to PyPI (trusted publishing)
+        # --check-url skips files PyPI already has, so a rerun after a partial upload works.
+        run: uv publish --check-url https://pypi.org/simple/
+
+  smoke:
+    name: Check what PyPI serves
+    needs: [verify, pypi-publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
     steps:
       - uses: actions/checkout@v7
-      - name: Install uv
-        # Exact version, not a major tag: setup-uv stopped publishing floating
-        # major tags after v7 (and that v7 tag no longer tracks the 7.x line).
-        # Dependabot's github-actions ecosystem keeps this pin current.
-        uses: astral-sh/setup-uv@v10.2.0
+      - uses: actions/download-artifact@v8
         with:
-          enable-cache: true
-          cache-dependency-glob: "uv.lock"
-      - name: Build sdist + wheel
-        run: uv build
-      - name: Publish to PyPI (trusted publishing)
-        run: uv publish
+          name: dist
+          path: dist/
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.2.0
+      - name: Wait for PyPI to list the release
+        run: |
+          for _ in $(seq 60); do
+            if curl -fsS "https://pypi.org/pypi/mcp-finance/$VERSION/json" -o release.json; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::PyPI did not list mcp-finance $VERSION within 10 minutes." >&2
+          exit 1
+      - name: Check PyPI serves exactly the uploaded files
+        run: python3 scripts/check_pypi_release.py release.json dist
+      - name: Install by name and call a tool
+        run: |
+          # Exit 75 means the install or launch failed, which the simple index lagging the
+          # JSON API explains, so retry; any other failure is a real one.
+          for _ in $(seq 10); do
+            status=0
+            uv run --no-project --with 'mcp>=2,<3' scripts/smoke_release.py "$VERSION" || status=$?
+            if [ "$status" -ne 75 ]; then
+              exit "$status"
+            fi
+            sleep 30
+          done
+          echo "::error::mcp-finance $VERSION could not be installed by name." >&2
+          exit 1

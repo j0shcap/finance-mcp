@@ -14,6 +14,10 @@ contain breaking changes, and each one is listed under **Breaking changes**.
   lists drift from the server.
 
 ### Changed
+- The package version now comes from the git tag, so an install from an untagged commit reports
+  a `.devN` version rather than the last release's number. Releases are cut from this changelog,
+  and the publish workflow tests the exact wheel before uploading it and checks afterwards that
+  PyPI serves those same files.
 - Calculator rate parameters and results state per-period or annual and "as a decimal"
   consistently, and bond prices are stated in the units of `face`; descriptions only, no schema
   change.

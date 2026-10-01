@@ -18,20 +18,22 @@ from finance_mcp.conventions import (
     MARKET_DATA_TOOLS,
     SERVER_INSTRUCTIONS,
 )
-from tests.e2e.conftest import PROJECT_VERSION, Server
+from tests.e2e.conftest import Server
 from tests.prompt_samples import SAMPLE_ARGS
 
 #: A `{placeholder}` the prompt template failed to fill.
 _UNFILLED = re.compile(r"\{[a-z_]+\}")
 
 
-async def test_initialize_reports_name_version_and_instructions(server: Server) -> None:
+async def test_initialize_reports_name_version_and_instructions(
+    server: Server, project_version: str
+) -> None:
     info = server.client.server_info
     assert info is not None
 
     assert info.name == "finance-mcp"
     # Read from the installed distribution's metadata; a mismatch means a stale wheel.
-    assert info.version == PROJECT_VERSION
+    assert info.version == project_version
     instructions = server.client.instructions
     assert instructions == SERVER_INSTRUCTIONS
     assert CONVENTIONS_URI in instructions
