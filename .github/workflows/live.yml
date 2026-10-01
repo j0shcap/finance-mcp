@@ -45,6 +45,12 @@ jobs:
         run: |
           set -o pipefail
           make test-live 2>&1 | tee live-output.txt
+      - name: Check the shapes of real Yahoo payloads
+        # Even after a failed suite: a changed payload shape is often why it failed.
+        if: always()
+        run: |
+          set -o pipefail
+          uv run python -m scripts.record_shapes --check 2>&1 | tee -a live-output.txt
       - name: Summarize the run
         if: always()
         # A fully throttled run skips everything and still exits 0, so the counts go in the

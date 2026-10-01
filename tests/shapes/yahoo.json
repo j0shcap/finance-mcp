@@ -1,0 +1,723 @@
+{
+  "_recorded_with": {
+    "pandas": "3.0.3",
+    "yfinance": "1.7.0"
+  },
+  "dividends": {
+    "dtype": "float64",
+    "index": {
+      "class": "DatetimeIndex",
+      "dtype": "datetime64[s, <tz>]",
+      "tz_aware": true,
+      "unit": "s"
+    },
+    "times_of_day": [
+      "09:30"
+    ]
+  },
+  "fast_info": {
+    "currency": [
+      "str"
+    ],
+    "day_high": [
+      "number"
+    ],
+    "day_low": [
+      "number"
+    ],
+    "last_price": [
+      "number"
+    ],
+    "last_volume": [
+      "number"
+    ],
+    "market_cap": [
+      "number"
+    ],
+    "previous_close": [
+      "number"
+    ],
+    "year_high": [
+      "number"
+    ],
+    "year_low": [
+      "number"
+    ]
+  },
+  "history_daily": {
+    "columns": {
+      "class": "Index",
+      "dtype": "str"
+    },
+    "dtypes": {
+      "Close": "float64",
+      "Dividends": "float64",
+      "High": "float64",
+      "Low": "float64",
+      "Open": "float64",
+      "Stock Splits": "float64",
+      "Volume": "int64"
+    },
+    "index": {
+      "class": "DatetimeIndex",
+      "dtype": "datetime64[s, <tz>]",
+      "tz_aware": true,
+      "unit": "s"
+    }
+  },
+  "history_index": {
+    "columns": {
+      "class": "Index",
+      "dtype": "str"
+    },
+    "dtypes": {
+      "Close": "float64",
+      "Dividends": "float64",
+      "High": "float64",
+      "Low": "float64",
+      "Open": "float64",
+      "Stock Splits": "float64",
+      "Volume": "int64"
+    },
+    "index": {
+      "class": "DatetimeIndex",
+      "dtype": "datetime64[s, <tz>]",
+      "tz_aware": true,
+      "unit": "s"
+    }
+  },
+  "history_intraday": {
+    "columns": {
+      "class": "Index",
+      "dtype": "str"
+    },
+    "dtypes": {
+      "Close": "float64",
+      "Dividends": "float64",
+      "High": "float64",
+      "Low": "float64",
+      "Open": "float64",
+      "Stock Splits": "float64",
+      "Volume": "int64"
+    },
+    "index": {
+      "class": "DatetimeIndex",
+      "dtype": "datetime64[s, <tz>]",
+      "tz_aware": true,
+      "unit": "s"
+    }
+  },
+  "info_cross_listing": {
+    "beta": [
+      "number"
+    ],
+    "bookValue": [
+      "number"
+    ],
+    "country": [
+      "str"
+    ],
+    "currency": [
+      "str"
+    ],
+    "currentPrice": [
+      "number"
+    ],
+    "currentRatio": [
+      "number"
+    ],
+    "debtToEquity": [
+      "number"
+    ],
+    "dividendYield": [
+      "number"
+    ],
+    "ebitda": [
+      "number"
+    ],
+    "ebitdaMargins": [
+      "number"
+    ],
+    "enterpriseToEbitda": [
+      "number"
+    ],
+    "enterpriseToRevenue": [
+      "number"
+    ],
+    "enterpriseValue": [
+      "number"
+    ],
+    "financialCurrency": [
+      "str"
+    ],
+    "forwardEps": [
+      "number"
+    ],
+    "forwardPE": [
+      "number"
+    ],
+    "freeCashflow": [
+      "number"
+    ],
+    "fullTimeEmployees": [
+      "number"
+    ],
+    "grossMargins": [
+      "number"
+    ],
+    "industry": [
+      "str"
+    ],
+    "longBusinessSummary": [
+      "str"
+    ],
+    "longName": [
+      "str"
+    ],
+    "marketCap": [
+      "number"
+    ],
+    "numberOfAnalystOpinions": [
+      "number"
+    ],
+    "operatingMargins": [
+      "number"
+    ],
+    "pegRatio": [
+      "number"
+    ],
+    "priceToBook": [
+      "number"
+    ],
+    "priceToSalesTrailing12Months": [
+      "number"
+    ],
+    "profitMargins": [
+      "number"
+    ],
+    "quickRatio": [
+      "number"
+    ],
+    "quoteType": [
+      "str"
+    ],
+    "recommendationKey": [
+      "str"
+    ],
+    "recommendationMean": [
+      "number"
+    ],
+    "returnOnAssets": [
+      "number"
+    ],
+    "returnOnEquity": [
+      "number"
+    ],
+    "revenuePerShare": [
+      "number"
+    ],
+    "sector": [
+      "str"
+    ],
+    "shortName": [
+      "str"
+    ],
+    "targetHighPrice": [
+      "number"
+    ],
+    "targetLowPrice": [
+      "number"
+    ],
+    "targetMeanPrice": [
+      "number"
+    ],
+    "targetMedianPrice": [
+      "number"
+    ],
+    "totalCash": [
+      "number"
+    ],
+    "totalDebt": [
+      "number"
+    ],
+    "trailingEps": [
+      "number"
+    ],
+    "trailingPE": [
+      "number"
+    ],
+    "website": [
+      "str"
+    ]
+  },
+  "info_equity": {
+    "beta": [
+      "number"
+    ],
+    "bookValue": [
+      "number"
+    ],
+    "country": [
+      "str"
+    ],
+    "currency": [
+      "str"
+    ],
+    "currentPrice": [
+      "number"
+    ],
+    "currentRatio": [
+      "number"
+    ],
+    "debtToEquity": [
+      "number"
+    ],
+    "dividendYield": [
+      "number"
+    ],
+    "ebitda": [
+      "number"
+    ],
+    "ebitdaMargins": [
+      "number"
+    ],
+    "enterpriseToEbitda": [
+      "number"
+    ],
+    "enterpriseToRevenue": [
+      "number"
+    ],
+    "enterpriseValue": [
+      "number"
+    ],
+    "financialCurrency": [
+      "str"
+    ],
+    "forwardEps": [
+      "number"
+    ],
+    "forwardPE": [
+      "number"
+    ],
+    "freeCashflow": [
+      "number"
+    ],
+    "fullTimeEmployees": [
+      "number"
+    ],
+    "grossMargins": [
+      "number"
+    ],
+    "industry": [
+      "str"
+    ],
+    "longBusinessSummary": [
+      "str"
+    ],
+    "longName": [
+      "str"
+    ],
+    "marketCap": [
+      "number"
+    ],
+    "numberOfAnalystOpinions": [
+      "number"
+    ],
+    "operatingMargins": [
+      "number"
+    ],
+    "pegRatio": [
+      "number"
+    ],
+    "priceToBook": [
+      "number"
+    ],
+    "priceToSalesTrailing12Months": [
+      "number"
+    ],
+    "profitMargins": [
+      "number"
+    ],
+    "quickRatio": [
+      "number"
+    ],
+    "quoteType": [
+      "str"
+    ],
+    "recommendationKey": [
+      "str"
+    ],
+    "recommendationMean": [
+      "number"
+    ],
+    "returnOnAssets": [
+      "number"
+    ],
+    "returnOnEquity": [
+      "number"
+    ],
+    "revenuePerShare": [
+      "number"
+    ],
+    "sector": [
+      "str"
+    ],
+    "shortName": [
+      "str"
+    ],
+    "targetHighPrice": [
+      "number"
+    ],
+    "targetLowPrice": [
+      "number"
+    ],
+    "targetMeanPrice": [
+      "number"
+    ],
+    "targetMedianPrice": [
+      "number"
+    ],
+    "totalCash": [
+      "number"
+    ],
+    "totalDebt": [
+      "number"
+    ],
+    "trailingEps": [
+      "number"
+    ],
+    "trailingPE": [
+      "number"
+    ],
+    "website": [
+      "str"
+    ]
+  },
+  "info_etf": {
+    "beta": [
+      "missing"
+    ],
+    "bookValue": [
+      "number"
+    ],
+    "country": [
+      "missing"
+    ],
+    "currency": [
+      "str"
+    ],
+    "currentPrice": [
+      "missing"
+    ],
+    "currentRatio": [
+      "missing"
+    ],
+    "debtToEquity": [
+      "missing"
+    ],
+    "dividendYield": [
+      "number"
+    ],
+    "ebitda": [
+      "missing"
+    ],
+    "ebitdaMargins": [
+      "missing"
+    ],
+    "enterpriseToEbitda": [
+      "missing"
+    ],
+    "enterpriseToRevenue": [
+      "missing"
+    ],
+    "enterpriseValue": [
+      "missing"
+    ],
+    "financialCurrency": [
+      "str"
+    ],
+    "forwardEps": [
+      "missing"
+    ],
+    "forwardPE": [
+      "missing"
+    ],
+    "freeCashflow": [
+      "missing"
+    ],
+    "fullTimeEmployees": [
+      "missing"
+    ],
+    "grossMargins": [
+      "missing"
+    ],
+    "industry": [
+      "missing"
+    ],
+    "longBusinessSummary": [
+      "str"
+    ],
+    "longName": [
+      "str"
+    ],
+    "marketCap": [
+      "missing"
+    ],
+    "numberOfAnalystOpinions": [
+      "missing"
+    ],
+    "operatingMargins": [
+      "missing"
+    ],
+    "pegRatio": [
+      "missing"
+    ],
+    "priceToBook": [
+      "number"
+    ],
+    "priceToSalesTrailing12Months": [
+      "missing"
+    ],
+    "profitMargins": [
+      "missing"
+    ],
+    "quickRatio": [
+      "missing"
+    ],
+    "quoteType": [
+      "str"
+    ],
+    "recommendationKey": [
+      "missing"
+    ],
+    "recommendationMean": [
+      "missing"
+    ],
+    "returnOnAssets": [
+      "missing"
+    ],
+    "returnOnEquity": [
+      "missing"
+    ],
+    "revenuePerShare": [
+      "missing"
+    ],
+    "sector": [
+      "missing"
+    ],
+    "shortName": [
+      "str"
+    ],
+    "targetHighPrice": [
+      "missing"
+    ],
+    "targetLowPrice": [
+      "missing"
+    ],
+    "targetMeanPrice": [
+      "missing"
+    ],
+    "targetMedianPrice": [
+      "missing"
+    ],
+    "totalCash": [
+      "missing"
+    ],
+    "totalDebt": [
+      "missing"
+    ],
+    "trailingEps": [
+      "missing"
+    ],
+    "trailingPE": [
+      "number"
+    ],
+    "website": [
+      "missing"
+    ]
+  },
+  "news_content": {
+    "canonicalUrl": [
+      "object"
+    ],
+    "canonicalUrl.url": [
+      "str"
+    ],
+    "clickThroughUrl": [
+      "null",
+      "object"
+    ],
+    "clickThroughUrl.url": [
+      "missing",
+      "str"
+    ],
+    "provider": [
+      "object"
+    ],
+    "provider.displayName": [
+      "str"
+    ],
+    "pubDate": [
+      "str"
+    ],
+    "summary": [
+      "str"
+    ],
+    "title": [
+      "str"
+    ]
+  },
+  "news_item": {
+    "content": [
+      "object"
+    ],
+    "link": [
+      "missing"
+    ],
+    "providerPublishTime": [
+      "missing"
+    ],
+    "publisher": [
+      "missing"
+    ],
+    "title": [
+      "missing"
+    ]
+  },
+  "recommendation_row": {
+    "buy": [
+      "number"
+    ],
+    "hold": [
+      "number"
+    ],
+    "period": [
+      "str"
+    ],
+    "sell": [
+      "number"
+    ],
+    "strongBuy": [
+      "number"
+    ],
+    "strongSell": [
+      "number"
+    ]
+  },
+  "recommendations": {
+    "columns": {
+      "class": "Index",
+      "dtype": "str"
+    },
+    "dtypes": {
+      "buy": "int64",
+      "hold": "int64",
+      "period": "str",
+      "sell": "int64",
+      "strongBuy": "int64",
+      "strongSell": "int64"
+    },
+    "index": {
+      "class": "RangeIndex",
+      "dtype": "int64"
+    }
+  },
+  "search_news_item": {
+    "content": [
+      "missing"
+    ],
+    "link": [
+      "str"
+    ],
+    "providerPublishTime": [
+      "number"
+    ],
+    "publisher": [
+      "str"
+    ],
+    "title": [
+      "str"
+    ]
+  },
+  "search_quote": {
+    "exchDisp": [
+      "str"
+    ],
+    "industryDisp": [
+      "missing",
+      "str"
+    ],
+    "longname": [
+      "missing",
+      "str"
+    ],
+    "quoteType": [
+      "str"
+    ],
+    "score": [
+      "number"
+    ],
+    "sectorDisp": [
+      "missing",
+      "str"
+    ],
+    "shortname": [
+      "str"
+    ],
+    "symbol": [
+      "str"
+    ]
+  },
+  "splits": {
+    "dtype": "float64",
+    "index": {
+      "class": "DatetimeIndex",
+      "dtype": "datetime64[s, <tz>]",
+      "tz_aware": true,
+      "unit": "s"
+    },
+    "times_of_day": [
+      "09:30"
+    ]
+  },
+  "statement_annual": {
+    "columns": {
+      "class": "DatetimeIndex",
+      "dtype": "datetime64[s]",
+      "tz_aware": false,
+      "unit": "s"
+    },
+    "index": {
+      "class": "Index",
+      "dtype": "str"
+    },
+    "value_dtypes": [
+      "float64"
+    ]
+  },
+  "statement_quarterly": {
+    "columns": {
+      "class": "DatetimeIndex",
+      "dtype": "datetime64[s]",
+      "tz_aware": false,
+      "unit": "s"
+    },
+    "index": {
+      "class": "Index",
+      "dtype": "str"
+    },
+    "value_dtypes": [
+      "float64"
+    ]
+  },
+  "unknown_symbol": {
+    "fast_info.last_price": {
+      "class": "curl_cffi.requests.exceptions.HTTPError",
+      "status_code": 404
+    },
+    "history": {
+      "class": "curl_cffi.requests.exceptions.HTTPError",
+      "status_code": 404
+    }
+  }
+}
