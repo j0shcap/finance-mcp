@@ -96,8 +96,25 @@ field the prompt names), add a README bullet under `## Prompts`, and run `make s
 
 ## Releasing (maintainers)
 
-1. Move the `[Unreleased]` entries into a new version section of `CHANGELOG.md`, bump
-   `project.version` in `pyproject.toml`, run `uv lock`, and merge.
-2. Publish a GitHub Release tagged `v<version>` on `master`. The Publish workflow refuses a tag
-   that doesn't match `project.version`, runs `make check`, then uploads to PyPI through trusted
-   publishing. PyPI versions are immutable, so check the version before publishing.
+The version comes from the git tag (hatch-vcs): `vX.Y.Z` builds `X.Y.Z`, and any untagged
+commit builds a `.devN` version that can't pass for a release. There is no version to bump.
+
+1. `make release-prep VERSION=X.Y.Z` moves the `[Unreleased]` entries under
+   `## [X.Y.Z] - <today>` and updates the compare links. Open a PR with it and merge.
+2. Optional rehearsal: `gh workflow run release.yml -f version=X.Y.Z` runs the whole
+   verification - quality gate, build, version check, e2e against the built wheel - on a
+   local-only tag and publishes nothing. (Dispatch it with `--ref <branch>` to rehearse
+   before merging.)
+3. `make release VERSION=X.Y.Z` publishes the GitHub Release `vX.Y.Z` on `origin/master`, with
+   that CHANGELOG section as its notes. The Publish workflow then:
+   - refuses a tag that isn't `vX.Y.Z` or isn't on `master`;
+   - runs `make check` and builds from the clean tag;
+   - refuses any artifact that isn't exactly `X.Y.Z`;
+   - runs e2e against that wheel and uploads it to PyPI through trusted publishing;
+   - checks that PyPI serves the same files, and installs the release by name and calls a
+     tool.
+
+   PyPI versions are immutable, which is why all of that happens before the upload.
+
+The release must be created by a person (or a personal token), not by another workflow's
+`GITHUB_TOKEN`, which can't trigger the Publish workflow. Pre-release tags aren't published.

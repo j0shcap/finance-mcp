@@ -36,7 +36,7 @@ jobs:
           cache-dependency-glob: "uv.lock"
           python-version: "3.13"
       - name: Install dependencies
-        run: uv sync
+        run: uv sync --locked
       - name: Run the live contract suite
         # 3.13 only: this tests our agreement with Yahoo, which does not vary by interpreter.
         # Includes the Yahoo-backed e2e tests (tests/e2e/, marked live too), which build the

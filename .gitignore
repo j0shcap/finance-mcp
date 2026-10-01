@@ -22,3 +22,7 @@ build/
 
 # Env
 .env
+
+# make release scratch files
+.release-changelog.md
+.release-notes.md
