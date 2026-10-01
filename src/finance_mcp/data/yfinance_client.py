@@ -64,7 +64,6 @@ MAX_CACHEABLE_BARS = 2000
 # Quotes in a batch are independent single requests, so they are fetched in parallel; the
 # bound keeps a large batch from opening a connection per ticker at once.
 QUOTE_MAX_WORKERS = 8
-BENCHMARK_MAX_WORKERS = 2  # the asset and the benchmark
 # The fewest shared closes that yield a single return to compare.
 MIN_OVERLAP_OBSERVATIONS = 2
 # Each comparison row costs two Yahoo calls (history + info), so the worker bound is lower
@@ -389,7 +388,7 @@ class YFinanceClient:
             lambda: self._all_bars(symbol, period, "1d"),
             lambda: self._bills_for(period, risk_free_rate),
         )
-        risk_free = _resolve_risk_free(risk_free_rate, bills, bars)
+        risk_free = _risk_free_over(risk_free_rate, bills, bars[0].date, bars[-1].date)
         return _performance(symbol, period, bars, risk_free), risk_free
 
     def _bills_for(self, period: str, risk_free_rate: float | None) -> _Bills:
@@ -421,10 +420,9 @@ class YFinanceClient:
                 "for both. Use analyze_performance for a single instrument."
             )
         (asset_bars, bench_bars), bills = _in_parallel(
-            lambda: _fetch_concurrently(
-                [symbol, bench],
-                lambda s: self._all_bars(s, period, "1d"),
-                BENCHMARK_MAX_WORKERS,
+            lambda: _in_parallel(
+                lambda: self._all_bars(symbol, period, "1d"),
+                lambda: self._all_bars(bench, period, "1d"),
             ),
             lambda: self._bills_for(period, risk_free_rate),
         )
@@ -549,7 +547,7 @@ class YFinanceClient:
         """
         try:
             bars = self._all_bars(symbol, period, "1d")
-            risk_free = _resolve_risk_free(risk_free_rate, bills.result(), bars)
+            risk_free = _risk_free_over(risk_free_rate, bills.result(), bars[0].date, bars[-1].date)
             perf = _performance(symbol, period, bars, risk_free)
         except DataUnavailable as exc:
             return ComparisonError(symbol=symbol, error=str(exc))
@@ -980,13 +978,6 @@ def _rate_key(risk_free_rate: float | None) -> str:
     return "treasury_bill" if risk_free_rate is None else str(risk_free_rate)
 
 
-def _resolve_risk_free(
-    risk_free_rate: float | None, bills: _Bills, bars: list[PriceBar]
-) -> _RiskFree:
-    """The rate for a computation over ``bars`` (never empty): see :func:`_risk_free_over`."""
-    return _risk_free_over(risk_free_rate, bills, bars[0].date, bars[-1].date)
-
-
 def _risk_free_over(risk_free_rate: float | None, bills: _Bills, start: str, end: str) -> _RiskFree:
     """The caller's rate, else the mean effective T-bill rate over ``start``..``end``.
 
@@ -1029,7 +1020,11 @@ def _risk_free_over(risk_free_rate: float | None, bills: _Bills, start: str, end
 
 
 def _day(timestamp: str) -> date:
-    """The calendar date of a PriceBar date or timestamp."""
+    """The calendar date of a PriceBar date or intraday timestamp.
+
+    ``datetime.fromisoformat`` rather than ``date.fromisoformat``: only it accepts both a
+    bare date ("2024-01-01") and a timestamp with an offset.
+    """
     return datetime.fromisoformat(timestamp).date()
 
 
@@ -1071,12 +1066,8 @@ def _flag_mentions(
 
 
 def _elapsed_days(start: str, end: str) -> int:
-    """Calendar days between two PriceBar dates.
-
-    Parses via ``datetime.fromisoformat`` rather than ``date.fromisoformat`` so it accepts
-    both a bare date ("2024-01-01") and a full intraday timestamp with offset.
-    """
-    return (datetime.fromisoformat(end).date() - datetime.fromisoformat(start).date()).days
+    """Calendar days between two PriceBar dates."""
+    return (_day(end) - _day(start)).days
 
 
 def _label_key(label: str) -> str:
