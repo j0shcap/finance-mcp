@@ -41,16 +41,21 @@ class FakeClock:
         self.now += seconds
 
 
+#: The exchange timezone fake histories and corporate actions carry, as yfinance's do.
+EXCHANGE_TZ = "America/New_York"
+
+
 def make_history_df(
-    closes: list[float], *, start: str = "2024-01-01", freq: str = "D", tz: str | None = None
+    closes: list[float], *, start: str = "2024-01-01", freq: str = "D", tz: str = EXCHANGE_TZ
 ) -> pd.DataFrame:
-    """Build a yfinance-shaped OHLCV frame.
+    """Build an OHLCV frame shaped like yfinance's (tests/shapes/yahoo.json).
 
     ``freq`` picks the trading calendar: "D" gives consecutive calendar days (a 24/7
-    instrument such as crypto), "B" gives weekdays only (an equity). ``tz`` makes the
-    index tz-aware, as yfinance's really is; see ``make_intraday_df``.
+    instrument such as crypto), "B" gives weekdays only (an equity). Like yfinance's, the
+    index is tz-aware at second resolution and the frame carries the corporate-action
+    columns.
     """
-    idx = pd.to_datetime(pd.date_range(start, periods=len(closes), freq=freq, tz=tz))
+    idx = pd.date_range(start, periods=len(closes), freq=freq, tz=tz).as_unit("s")
     return pd.DataFrame(
         {
             "Open": closes,
@@ -58,6 +63,8 @@ def make_history_df(
             "Low": [c - 1 for c in closes],
             "Close": closes,
             "Volume": [1000 * (i + 1) for i in range(len(closes))],
+            "Dividends": 0.0,
+            "Stock Splits": 0.0,
         },
         index=idx,
     )
@@ -65,11 +72,22 @@ def make_history_df(
 
 def make_financials_df(rows: dict[str, list[float]], period_ends: list[str]) -> pd.DataFrame:
     """rows = {line_item_label: [values most-recent-first]}; columns are the period-end dates."""
-    return pd.DataFrame.from_dict(rows, orient="index", columns=pd.to_datetime(period_ends))
+    columns = pd.DatetimeIndex(pd.to_datetime(period_ends)).as_unit("s")
+    return pd.DataFrame.from_dict(rows, orient="index", columns=columns)
 
 
 def make_series(dates: list[str], values: list[float]) -> pd.Series:
-    return pd.Series(values, index=pd.to_datetime(dates), dtype=float)
+    """A dividends or splits series: yfinance stamps each at 09:30 exchange time."""
+    index = pd.DatetimeIndex(pd.to_datetime(dates) + pd.Timedelta(hours=9, minutes=30))
+    return pd.Series(values, index=index.tz_localize(EXCHANGE_TZ).as_unit("s"), dtype=float)
+
+
+class FakeHTTPError(Exception):
+    """What yfinance raises for a symbol Yahoo doesn't know: an HTTP error carrying a 404."""
+
+    def __init__(self, status_code: int = 404) -> None:
+        super().__init__(f"HTTP Error {status_code}: ")
+        self.response = SimpleNamespace(status_code=status_code)
 
 
 def fake_ticker_factory(
@@ -179,7 +197,7 @@ def fake_multi_ticker_factory(
     construction, so a batch only completes when the symbols are fetched concurrently.
     """
     stubs = {symbol: fake_ticker_factory(**kwargs) for symbol, kwargs in per_symbol.items()}
-    missing = fake_ticker_factory(error=KeyError("exchangeTimezoneName"))
+    missing = fake_ticker_factory(error=FakeHTTPError(404))
 
     def factory(symbol: str) -> Any:
         if gate is not None:
