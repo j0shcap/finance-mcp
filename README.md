@@ -82,6 +82,34 @@ keyword argument and snake_case field name it mentions against the tool registry
 Every tool is annotated read-only; the calculators are additionally marked idempotent and
 closed-world, the market-data tools open-world.
 
+## Conventions & units
+
+The short version for people reading results; `finance://conventions` is the authoritative,
+per-field glossary.
+
+- **Signs follow Excel.** Cash you receive is positive, cash you pay is negative: a loan
+  principal or a deposit is a negative `pv`, the balance you get back a positive `fv`. Mixed-up
+  signs flip the answer or leave a rate solve with no solution.
+- **Rates are decimals**: `0.05` means 5%, as an input and in calculator results.
+- **Per-period vs. annual.** `npv`, `irr`, `mirr` and `time_value_of_money` take a per-period
+  rate matching the cashflow spacing (monthly flows → a monthly rate). `xnpv`, `xirr`,
+  `loan_schedule`, `convert_rate` and the four bond tools take annual rates; `loan_schedule`'s
+  is a nominal APR compounded monthly.
+- **Bonds: clean vs. dirty.** The clean price is what the market quotes; the dirty price
+  (clean + accrued interest) is what a buyer pays. `bond_price_dated` reports both, and
+  `bond_ytm_dated` solves from the clean price.
+- **Market-data fields named `*_percent` are percents** (`12.5` = 12.5%); the risk ratios
+  (Sharpe, Sortino, Calmar, beta, …) are plain numbers.
+- **Yahoo's own units are inconsistent**, and are passed through as reported: margins, ROE and
+  ROA are fractions (`0.27` = 27%), but `debt_to_equity` and `dividend_yield` are already
+  percents, and `recommendation_mean` runs from 1 (strong buy) to 5 (strong sell).
+- **Currencies.** Prices are in the quote currency. Statement figures are in the reporting
+  currency (`get_financials` labels it `currency`), as are several `get_key_metrics` amounts
+  (labelled `financial_currency`). The two differ for ADRs and other cross-listings, which also
+  make several Yahoo valuation ratios unreliable.
+- **Annualization** is over calendar time from auto-adjusted (dividend-inclusive) prices.
+  Windows under 85 days return `null` for annualized figures rather than extrapolating.
+
 ## Configuration
 
 Optional, read from the environment only — there is no `.env` support, because an MCP client
@@ -110,11 +138,42 @@ Run the stdio server directly:
 mcp-finance
 ```
 
-Or add it to an MCP client (e.g. Claude Desktop, Claude Code):
+Or add it to an MCP client. Claude Code:
+
+```bash
+claude mcp add finance -- uvx mcp-finance
+```
+
+Claude Desktop and other JSON-configured clients (Claude Desktop's file is
+`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS,
+`%APPDATA%\Claude\claude_desktop_config.json` on Windows):
 
 ```json
 { "mcpServers": { "finance": { "command": "uvx", "args": ["mcp-finance"] } } }
 ```
+
+Settings from [Configuration](#configuration) go in the server's `env`:
+
+```json
+{
+  "mcpServers": {
+    "finance": {
+      "command": "uvx",
+      "args": ["mcp-finance"],
+      "env": { "FINANCE_MCP_QUOTE_CACHE_TTL_SECONDS": "60" }
+    }
+  }
+}
+```
+
+## Data source & disclaimer
+
+Market data comes from Yahoo Finance through [`yfinance`](https://github.com/ranaroussi/yfinance),
+an unofficial library that is not affiliated with, endorsed or vetted by Yahoo. Quotes may be
+delayed, and fields can change or disappear without notice when Yahoo changes its endpoints.
+The data is intended for personal research and educational use; refer to Yahoo's terms of use
+for what you may do with it. Nothing this server returns is investment advice, and the software
+is provided as is, without warranty (see [LICENSE](LICENSE)).
 
 ## Development
 
@@ -122,8 +181,12 @@ Or add it to an MCP client (e.g. Claude Desktop, Claude Code):
 git clone https://github.com/j0shcap/finance-mcp
 cd finance-mcp
 uv sync
-make check   # ruff, mypy --strict, bandit, pytest (enforces the coverage gate)
+make check   # ruff, mypy --strict, bandit, pytest (enforces the 90% coverage gate)
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to add a tool or prompt,
+[CHANGELOG.md](CHANGELOG.md) for what changed between releases, and
+[SECURITY.md](SECURITY.md) to report a vulnerability.
 
 `make check` is fully offline: every test in it mocks yfinance.
 

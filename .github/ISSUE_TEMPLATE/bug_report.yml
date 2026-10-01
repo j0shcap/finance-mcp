@@ -1,0 +1,47 @@
+name: Bug report
+description: A tool returns a wrong result, an unclear error, or the server fails to start.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security problems go through private reporting (see SECURITY.md), not here.
+        If Yahoo's own data looks wrong, the README's "Data source & disclaimer" section may explain it.
+  - type: input
+    id: version
+    attributes:
+      label: mcp-finance version
+      description: "`pip show mcp-finance`, or `uv pip show mcp-finance` in the environment that runs it."
+      placeholder: "0.4.2"
+    validations:
+      required: true
+  - type: input
+    id: client
+    attributes:
+      label: MCP client and OS
+      placeholder: "Claude Desktop 1.x on macOS 15, Python 3.13"
+    validations:
+      required: true
+  - type: textarea
+    id: call
+    attributes:
+      label: Tool or prompt, and its arguments
+      description: The exact arguments the client sent, as JSON if you have it.
+      render: json
+      placeholder: '{"tool": "irr", "arguments": {"cashflows": [-100, 60, 60]}}'
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+      description: What you expected, and where that comes from (Excel, a filing, Yahoo's website, …).
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual
+      description: The result or error the tool returned.
+    validations:
+      required: true

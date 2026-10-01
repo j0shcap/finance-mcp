@@ -1,0 +1,21 @@
+name: Feature request
+description: A new tool, prompt, field or option.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What do you want to do?
+      description: The question or calculation you can't do today, ideally as something you'd ask the model.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: The tool, parameter or result field you have in mind, and the units it would use.
+  - type: textarea
+    id: source
+    attributes:
+      label: Data source or reference
+      description: For market data, whether Yahoo Finance (via yfinance) provides it; for a calculation, a reference formula or an Excel function to check against.
