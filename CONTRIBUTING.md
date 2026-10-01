@@ -22,7 +22,7 @@ uv run pre-commit install   # optional: ruff, mypy and bandit on every commit
 | `make check` | ruff, `mypy --strict`, bandit, and the offline test suite with the coverage gate | before every push; CI runs it on Python 3.13 and 3.14 |
 | `make test` | just the offline test suite | while iterating |
 | `make e2e` | builds the wheel and drives it over stdio | when touching packaging, the entry point or anything printed |
-| `make test-live` | contract tests against real Yahoo endpoints | when touching `data/yfinance_client.py` |
+| `make test-live` | contract tests against real Yahoo endpoints | when touching `data/yahoo.py` or `data/yfinance_client.py` |
 | `make snapshot` | rewrites the model-facing contract snapshot | after an intended change to anything a client sees |
 
 `make check` never touches the network: tests mock yfinance through `tests/fakes.py`. Tests that
@@ -61,9 +61,14 @@ move them too, and needs `make snapshot` like any other change to the lock.
 
 ## Adding a tool
 
-1. Put the logic in `src/finance_mcp/data/` (`calculators.py`, `analytics.py` or
-   `yfinance_client.py`) and its result model in `data/models.py`. Market-data models subclass
-   `MarketData`, which rounds their output.
+1. Put the logic in `src/finance_mcp/data/` and its result model in `data/models.py`.
+   Market-data models subclass `MarketData`, which rounds their output.
+   - A calculator goes in `calculators.py` (pure math, no network).
+   - A market-data tool is split three ways. The Yahoo fetch-and-parse goes in `yahoo.py`
+     (`YahooSource`, which never caches), and any computation over fetched data goes in a
+     pure module (`analytics.py`, `performance.py`, `risk_free.py`, `relevance.py`). The
+     orchestration - what is fetched together and cached, for how long - goes in a
+     `YFinanceClient` method in `yfinance_client.py`.
 2. Register it in the matching `tools/` module with `@mcp.tool(annotations=calculator(...))` or
    `market_data(...)` from `tools/_annotations.py`, and bound every input with `Field`.
 3. Add its name to `MARKET_DATA_TOOLS` or `CALCULATOR_TOOLS` in `conventions.py`; the server

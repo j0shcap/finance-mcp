@@ -69,15 +69,16 @@ def _counting_income() -> tuple[Callable[[str], Any], list[str]]:
 
 
 def test_get_financials_cached_within_ttl() -> None:
+    # Each fetch is two Yahoo requests: the statement and, from .info, its currency.
     factory, calls = _counting_income()
     clock = FakeClock()
     client = make_client(factory, clock=clock, fundamentals_ttl=3600.0)
     client.get_financials("AAPL", "income", "annual")
     client.get_financials("AAPL", "income", "annual")
-    assert len(calls) == 1
+    assert len(calls) == 2
     clock.advance(3601.0)
     client.get_financials("AAPL", "income", "annual")
-    assert len(calls) == 2
+    assert len(calls) == 4
 
 
 def test_get_financials_filter_reuses_cached_fetch() -> None:
@@ -86,7 +87,7 @@ def test_get_financials_filter_reuses_cached_fetch() -> None:
     full = client.get_financials("AAPL", "income", "annual")
     f1 = client.get_financials("AAPL", "income", "annual", line_items=["Total Revenue"])
     f2 = client.get_financials("AAPL", "income", "annual", line_items=["Net Income"])
-    assert len(calls) == 1
+    assert len(calls) == 2  # the statement and its currency, once
     assert list(f1.line_items) == ["Total Revenue"]
     assert list(f2.line_items) == ["Net Income"]
     assert set(full.line_items) == {"Total Revenue", "Net Income"}  # cached object un-mutated

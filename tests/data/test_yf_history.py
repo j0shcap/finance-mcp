@@ -9,9 +9,7 @@ from finance_mcp.data.errors import DataUnavailable, SymbolNotFound
 from finance_mcp.data.models import (
     HistoryInterval,
 )
-from finance_mcp.data.yfinance_client import (
-    _INTRADAY_INTERVALS,
-)
+from finance_mcp.data.yahoo import INTRADAY_INTERVALS
 from tests.fakes import (
     FakeClock,
     counting,
@@ -139,4 +137,4 @@ def test_daily_and_longer_bars_stay_date_only(interval: str) -> None:
 def test_intraday_intervals_are_the_non_daily_history_intervals() -> None:
     # Pins the two sets against HistoryInterval so a newly supported interval cannot
     # silently default to date-only formatting.
-    assert set(get_args(HistoryInterval)) - {"1d", "1wk", "1mo"} == _INTRADAY_INTERVALS
+    assert set(get_args(HistoryInterval)) - {"1d", "1wk", "1mo"} == INTRADAY_INTERVALS
