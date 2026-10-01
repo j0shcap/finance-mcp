@@ -1,0 +1,64 @@
+{
+  "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Bond Yield to Maturity"
+  },
+  "description": "Solve the annual yield to maturity that prices the bond at the given market price.",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "coupon_rate": {
+        "description": "Annual coupon rate as a decimal, e.g. 0.05 for 5%.",
+        "type": "number"
+      },
+      "face": {
+        "description": "Face (par) value of the bond.",
+        "exclusiveMinimum": 0,
+        "type": "number"
+      },
+      "frequency": {
+        "default": 2,
+        "description": "Coupon payments per year, e.g. 2 for semiannual.",
+        "exclusiveMinimum": 0,
+        "maximum": 12,
+        "type": "integer"
+      },
+      "price": {
+        "description": "Market price of the bond, in the same units as face.",
+        "exclusiveMinimum": 0,
+        "type": "number"
+      },
+      "years_to_maturity": {
+        "description": "Years until maturity.",
+        "exclusiveMinimum": 0,
+        "maximum": 100,
+        "type": "number"
+      }
+    },
+    "required": [
+      "face",
+      "coupon_rate",
+      "years_to_maturity",
+      "price"
+    ],
+    "type": "object"
+  },
+  "name": "bond_ytm",
+  "outputSchema": {
+    "description": "Yield to maturity solved from a bond's market price.",
+    "properties": {
+      "yield_to_maturity": {
+        "description": "Annual yield to maturity, as a decimal.",
+        "type": "number"
+      }
+    },
+    "required": [
+      "yield_to_maturity"
+    ],
+    "type": "object"
+  },
+  "title": "Bond Yield to Maturity"
+}

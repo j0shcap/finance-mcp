@@ -1,0 +1,24 @@
+{
+  "arguments": [
+    {
+      "description": "Ticker symbol to analyze, e.g. 'AAPL'.\n\nProvide a value matching the following JSON schema: {\"description\":\"Ticker symbol to analyze, e.g. 'AAPL'.\",\"type\":\"string\"}. Encode non-string values as JSON.",
+      "name": "ticker",
+      "required": true
+    },
+    {
+      "description": "Investment time horizon to frame the thesis, e.g. '12mo', '3y'.\n\nProvide a value matching the following JSON schema: {\"description\":\"Investment time horizon to frame the thesis, e.g. '12mo', '3y'.\",\"type\":\"string\"}. Encode non-string values as JSON.",
+      "name": "horizon",
+      "required": false
+    }
+  ],
+  "description": "Deep-dive on a single stock: fundamentals, valuation vs peers,\nperformance/technical posture, analyst view, and news catalysts, synthesized into\nbull/bear cases and a fair-value range with a horizon-framed verdict. Every claim cites\nthe finance-mcp tool and period it came from.",
+  "name": "analyze_stock",
+  "rendered_description": "Deep-dive on a single stock: fundamentals, valuation vs peers,\nperformance/technical posture, analyst view, and news catalysts, synthesized into\nbull/bear cases and a fair-value range with a horizon-framed verdict. Every claim cites\nthe finance-mcp tool and period it came from.",
+  "rendered_roles": [
+    "user"
+  ],
+  "sample_arguments": {
+    "horizon": "3y",
+    "ticker": "AAPL"
+  }
+}

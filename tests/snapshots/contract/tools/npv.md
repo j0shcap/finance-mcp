@@ -1,0 +1,1 @@
+Net present value of equally-spaced cashflows (cashflows[0] is at t=0, undiscounted).

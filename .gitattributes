@@ -1,0 +1,2 @@
+# The contract snapshot is compared byte for byte; no line-ending conversion on checkout.
+tests/snapshots/** -text

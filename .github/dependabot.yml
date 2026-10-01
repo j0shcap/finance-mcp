@@ -7,6 +7,13 @@ updates:
     schedule:
       interval: "weekly"
     groups:
+      # These generate the model-facing contract (tool schemas, prompt text), so a bump can
+      # change tests/snapshots/contract/. Grouped so one PR needs one `make snapshot`.
+      contract:
+        patterns:
+          - "fastmcp*"
+          - "mcp*"
+          - "pydantic*"
       python-dev:
         dependency-type: "development"
   # The actions used by the CI and release workflows, pinned to major tags.

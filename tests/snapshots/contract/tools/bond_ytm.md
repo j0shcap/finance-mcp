@@ -1,0 +1,1 @@
+Solve the annual yield to maturity that prices the bond at the given market price.

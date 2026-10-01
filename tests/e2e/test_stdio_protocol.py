@@ -19,7 +19,7 @@ from finance_mcp.conventions import (
     SERVER_INSTRUCTIONS,
 )
 from tests.e2e.conftest import PROJECT_VERSION, Server
-from tests.test_prompt_tool_drift import SAMPLE_ARGS
+from tests.prompt_samples import SAMPLE_ARGS
 
 #: A `{placeholder}` the prompt template failed to fill.
 _UNFILLED = re.compile(r"\{[a-z_]+\}")

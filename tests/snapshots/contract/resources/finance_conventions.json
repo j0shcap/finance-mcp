@@ -1,0 +1,7 @@
+{
+  "description": "Units, sign and rate conventions for every finance-mcp tool result.\n\nRead this before converting, comparing, or doing arithmetic on figures from the\nmarket-data tools: the source reports some ratios as fractions and others as\npercents, and absolute amounts are not all in one currency.",
+  "mimeType": "text/markdown",
+  "name": "finance_conventions",
+  "title": "Finance data conventions",
+  "uri": "finance://conventions"
+}

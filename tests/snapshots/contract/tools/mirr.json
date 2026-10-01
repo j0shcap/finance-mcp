@@ -1,0 +1,65 @@
+{
+  "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Modified Internal Rate of Return"
+  },
+  "description": "Modified internal rate of return: single-valued, unlike irr.\n\nThe preferred figure for non-conventional cashflows (more than one sign change),\nsince it has exactly one solution given the finance and reinvestment rates.",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "cashflows": {
+        "description": "Cashflows by period; needs >=1 negative and >=1 positive.",
+        "items": {
+          "type": "number"
+        },
+        "maxItems": 1000,
+        "minItems": 2,
+        "type": "array"
+      },
+      "finance_rate": {
+        "description": "Per-period rate to finance (discount) negative cashflows, as a decimal, e.g. 0.08 for 8%.",
+        "exclusiveMinimum": -1,
+        "type": "number"
+      },
+      "reinvest_rate": {
+        "description": "Per-period rate to reinvest (compound) positive cashflows, as a decimal, e.g. 0.06 for 6%.",
+        "exclusiveMinimum": -1,
+        "type": "number"
+      }
+    },
+    "required": [
+      "cashflows",
+      "finance_rate",
+      "reinvest_rate"
+    ],
+    "type": "object"
+  },
+  "name": "mirr",
+  "outputSchema": {
+    "description": "Modified internal rate of return (always unique given the two rates).",
+    "properties": {
+      "finance_rate": {
+        "description": "Per-period rate used to discount negative cashflows, as a decimal.",
+        "type": "number"
+      },
+      "mirr": {
+        "description": "Modified IRR per period, as a decimal (annualize externally if needed).",
+        "type": "number"
+      },
+      "reinvest_rate": {
+        "description": "Per-period rate used to compound positive cashflows, as a decimal.",
+        "type": "number"
+      }
+    },
+    "required": [
+      "mirr",
+      "finance_rate",
+      "reinvest_rate"
+    ],
+    "type": "object"
+  },
+  "title": "Modified Internal Rate of Return"
+}

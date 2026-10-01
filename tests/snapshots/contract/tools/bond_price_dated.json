@@ -1,0 +1,198 @@
+{
+  "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Bond Price by Settlement Date"
+  },
+  "description": "Price a bond for a settlement date that may fall BETWEEN coupon dates.\n\nUse this for a real bond quoted by its maturity date; use bond_price only when\nsettlement lands exactly on a coupon date. Returns the CLEAN price (quoted, excludes\naccrued interest), the DIRTY price (clean + accrued = the cash the buyer pays), the\naccrued interest, and duration/convexity computed with the fractional first period\ndiscounted as first_period_discount says. Each price is given per 'face' and per 100\nof face.\n\nDay count defaults to Actual/Actual ICMA (US Treasuries and most sovereigns); pass\nday_count='30/360' for the US corporate/municipal convention, which reproduces\nExcel's PRICE with basis=0 -- except in the final coupon period, where Excel uses\nsimple interest over the stub: pass first_period_discount='simple' to match it there.\n\nAssumes a regular schedule -- every coupon period a whole 12/frequency months. Bonds\nwith an odd (long or short) first or last coupon period are not supported.",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "coupon_rate": {
+        "description": "Annual coupon rate as a decimal, e.g. 0.05 for 5%.",
+        "type": "number"
+      },
+      "day_count": {
+        "default": "actual/actual",
+        "description": "Day count for the accrued part of the coupon period. 'actual/actual' (the default) is Actual/Actual ICMA, used by US Treasuries and most sovereigns. '30/360' is the US (NASD) convention for corporates and munis, and is what Excel uses by default (basis=0).",
+        "enum": [
+          "actual/actual",
+          "30/360"
+        ],
+        "type": "string"
+      },
+      "face": {
+        "default": 100.0,
+        "description": "Face (par) value. Defaults to 100, so prices come back per 100 of face -- the market quoting convention. Pass the real position size to get cash amounts.",
+        "exclusiveMinimum": 0,
+        "type": "number"
+      },
+      "first_period_discount": {
+        "default": "compound",
+        "description": "How to discount the part period before the next coupon. 'compound' (the default) is the street convention, (1+y)**stub, and matches Excel's PRICE/YIELD while more than one coupon remains. 'simple' is 1 + stub*y -- the US Treasury convention in 31 CFR 356 appendix B, and also what Excel switches to in the FINAL coupon period, where 'compound' is ~0.01 per 100 higher. They differ by a few thousandths per 100 elsewhere, so use 'simple' to match Treasury's published figures or Excel inside the last period.",
+        "enum": [
+          "compound",
+          "simple"
+        ],
+        "type": "string"
+      },
+      "frequency": {
+        "default": 2,
+        "description": "Coupon payments per year, e.g. 2 for semiannual. Must divide 12 evenly (1, 2, 3, 4, 6 or 12) so coupon dates fall a whole number of months apart.",
+        "exclusiveMinimum": 0,
+        "maximum": 12,
+        "type": "integer"
+      },
+      "maturity": {
+        "description": "Maturity (redemption) date (ISO 8601). Coupon dates are generated backward from here, so the schedule sits on this day-of-month.",
+        "format": "date",
+        "type": "string"
+      },
+      "settlement": {
+        "description": "Settlement date (ISO 8601, e.g. 2024-03-07): the date the trade settles and the buyer pays. May fall between coupon dates.",
+        "format": "date",
+        "type": "string"
+      },
+      "ytm": {
+        "description": "Annual yield to maturity as a decimal, e.g. 0.065 for 6.5%.",
+        "type": "number"
+      }
+    },
+    "required": [
+      "settlement",
+      "maturity",
+      "coupon_rate",
+      "ytm"
+    ],
+    "type": "object"
+  },
+  "name": "bond_price_dated",
+  "outputSchema": {
+    "description": "A bond priced for a settlement date, which may fall between two coupon dates.\n\nPrices come in two flavours and both are reported, because confusing them misstates\nthe cash by up to one coupon: the CLEAN price is what the market quotes, the DIRTY\nprice is what a buyer actually pays. Each is given per ``face`` and per 100 of face\n(the quoting convention). Duration and convexity use the same part-period convention\nas the price (``first_period_discount``) and are measured against the dirty price.",
+    "properties": {
+      "accrued_days": {
+        "description": "Days from previous_coupon_date to settlement, on this day count ('A' in the market formulas). Zero on a coupon date.",
+        "type": "number"
+      },
+      "accrued_fraction": {
+        "description": "Elapsed fraction of the current coupon period, accrued_days / period_days. 0.0 on a coupon date; the remaining 1 - this is the fractional first period the cashflows are discounted over.",
+        "type": "number"
+      },
+      "accrued_interest": {
+        "description": "Interest accrued since previous_coupon_date, in currency per 'face'. The buyer pays this to the seller on top of the quoted (clean) price.",
+        "type": "number"
+      },
+      "accrued_interest_per_100": {
+        "description": "Accrued interest per 100 of face: the market convention, and what Excel's ACCRINT reports.",
+        "type": "number"
+      },
+      "clean_price": {
+        "description": "CLEAN price per 'face': present value of the remaining cashflows EXCLUDING accrued interest. This is the quoted/traded price, and what a yield is solved from.",
+        "type": "number"
+      },
+      "clean_price_per_100": {
+        "description": "Clean price per 100 of face, the market quoting convention. Equals Excel's PRICE when day_count='30/360', except in the final coupon period, where Excel uses simple interest over the stub (first_period_discount='simple').",
+        "type": "number"
+      },
+      "convexity": {
+        "description": "Convexity in years^2, against the DIRTY price: the second-order correction to the duration estimate of a price change.",
+        "type": "number"
+      },
+      "current_yield": {
+        "description": "Annual coupon divided by the CLEAN price (a simple income measure; it ignores the pull to par, so it is not a yield to maturity).",
+        "type": "number"
+      },
+      "day_count": {
+        "description": "Day-count convention used to measure the accrued part of the coupon period.",
+        "enum": [
+          "actual/actual",
+          "30/360"
+        ],
+        "type": "string"
+      },
+      "dirty_price": {
+        "description": "DIRTY price per 'face' (also 'full' or 'invoice' price): clean_price + accrued_interest, i.e. the present value of every remaining cashflow. This is the cash the buyer actually pays at settlement.",
+        "type": "number"
+      },
+      "dirty_price_per_100": {
+        "description": "Dirty price per 100 of face: clean_price_per_100 + accrued_interest_per_100.",
+        "type": "number"
+      },
+      "first_period_discount": {
+        "description": "How the part-period stub was discounted: 'compound' (the street/Excel convention, (1+y)**(stub)) or 'simple' (the US Treasury convention in 31 CFR 356 appendix B, 1 + stub*y). They differ by a few thousandths per 100 on a part period.",
+        "enum": [
+          "compound",
+          "simple"
+        ],
+        "type": "string"
+      },
+      "frequency": {
+        "description": "Coupon payments per year used (2 = semiannual).",
+        "type": "integer"
+      },
+      "macaulay_duration": {
+        "description": "Macaulay duration in years: the cashflow-weighted average time to payment, weighted by present value against the DIRTY price.",
+        "type": "number"
+      },
+      "maturity": {
+        "description": "Maturity (redemption) date.",
+        "format": "date",
+        "type": "string"
+      },
+      "modified_duration": {
+        "description": "Modified duration in years: the approximate percentage fall in the DIRTY price per 1.00 (100 percentage points) rise in annual yield, so a 1 basis point move is this figure times 0.0001.",
+        "type": "number"
+      },
+      "next_coupon_date": {
+        "description": "Next coupon date after settlement; the first cashflow the buyer receives.",
+        "format": "date",
+        "type": "string"
+      },
+      "period_days": {
+        "description": "Days in the current coupon period, on this day count ('E'): the actual days between the surrounding coupon dates for actual/actual, or a nominal 360/frequency for 30/360.",
+        "type": "number"
+      },
+      "periods_remaining": {
+        "description": "Coupons still to be paid, counting next_coupon_date through maturity.",
+        "type": "integer"
+      },
+      "previous_coupon_date": {
+        "description": "Coupon date at or immediately before settlement; interest accrues from here. Equals settlement when settlement is itself a coupon date.",
+        "format": "date",
+        "type": "string"
+      },
+      "settlement": {
+        "description": "Settlement date the bond was priced for.",
+        "format": "date",
+        "type": "string"
+      }
+    },
+    "required": [
+      "settlement",
+      "maturity",
+      "previous_coupon_date",
+      "next_coupon_date",
+      "periods_remaining",
+      "frequency",
+      "day_count",
+      "first_period_discount",
+      "accrued_days",
+      "period_days",
+      "accrued_fraction",
+      "accrued_interest",
+      "accrued_interest_per_100",
+      "clean_price",
+      "dirty_price",
+      "clean_price_per_100",
+      "dirty_price_per_100",
+      "current_yield",
+      "macaulay_duration",
+      "modified_duration",
+      "convexity"
+    ],
+    "type": "object"
+  },
+  "title": "Bond Price by Settlement Date"
+}

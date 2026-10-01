@@ -1,0 +1,365 @@
+{
+  "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": false,
+    "openWorldHint": true,
+    "readOnlyHint": true,
+    "title": "Key Valuation & Profitability Metrics"
+  },
+  "description": "Valuation, profitability, and leverage ratios (as reported by Yahoo).\n\nNote units differ by field: P/E, P/B, P/S, EV/EBITDA, PEG are plain ratios;\nmargins and ROE/ROA are fractions (0.27 = 27%); debt_to_equity is a percent\n(79.5 = 79.5%); EV, total debt/cash, FCF, EBITDA are absolute amounts. Those\namounts are not all in one currency: debt/cash/FCF/EBITDA and the per-share\nrevenue/book value are in `financial_currency`, the EPS fields in `currency`. They\ndiffer for ADRs and other cross-listings, where Yahoo computes P/S, P/B, EV and the\nEV multiples across both currencies: use P/E, PEG and the margins for those.",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "ticker": {
+        "description": "Ticker symbol, e.g. 'AAPL'. Case-insensitive. Yahoo suffixes and prefixes are allowed (BRK-B, ^GSPC, RY.TO, BTC-USD, EURUSD=X); one symbol per value.",
+        "maxLength": 24,
+        "minLength": 1,
+        "pattern": "^\\s*[A-Za-z0-9.\\-^=]{1,20}\\s*$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "ticker"
+    ],
+    "type": "object"
+  },
+  "name": "get_key_metrics",
+  "outputSchema": {
+    "description": "Valuation / profitability / leverage ratios as reported by Yahoo. Units vary by field.\n\nAbsolute amounts are NOT all in one currency: the financialData figures (total debt/cash,\nfree cash flow, EBITDA) are in ``financial_currency``, the EPS fields in ``currency``. When\nthe two differ (ADRs and other cross-listings) Yahoo computes the price multiples and\nenterprise value across both currencies, so those are unreliable; the cross-listing rule in\nthe finance://conventions resource says what such a company can be compared on.",
+    "properties": {
+      "book_value": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Book value per share, in `financial_currency`."
+      },
+      "currency": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Quote currency (ISO 4217, e.g. 'USD') the shares trade in; the unit for the EPS fields."
+      },
+      "current_ratio": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Current ratio."
+      },
+      "debt_to_equity": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Debt-to-equity as a PERCENT (79.5 = 79.5%), not a multiple."
+      },
+      "ebitda": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "EBITDA in `financial_currency` (absolute units)."
+      },
+      "ebitda_margins": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "EBITDA margin as a FRACTION (0.27 = 27%)."
+      },
+      "enterprise_value": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Enterprise value (absolute units), as Yahoo derives it from market cap and the balance sheet. In `currency` for a domestic listing; for a cross-listing it mixes both currencies and is badly wrong - recompute it from market cap, total_debt and total_cash at a quoted FX rate."
+      },
+      "ev_to_ebitda": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Enterprise value / EBITDA ratio. Unreliable wherever enterprise_value is."
+      },
+      "ev_to_revenue": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Enterprise value / revenue ratio. Unreliable wherever enterprise_value is."
+      },
+      "financial_currency": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Currency (ISO 4217) the company reports its financials in (Yahoo's financialCurrency); the unit for total_debt, total_cash, free_cashflow, ebitda, revenue_per_share and book_value. May differ from `currency`, e.g. SAP reports in EUR while its US listing quotes in USD."
+      },
+      "forward_eps": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Forward EPS, per share in `currency` (matches forward_pe)."
+      },
+      "forward_pe": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Forward P/E ratio."
+      },
+      "free_cashflow": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Free cash flow in `financial_currency` (absolute units)."
+      },
+      "gross_margins": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Gross margin as a FRACTION (0.27 = 27%)."
+      },
+      "operating_margins": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Operating margin as a FRACTION (0.27 = 27%)."
+      },
+      "peg_ratio": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "P/E-to-growth ratio."
+      },
+      "price_to_book": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Price/book ratio. Unreliable for a cross-listing (financial_currency != currency): Yahoo divides the listed price by book value in another currency."
+      },
+      "price_to_sales": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Price/sales (TTM) ratio. Unreliable for a cross-listing: Yahoo divides market cap in `currency` by revenue in `financial_currency`."
+      },
+      "profit_margins": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Net profit margin as a FRACTION (0.27 = 27%)."
+      },
+      "quick_ratio": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Quick ratio."
+      },
+      "return_on_assets": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Return on assets as a FRACTION (0.27 = 27%)."
+      },
+      "return_on_equity": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Return on equity as a FRACTION (0.27 = 27%)."
+      },
+      "revenue_per_share": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Revenue per share, in `financial_currency`."
+      },
+      "symbol": {
+        "description": "Ticker symbol.",
+        "type": "string"
+      },
+      "total_cash": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Total cash in `financial_currency` (absolute units)."
+      },
+      "total_debt": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Total debt in `financial_currency` (absolute units)."
+      },
+      "trailing_eps": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Trailing EPS, per share in `currency` (matches trailing_pe)."
+      },
+      "trailing_pe": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Trailing P/E ratio."
+      }
+    },
+    "required": [
+      "symbol"
+    ],
+    "type": "object"
+  },
+  "title": "Key Valuation & Profitability Metrics"
+}

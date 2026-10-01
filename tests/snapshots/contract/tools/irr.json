@@ -1,0 +1,55 @@
+{
+  "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Internal Rate of Return"
+  },
+  "description": "Internal rate of return (per period) of equally-spaced cashflows.\n\nNon-conventional flows can have multiple IRRs (see all_irrs/is_unique); use\nmirr for a single unambiguous figure.",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "cashflows": {
+        "description": "Cashflows by period; needs >=1 sign change. Outflows negative.",
+        "items": {
+          "type": "number"
+        },
+        "maxItems": 1000,
+        "minItems": 2,
+        "type": "array"
+      }
+    },
+    "required": [
+      "cashflows"
+    ],
+    "type": "object"
+  },
+  "name": "irr",
+  "outputSchema": {
+    "description": "Internal rate of return of a cashflow series.\n\nNon-conventional cashflows (more than one sign change) can have several IRRs;\nin that case ``is_unique`` is False and ``irr`` is only a representative value.",
+    "properties": {
+      "all_irrs": {
+        "description": "Every real IRR found in (-100%, 1,000,000%], as decimals, ascending.",
+        "items": {
+          "type": "number"
+        },
+        "type": "array"
+      },
+      "irr": {
+        "description": "Representative IRR as a decimal: per period for irr, annual for xirr. When not unique this is the smallest non-negative root (or the root nearest zero if all are negative); inspect all_irrs and is_unique, or use mirr() for a single value.",
+        "type": "number"
+      },
+      "is_unique": {
+        "default": true,
+        "description": "True when exactly one IRR exists; when False, irr is one of several.",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "irr"
+    ],
+    "type": "object"
+  },
+  "title": "Internal Rate of Return"
+}

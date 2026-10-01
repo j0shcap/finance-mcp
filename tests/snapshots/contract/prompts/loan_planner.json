@@ -1,0 +1,36 @@
+{
+  "arguments": [
+    {
+      "description": "Amount borrowed, e.g. '400000'.\n\nProvide a value matching the following JSON schema: {\"description\":\"Amount borrowed, e.g. '400000'.\",\"type\":\"string\"}. Encode non-string values as JSON.",
+      "name": "principal",
+      "required": true
+    },
+    {
+      "description": "Annual note rate, e.g. '6.5%' (the rate, not a fee-loaded APR).\n\nProvide a value matching the following JSON schema: {\"description\":\"Annual note rate, e.g. '6.5%' (the rate, not a fee-loaded APR).\",\"type\":\"string\"}. Encode non-string values as JSON.",
+      "name": "annual_rate",
+      "required": true
+    },
+    {
+      "description": "Loan term in months, e.g. '360' for 30 years.\n\nProvide a value matching the following JSON schema: {\"description\":\"Loan term in months, e.g. '360' for 30 years.\",\"type\":\"string\"}. Encode non-string values as JSON.",
+      "name": "term_months",
+      "required": true
+    },
+    {
+      "description": "Optional extra principal paid each month, e.g. '250'.\n\nProvide a value matching the following JSON schema: {\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"description\":\"Optional extra principal paid each month, e.g. '250'.\"}. Encode non-string values as JSON.",
+      "name": "extra_payment",
+      "required": false
+    }
+  ],
+  "description": "Plan a fixed-rate loan or mortgage: payment, total interest, APR vs effective\nannual rate, how extra payments shorten the loan (and what that is really worth),\nand a refinance break-even that does not mistake a longer term for a saving.",
+  "name": "loan_planner",
+  "rendered_description": "Plan a fixed-rate loan or mortgage: payment, total interest, APR vs effective\nannual rate, how extra payments shorten the loan (and what that is really worth),\nand a refinance break-even that does not mistake a longer term for a saving.",
+  "rendered_roles": [
+    "user"
+  ],
+  "sample_arguments": {
+    "annual_rate": "6.5%",
+    "extra_payment": "250",
+    "principal": "400000",
+    "term_months": "360"
+  }
+}

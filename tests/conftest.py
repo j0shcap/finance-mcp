@@ -19,6 +19,15 @@ settings.register_profile("explore", max_examples=5_000, deadline=None)
 settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "default"))
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--update-snapshots",
+        action="store_true",
+        default=False,
+        help="Rewrite tests/snapshots/contract/ from the running server (make snapshot).",
+    )
+
+
 @pytest.fixture
 async def client() -> AsyncIterator[Client[FastMCPTransport]]:
     """An in-memory MCP client connected to a fresh finance-mcp server."""

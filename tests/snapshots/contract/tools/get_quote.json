@@ -1,0 +1,207 @@
+{
+  "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": false,
+    "openWorldHint": true,
+    "readOnlyHint": true,
+    "title": "Stock Quotes"
+  },
+  "description": "Current price snapshots for up to 25 tickers (price, change, ranges, market cap).\n\nTickers are fetched in parallel and results are partial: successful quotes come back\nin `quotes`, and any ticker that could not be fetched is named in `errors` with the\nreason (invalid/delisted symbol vs. a source failure). One bad ticker does not\ninvalidate the rest, so there is no need to retry the whole batch.",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "tickers": {
+        "description": "1-25 ticker symbols, e.g. ['AAPL', 'MSFT'].",
+        "items": {
+          "description": "Ticker symbol, e.g. 'AAPL'. Case-insensitive. Yahoo suffixes and prefixes are allowed (BRK-B, ^GSPC, RY.TO, BTC-USD, EURUSD=X); one symbol per value.",
+          "maxLength": 24,
+          "minLength": 1,
+          "pattern": "^\\s*[A-Za-z0-9.\\-^=]{1,20}\\s*$",
+          "type": "string"
+        },
+        "maxItems": 25,
+        "minItems": 1,
+        "type": "array"
+      }
+    },
+    "required": [
+      "tickers"
+    ],
+    "type": "object"
+  },
+  "name": "get_quote",
+  "outputSchema": {
+    "description": "Quotes for a batch of tickers: the ones that worked, plus per-ticker failures.",
+    "properties": {
+      "errors": {
+        "description": "One entry per ticker that could not be fetched; empty when all succeeded. A failed ticker does NOT invalidate the quotes that are present.",
+        "items": {
+          "description": "Why one ticker in a get_quote batch could not be fetched.",
+          "properties": {
+            "error": {
+              "description": "Why it failed: an invalid/delisted symbol, or a source/network failure. Read it before retrying - retrying an invalid symbol will not help.",
+              "type": "string"
+            },
+            "symbol": {
+              "description": "The ticker that failed, normalized (or exactly as given if it could not be).",
+              "type": "string"
+            }
+          },
+          "required": [
+            "symbol",
+            "error"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "quotes": {
+        "description": "Successful quotes in the order their tickers were requested (duplicate/equivalent spellings collapse to one entry).",
+        "items": {
+          "description": "A current price snapshot for one ticker.",
+          "properties": {
+            "change": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Price change vs previous close, in quote currency."
+            },
+            "change_percent": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Change vs previous close, as a PERCENT (1.5 = 1.5%)."
+            },
+            "currency": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Quote currency (ISO 4217, e.g. 'USD')."
+            },
+            "day_high": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Intraday high, in quote currency."
+            },
+            "day_low": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Intraday low, in quote currency."
+            },
+            "market_cap": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Market capitalization in quote currency (absolute units)."
+            },
+            "previous_close": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Previous session close, in quote currency."
+            },
+            "price": {
+              "description": "Latest price, in quote currency.",
+              "type": "number"
+            },
+            "symbol": {
+              "description": "Ticker symbol.",
+              "type": "string"
+            },
+            "volume": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Volume of the latest session, in shares."
+            },
+            "year_high": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "52-week high, in quote currency."
+            },
+            "year_low": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "52-week low, in quote currency."
+            }
+          },
+          "required": [
+            "symbol",
+            "price"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "quotes"
+    ],
+    "type": "object"
+  },
+  "title": "Stock Quotes"
+}

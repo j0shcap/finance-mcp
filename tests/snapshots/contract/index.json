@@ -1,0 +1,37 @@
+{
+  "prompts": [
+    "analyze_stock",
+    "compare_stocks",
+    "investment_cashflows",
+    "bond_analysis",
+    "loan_planner"
+  ],
+  "resources": [
+    "finance_conventions"
+  ],
+  "tools": [
+    "time_value_of_money",
+    "bond_price",
+    "bond_ytm",
+    "bond_price_dated",
+    "bond_ytm_dated",
+    "loan_schedule",
+    "npv",
+    "irr",
+    "mirr",
+    "xnpv",
+    "xirr",
+    "convert_rate",
+    "get_quote",
+    "get_price_history",
+    "get_financials",
+    "get_company_profile",
+    "get_analyst_data",
+    "get_news",
+    "search_symbols",
+    "get_key_metrics",
+    "analyze_performance",
+    "compare_to_benchmark",
+    "compare_tickers"
+  ]
+}
