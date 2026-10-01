@@ -121,7 +121,9 @@ class LoanSchedule(BaseModel):
 class NPVResult(BaseModel):
     """Net present value at a given discount rate."""
 
-    rate: float = Field(description="Discount rate used (per period, or annual for dated).")
+    rate: float = Field(
+        description="Discount rate used, as a decimal: per period for npv, annual for xnpv."
+    )
     npv: float = Field(description="Net present value.")
 
 
@@ -133,13 +135,13 @@ class IRRResult(BaseModel):
     """
 
     irr: float = Field(
-        description="Representative IRR (per period, or annual for dated). When not unique "
-        "this is the smallest non-negative root (or the root nearest zero if all are "
-        "negative); inspect all_irrs and is_unique, or use mirr() for a single value."
+        description="Representative IRR as a decimal: per period for irr, annual for xirr. "
+        "When not unique this is the smallest non-negative root (or the root nearest zero if "
+        "all are negative); inspect all_irrs and is_unique, or use mirr() for a single value."
     )
     all_irrs: list[float] = Field(
         default_factory=list,
-        description="Every real IRR found in (-100%, 1,000,000%], ascending.",
+        description="Every real IRR found in (-100%, 1,000,000%], as decimals, ascending.",
     )
     is_unique: bool = Field(
         default=True,
@@ -150,9 +152,15 @@ class IRRResult(BaseModel):
 class MIRRResult(BaseModel):
     """Modified internal rate of return (always unique given the two rates)."""
 
-    mirr: float = Field(description="Modified IRR per period (annualize externally if needed).")
-    finance_rate: float = Field(description="Rate used to discount negative cashflows.")
-    reinvest_rate: float = Field(description="Rate used to compound positive cashflows.")
+    mirr: float = Field(
+        description="Modified IRR per period, as a decimal (annualize externally if needed)."
+    )
+    finance_rate: float = Field(
+        description="Per-period rate used to discount negative cashflows, as a decimal."
+    )
+    reinvest_rate: float = Field(
+        description="Per-period rate used to compound positive cashflows, as a decimal."
+    )
 
 
 class DatedCashflow(BaseModel):
@@ -177,8 +185,11 @@ class RateConversionResult(BaseModel):
 class BondAnalytics(BaseModel):
     """Price and interest-rate risk metrics for a fixed-coupon bond."""
 
-    price: float = Field(description="Present value (clean price) of the bond.")
-    current_yield: float = Field(description="Annual coupon divided by price.")
+    price: float = Field(
+        description="Present value of the bond, in the same units as face. Priced on a coupon "
+        "date, so clean and dirty price coincide."
+    )
+    current_yield: float = Field(description="Annual coupon divided by price, as a decimal.")
     macaulay_duration: float = Field(description="Macaulay duration in years.")
     modified_duration: float = Field(description="Modified duration in years (price sensitivity).")
     convexity: float = Field(description="Convexity in years^2.")

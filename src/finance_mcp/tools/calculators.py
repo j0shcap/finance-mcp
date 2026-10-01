@@ -190,7 +190,10 @@ def register(mcp: FastMCP) -> None:
         face: BondFace,
         coupon_rate: CouponRate,
         years_to_maturity: YearsToMaturity,
-        price: Annotated[float, Field(gt=0, description="Current market price of the bond.")],
+        price: Annotated[
+            float,
+            Field(gt=0, description="Market price of the bond, in the same units as face."),
+        ],
         frequency: CouponFrequency = 2,
     ) -> BondYTM:
         """Solve the annual yield to maturity that prices the bond at the given market price."""
@@ -293,7 +296,11 @@ def register(mcp: FastMCP) -> None:
         principal: Annotated[float, Field(gt=0, description="Loan amount borrowed.")],
         annual_rate: Annotated[
             float,
-            Field(ge=0, description="Annual interest rate as a decimal, e.g. 0.06 for 6%."),
+            Field(
+                ge=0,
+                description="Annual interest rate (nominal APR, compounded monthly) as a "
+                "decimal, e.g. 0.06 for 6%.",
+            ),
         ],
         term_months: Annotated[
             int,
@@ -379,14 +386,16 @@ def register(mcp: FastMCP) -> None:
             float,
             Field(
                 gt=-1,
-                description="Rate to finance (discount) negative cashflows, as a decimal.",
+                description="Per-period rate to finance (discount) negative cashflows, as a "
+                "decimal, e.g. 0.08 for 8%.",
             ),
         ],
         reinvest_rate: Annotated[
             float,
             Field(
                 gt=-1,
-                description="Rate to reinvest (compound) positive cashflows, as a decimal.",
+                description="Per-period rate to reinvest (compound) positive cashflows, as a "
+                "decimal, e.g. 0.06 for 6%.",
             ),
         ],
     ) -> MIRRResult:
@@ -399,7 +408,10 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool(annotations=calculator("Net Present Value (Dated Cashflows)"))
     def xnpv(
-        rate: Annotated[float, Field(gt=-1, description="Annual discount rate as a decimal.")],
+        rate: Annotated[
+            float,
+            Field(gt=-1, description="Annual discount rate as a decimal, e.g. 0.08 for 8%."),
+        ],
         cashflows: Annotated[
             list[DatedCashflow],
             Field(
@@ -434,7 +446,13 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool(annotations=calculator("Nominal / Effective Rate Conversion"))
     def convert_rate(
-        rate: Annotated[float, Field(description="The rate to convert, as a decimal.")],
+        rate: Annotated[
+            float,
+            Field(
+                description="The annual rate to convert (nominal or effective, per direction) "
+                "as a decimal, e.g. 0.05 for 5%."
+            ),
+        ],
         periods_per_year: Annotated[
             int,
             Field(
