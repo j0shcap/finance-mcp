@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 
+from finance_mcp.data.cache import TTLCache
 from tests.fakes import (
     QUOTE_FI,
     FakeClock,
@@ -70,22 +71,28 @@ def test_cache_entry_is_timestamped_after_the_fetch_completes() -> None:
 
 
 def test_refreshing_a_present_key_makes_it_most_recently_used() -> None:
-    client = make_client(cache_max_entries=2)
+    cache = TTLCache(FakeClock(), max_entries=2)
 
     def racing_fetch() -> str:
-        # What concurrent get_quote calls do: another thread inserts this key while this
+        # What concurrent get_quote calls do: another thread caches this key while this
         # fetch is in flight (so the write below lands on a key already present), and a
-        # third key is cached after it.
-        client._cache[("k", "A")] = (client._now(), 30.0, "stale")
-        client._cache[("k", "B")] = (client._now(), 30.0, "B")
+        # second key is cached after it.
+        cache.get_or_fetch(("k", "A"), 30.0, lambda: "stale")
+        cache.get_or_fetch(("k", "B"), 30.0, lambda: "B")
         return "fresh"
 
-    assert client._cached(("k", "A"), 30.0, racing_fetch) == "fresh"
-    client._cached(("k", "C"), 30.0, lambda: "C")  # over the bound: evict the LRU entry
+    assert cache.get_or_fetch(("k", "A"), 30.0, racing_fetch) == "fresh"
+    cache.get_or_fetch(("k", "C"), 30.0, lambda: "C")  # over the bound: evict the LRU entry
     # Refreshing A must make it most recently used; leaving it in the racing thread's
     # older slot would evict the entry that was just written.
-    assert client._cache[("k", "A")][2] == "fresh"
-    assert ("k", "B") not in client._cache
+    assert cache.get_or_fetch(("k", "A"), 30.0, lambda: "refetched") == "fresh"
+    assert ("k", "B") not in cache
+
+
+def test_a_value_the_predicate_rejects_is_returned_but_not_kept() -> None:
+    cache = TTLCache(FakeClock(), max_entries=4)
+    assert cache.get_or_fetch(("k",), 30.0, lambda: "big", cacheable=lambda v: v != "big") == "big"
+    assert ("k",) not in cache and len(cache) == 0
 
 
 @pytest.mark.parametrize("fetch", ["get_company_profile", "get_key_metrics", "get_analyst_data"])
