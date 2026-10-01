@@ -9,7 +9,7 @@ import datetime
 
 import pytest
 
-from tests.live.conftest import AAPL, BTC, UNKNOWN, Layer, require_present
+from tests.live.conftest import AAPL, BTC, SPY, UNKNOWN, Layer, require_present
 
 ANNUALIZED_FIELDS = (
     "annualized_return_percent",
@@ -89,6 +89,48 @@ async def test_analyze_performance_suppresses_annualization_on_short_windows(
     # The unannualized figures are still reported: they are what the model should quote.
     assert stats.bars > 5
     assert stats.max_drawdown_percent <= 0
+
+
+async def test_analyze_performance_defaults_to_the_treasury_bill_rate(layer: Layer) -> None:
+    """^IRX is a percent discount quote; the default must come back as a plausible decimal.
+
+    A unit slip (percent read as a decimal) would give ~4.0 instead of ~0.04.
+    """
+    stats = await layer.call("analyze_performance", ticker=AAPL, period="1y")
+
+    assert stats.risk_free_rate_source == "treasury_bill", stats.risk_free_rate_note
+    assert stats.risk_free_rate is not None
+    assert 0 <= stats.risk_free_rate < 0.2, (
+        f"a one-year T-bill average of {stats.risk_free_rate} is not a plausible annual decimal"
+    )
+    require_present(stats, ("sharpe_ratio", "downside_deviation_percent"))
+
+
+async def test_a_window_older_than_the_treasury_bill_history_has_no_default_rate(
+    layer: Layer,
+) -> None:
+    """^GSPC's max history starts in 1927, ^IRX's in 1960: the rate is unavailable, not 0."""
+    stats = await layer.call("analyze_performance", ticker="^GSPC", period="max")
+
+    assert stats.start_date < "1960-01-01", f"^GSPC max now starts {stats.start_date}"
+    assert stats.risk_free_rate is None
+    assert stats.risk_free_rate_source == "unavailable"
+    assert stats.risk_free_rate_note is not None and "^IRX" in stats.risk_free_rate_note
+    assert stats.sharpe_ratio is None
+    require_present(stats, ("annualized_return_percent", "calmar_ratio"))
+
+
+async def test_news_flags_company_mentions_for_a_stock_only(layer: Layer) -> None:
+    stock = await layer.call("get_news", ticker=AAPL, count=10)
+    fund = await layer.call("get_news", ticker=SPY, count=5)
+
+    assert stock.relevance_check == "applied"
+    assert all(isinstance(a.mentions_company, bool) for a in stock.articles)
+    assert any(a.mentions_company for a in stock.articles), (
+        "no AAPL article names Apple or AAPL; the name extraction or matching has broken"
+    )
+    assert fund.relevance_check == "not_an_equity"
+    assert all(a.mentions_company is None for a in fund.articles)
 
 
 async def test_news_shape(layer: Layer) -> None:
