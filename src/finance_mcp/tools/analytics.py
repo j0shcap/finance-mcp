@@ -98,8 +98,9 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
         when the overlap spans under 85 days; beta, correlation and excess return are not,
         since they need no annualization. risk_free_rate only affects alpha; left out, it is
         the 13-week T-bill yield averaged over the overlapping dates (alpha is null if that
-        cannot be formed). Returns are in each instrument's own quote currency, so a cross-currency
-        pair folds an FX move into every figure - say so rather than reading it straight.
+        cannot be formed). Returns are in each instrument's own quote currency, so a
+        cross-currency pair folds an FX move into every figure - say so rather than reading
+        it straight.
         """
         return await run_data(
             lambda: client.compare_to_benchmark(ticker, benchmark, period, risk_free_rate)
@@ -128,10 +129,10 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
         Each row carries total/annualized return, volatility, max drawdown and the
         risk-adjusted ratios over `period` - measured against the caller's risk_free_rate,
         or by default the 13-week T-bill yield over that row's own dates (each row echoes
-        its rate) - plus Yahoo's valuation metrics (P/E, forward
-        P/E, P/B, P/S, PEG, EV/EBITDA, margins, ROE, debt/equity) in their as-reported
-        units - margins and ROE are fractions, debt_to_equity is already a percent. Rank
-        peers on PEG or growth-vs-multiple rather than raw P/E.
+        its rate) - plus Yahoo's valuation metrics (P/E, forward P/E, P/B, P/S, PEG,
+        EV/EBITDA, margins, ROE, debt/equity) in their as-reported units - margins and ROE
+        are fractions, debt_to_equity is already a percent. Rank peers on PEG or
+        growth-vs-multiple rather than raw P/E.
 
         Tickers are fetched in parallel and results are partial: a ticker whose price
         history could not be fetched is named in `errors` with the reason and has no row,
