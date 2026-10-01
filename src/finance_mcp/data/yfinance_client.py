@@ -118,6 +118,13 @@ class _Identity(NamedTuple):
     short_name: str | None
 
 
+class _IdentityGap(NamedTuple):
+    """Why a symbol's identity is missing, and whether retrying could change that."""
+
+    reason: str
+    lasting: bool
+
+
 class YFinanceClient:
     """Thin yfinance facade with a per-key TTL cache (bounded, least-recently-used)."""
 
@@ -744,7 +751,8 @@ class YFinanceClient:
             ("news", symbol, str(count)),
             self._history_ttl,
             lambda: self._fetch_news(symbol, count),
-            # Unflagged news from a transient identity failure is retried, not pinned.
+            # Unflagged news from an identity OUTAGE is retried, not pinned; a symbol Yahoo
+            # simply has no name for is a lasting answer and is cached like any other.
             cacheable=lambda result: result.relevance_check != "unavailable",
         )
 
@@ -752,10 +760,16 @@ class YFinanceClient:
         # The identity behind the relevance flags is an independent request.
         (articles, source), identity = _in_parallel(
             lambda: self._news_articles(symbol, count),
-            lambda: self._identity_or_none(symbol),
+            lambda: self._identity_or_gap(symbol),
         )
-        check = _flag_mentions(articles, symbol, identity)
-        return NewsResult(symbol=symbol, articles=articles, source=source, relevance_check=check)
+        check, note = _flag_mentions(articles, symbol, identity)
+        return NewsResult(
+            symbol=symbol,
+            articles=articles,
+            source=source,
+            relevance_check=check,
+            relevance_note=note,
+        )
 
     def _news_articles(self, symbol: str, count: int) -> tuple[list[NewsArticle], NewsSource]:
         with _unavailable_on_error(f"Failed to fetch news for '{symbol}'"):
@@ -770,18 +784,21 @@ class YFinanceClient:
             articles = [a for a in (_news_article(it) for it in items) if a is not None][:count]
         return articles, "ticker"
 
-    def _identity_or_none(self, symbol: str) -> _Identity | None:
-        """The symbol's instrument type and names, or None if Yahoo cannot supply them.
+    def _identity_or_gap(self, symbol: str) -> _Identity | _IdentityGap:
+        """The symbol's instrument type and names, or why Yahoo could not supply them.
 
         Only the relevance flags depend on this, so a failure degrades them to null rather
-        than failing the news call.
+        than failing the news call. SymbolNotFound (no info, or no name in it) is a lasting
+        answer about the symbol; any other DataUnavailable is an outage worth retrying.
         """
         try:
             return self._cached(
                 ("identity", symbol), self._fundamentals_ttl, lambda: self._fetch_identity(symbol)
             )
-        except DataUnavailable:
-            return None
+        except SymbolNotFound as exc:
+            return _IdentityGap(str(exc), lasting=True)
+        except DataUnavailable as exc:
+            return _IdentityGap(str(exc), lasting=False)
 
     def _fetch_identity(self, symbol: str) -> _Identity:
         _, info = self._ticker_with_info(symbol, "company identity", "identity")
@@ -987,21 +1004,21 @@ def _in_parallel[A, B](first: Callable[[], A], second: Callable[[], B]) -> tuple
 
 
 def _flag_mentions(
-    articles: list[NewsArticle], symbol: str, identity: _Identity | None
-) -> RelevanceCheck:
-    """Set each article's mentions_company, and say whether that could be assessed."""
-    if identity is None:
-        return "unavailable"
+    articles: list[NewsArticle], symbol: str, identity: _Identity | _IdentityGap
+) -> tuple[RelevanceCheck, str | None]:
+    """Set each article's mentions_company; say whether that could be assessed, and why not."""
+    if isinstance(identity, _IdentityGap):
+        return ("no_company_name" if identity.lasting else "unavailable"), identity.reason
     # Only a company has a name a headline can omit; for an ETF, index, fund, coin or
     # currency pair the market-wide stories are the relevant ones.
     if identity.quote_type != "EQUITY":
-        return "not_an_equity"
+        return "not_an_equity", None
     names = relevance.company_aliases(identity.long_name, identity.short_name)
     symbols = relevance.symbol_aliases(symbol)
     for article in articles:
         text = f"{article.title} {article.summary or ''}"
         article.mentions_company = relevance.mentions_company(text, names, symbols)
-    return "applied"
+    return "applied", None
 
 
 def _elapsed_days(start: str, end: str) -> int:

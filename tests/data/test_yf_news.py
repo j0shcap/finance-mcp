@@ -1,7 +1,6 @@
 """YFinanceClient.get_news and its search fallback."""
 
 import threading
-from typing import Any
 
 import pytest
 from yfinance.exceptions import (
@@ -286,21 +285,42 @@ def test_get_news_does_not_assess_a_non_equity(quote_type: str) -> None:
     assert result.relevance_check == "not_an_equity"
 
 
-@pytest.mark.parametrize(
-    "factory_kwargs",
-    [
-        {"info_error": YFException("info endpoint down")},
-        {"info": {}},  # Yahoo's empty info for a symbol it cannot describe
-    ],
-)
-def test_get_news_without_a_company_identity_still_returns_the_news(
-    factory_kwargs: dict[str, Any],
-) -> None:
-    client = make_client(fake_ticker_factory(news=MIXED_NEWS, **factory_kwargs))
+def test_get_news_when_the_name_cannot_be_fetched_still_returns_the_news() -> None:
+    client = make_client(
+        fake_ticker_factory(news=MIXED_NEWS, info_error=YFException("info endpoint down"))
+    )
     result = client.get_news("AAPL")
     assert len(result.articles) == 3
     assert _flags(result) == [None, None, None]
     assert result.relevance_check == "unavailable"
+    assert result.relevance_note is not None and "info endpoint down" in result.relevance_note
+
+
+def test_get_news_for_a_symbol_yahoo_has_no_name_for() -> None:
+    # Yahoo's empty info is a lasting answer about the symbol, not an outage.
+    client = make_client(fake_ticker_factory(news=MIXED_NEWS, info={}))
+    result = client.get_news("AAPL")
+    assert len(result.articles) == 3
+    assert _flags(result) == [None, None, None]
+    assert result.relevance_check == "no_company_name"
+    assert result.relevance_note is not None and "AAPL" in result.relevance_note
+
+
+def test_get_news_caches_a_symbol_with_no_name_like_any_other() -> None:
+    # An unknown symbol: no stream, no search hits, no name. All three answers are lasting,
+    # so a repeat call must not go back to Yahoo three times.
+    factory, calls = counting(fake_ticker_factory(news=[], info={}))
+    search = FakeSearch(news=[])
+    client = make_client(factory, search_factory=search)
+    client.get_news("ZZZZ")
+    client.get_news("ZZZZ")
+    assert len(calls) == 2  # news + identity, once
+    assert len(search.calls) == 1
+
+
+def test_get_news_flags_are_assessed_with_no_note() -> None:
+    client = make_client(fake_ticker_factory(news=MIXED_NEWS, info=APPLE_INFO))
+    assert client.get_news("AAPL").relevance_note is None
 
 
 def test_get_news_does_not_cache_a_result_whose_flags_could_not_be_assessed() -> None:

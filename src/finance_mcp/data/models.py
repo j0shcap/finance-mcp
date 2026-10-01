@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, SerializerFunctionWrapHandler, field_seri
 TVMVariable = Literal["pv", "fv", "pmt", "rate", "nper"]
 Statement = Literal["income", "balance", "cashflow"]
 NewsSource = Literal["ticker", "search"]
-RelevanceCheck = Literal["applied", "not_an_equity", "unavailable"]
+RelevanceCheck = Literal["applied", "not_an_equity", "no_company_name", "unavailable"]
 RiskFreeSource = Literal["caller", "treasury_bill", "unavailable"]
 StatementPeriod = Literal["annual", "quarterly"]
 HistoryPeriod = Literal["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "max"]
@@ -680,9 +680,15 @@ class NewsResult(MarketData):
         description=(
             "Whether each article's mentions_company was assessed. 'applied': it was. "
             "'not_an_equity': the symbol is an ETF, index, fund, coin or currency pair, where "
-            "market-wide news is relevant, so every flag is null. 'unavailable': the company's "
-            "name could not be fetched, so every flag is null; the articles are unaffected."
+            "market-wide news is relevant, so every flag is null. 'no_company_name': Yahoo has "
+            "no name for this symbol (often an unknown symbol), so every flag is null. "
+            "'unavailable': fetching the name failed (see relevance_note) - every flag is null "
+            "and a retry may succeed. The articles themselves are unaffected in every case."
         ),
+    )
+    relevance_note: str | None = Field(
+        default=None,
+        description="Why relevance_check is 'no_company_name' or 'unavailable'; null otherwise.",
     )
 
 

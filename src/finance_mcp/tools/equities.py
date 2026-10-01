@@ -137,7 +137,8 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
         mentions_company says whether its title or summary names the company or its ticker.
         It is a text match (brand and executive names are not), so it flags rather than
         filters: every article is returned, in order. relevance_check says when the flags are
-        null (not a stock, or the company's name could not be fetched).
+        null (not a stock, Yahoo has no company name for it, or fetching the name failed, with
+        relevance_note saying why).
         """
         return await run_data(lambda: client.get_news(ticker, count))
 
