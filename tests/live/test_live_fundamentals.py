@@ -6,6 +6,11 @@ unit assertions live here.
 
 import datetime
 
+import pandas as pd
+import pytest
+import yfinance as yf
+
+from finance_mcp.data.yahoo import corporate_actions
 from tests.live.conftest import (
     AAPL,
     SAP,
@@ -13,6 +18,7 @@ from tests.live.conftest import (
     Layer,
     iso_dates_descending,
     require_present,
+    retry_throttled,
 )
 
 #: Fields Yahoo populates for any large listing. peg_ratio is included deliberately: the
@@ -207,6 +213,27 @@ async def test_company_profile_shape(layer: Layer) -> None:
     for split in profile.splits:
         datetime.date.fromisoformat(split.date)
         assert split.ratio > 0
+
+
+def test_profile_events_from_weekly_history_match_the_public_daily_events(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """corporate_actions' weekly-history shortcut returns exactly what .dividends/.splits do.
+
+    KO's events reach back before 1970, so a source that drops old events can't pass. The
+    private cache is asserted present: without it corporate_actions quietly takes the slow
+    public path, and this test is where that shows up.
+    """
+    monkeypatch.setattr(yf.config.debug, "hide_exceptions", False)  # as YahooSource sets it
+    ticker = yf.Ticker("KO")
+
+    def read() -> tuple[pd.Series, pd.Series, pd.Series, pd.Series]:
+        assert hasattr(ticker._lazy_load_price_history(), "_get_history_cache")
+        return (*corporate_actions(ticker), ticker.dividends, ticker.splits)
+
+    dividends, splits, daily_dividends, daily_splits = retry_throttled(read, "the KO history")
+    assert dividends.index.min().year < 1970 and splits.index.min().year < 1970
+    assert dividends.equals(daily_dividends) and splits.equals(daily_splits)
 
 
 async def test_company_profile_dividend_yield_is_a_percent(layer: Layer) -> None:

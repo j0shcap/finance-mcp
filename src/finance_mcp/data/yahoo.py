@@ -68,13 +68,14 @@ DEFAULT_REQUEST_RETRIES = 2
 #: jittered by +-50% so throttled requests don't retry in lockstep.
 RETRY_BASE_DELAY_SECONDS = 2.0
 #: A retry is only started if it can begin within this long of the first attempt. yfinance's
-#: own request timeout is 30s, so this keeps a retried call well inside an MCP client's.
+#: own request timeouts are 10s (price history) and 30s (everything else), so this keeps a
+#: retried call well inside an MCP client's.
 RETRY_BUDGET_SECONDS = 15.0
 #: How the transport fails fast and transiently, matched by class name anywhere in an
 #: exception's hierarchy (curl_cffi's classes, without importing it): a dropped or refused
 #: connection or a DNS blip (ConnectionError, DNSError), and a truncated body
 #: (IncompleteRead). SSL and proxy errors subclass or sit beside them but don't heal, so
-#: they are excluded first; a Timeout has already spent yfinance's 30s and isn't retried.
+#: they are excluded first; a Timeout has already spent yfinance's 10-30s and isn't retried.
 _TRANSIENT_ERROR_NAMES = frozenset({"ConnectionError", "IncompleteRead"})
 _PERMANENT_ERROR_NAMES = frozenset({"SSLError", "ProxyError"})
 #: curl error codes curl_cffi raises as a bare HTTPError: HTTP2 (16), HTTP2_STREAM (92) -
@@ -275,10 +276,9 @@ class YahooSource:
 
     def profile(self, symbol: str) -> CompanyProfile:
         ticker, info = self._ticker_with_info(symbol, "profile", "profile")
-        # Also covers the dividends/splits reads, which are separate Yahoo requests.
+        # Also covers corporate_actions, a separate Yahoo request.
         with _unavailable_on_error(f"Failed to parse profile for '{symbol}'"):
-            dividends = self._request(lambda: ticker.dividends)
-            splits = self._request(lambda: ticker.splits)
+            dividends, splits = self._request(lambda: corporate_actions(ticker))
             return CompanyProfile(
                 symbol=symbol,
                 name=info.get("longName") or info.get("shortName"),
@@ -440,6 +440,23 @@ _FAST_INFO_FIELDS = (
     "market_cap",
     "last_volume",
 )
+
+
+def corporate_actions(ticker: Any) -> tuple[Any, Any]:
+    """A ticker's (dividends, splits) over its whole history, with exact ex-dates.
+
+    Read from yfinance's private price-history cache at a weekly interval: the same events
+    the public .dividends/.splits get from daily history, in about a quarter of the data.
+    Falls back to those public reads if the cache is gone. Run it as one request: it may
+    also fetch the exchange timezone.
+    """
+    load = getattr(ticker, "_lazy_load_price_history", None)
+    price_history = load() if load is not None else None
+    history_cache = getattr(price_history, "_get_history_cache", None)
+    if history_cache is None:
+        return ticker.dividends, ticker.splits
+    actions = history_cache(period="max", interval="1wk")
+    return actions["dividends"], actions["splits"]
 
 
 def _read_fast_info(ticker: Any) -> dict[str, Any]:

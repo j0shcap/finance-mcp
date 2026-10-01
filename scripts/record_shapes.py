@@ -47,6 +47,7 @@ def record() -> dict[str, Any]:
     news = _fetch(lambda: apple.get_news(count=5, tab="news"))
     search = _fetch(lambda: yf.Search("apple", max_results=3, news_count=3, lists_count=0))
     recommendations = _fetch(lambda: apple.recommendations)
+    dividends, splits = _fetch(lambda: yahoo.corporate_actions(apple))
     shapes: dict[str, Any] = {
         "fast_info": attribute_shape(
             apple.fast_info, keys["fi"], lambda obj, name: _fetch(lambda: getattr(obj, name))
@@ -66,10 +67,8 @@ def record() -> dict[str, Any]:
         "statement_quarterly": frame_shape(
             _fetch(lambda: apple.quarterly_balance_sheet), named_columns=False
         ),
-        # The same Series .dividends/.splits return, over a shorter window: those read the
-        # whole price history, megabytes for AAPL. 10y still includes AAPL's 2020 split.
-        "dividends": series_shape(_fetch(lambda: apple.get_dividends(period="2y"))),
-        "splits": series_shape(_fetch(lambda: apple.get_splits(period="10y"))),
+        "dividends": series_shape(dividends),
+        "splits": series_shape(splits),
         "recommendations": frame_shape(recommendations),
         "recommendation_row": mapping_shape(recommendations.to_dict("records"), keys["row"]),
         "info_equity": mapping_shape([_fetch(lambda: apple.info)], keys["info"]),
