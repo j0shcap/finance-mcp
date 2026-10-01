@@ -34,9 +34,9 @@ def test_annualized_return_equals_total_return_over_one_year() -> None:
 
 
 def test_annualized_return_is_independent_of_bar_count() -> None:
-    # The reported BTC-USD bug in pure-math form: the same calendar move over the same
-    # elapsed time must annualize identically whether the instrument printed 253 weekday
-    # bars or 366 seven-day-a-week bars. The old bar-count exponent gave two answers.
+    # The same calendar move over the same elapsed time must annualize identically whether
+    # the instrument printed 253 weekday bars or 366 seven-day-a-week bars (crypto); an
+    # exponent based on the bar count would give two answers.
     weekday = [100.0] + [100.0] * 251 + [77.02]
     seven_day = [100.0] + [100.0] * 364 + [77.02]
     assert annualized_return(weekday, years=1.0) == pytest.approx(
