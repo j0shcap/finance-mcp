@@ -276,7 +276,7 @@ class YahooSource:
 
     def profile(self, symbol: str) -> CompanyProfile:
         ticker, info = self._ticker_with_info(symbol, "profile", "profile")
-        # Also covers the dividend and split history, a separate Yahoo request.
+        # Also covers corporate_actions, a separate Yahoo request.
         with _unavailable_on_error(f"Failed to parse profile for '{symbol}'"):
             dividends, splits = self._request(lambda: corporate_actions(ticker))
             return CompanyProfile(
@@ -445,12 +445,10 @@ _FAST_INFO_FIELDS = (
 def corporate_actions(ticker: Any) -> tuple[Any, Any]:
     """A ticker's (dividends, splits) over its whole history, with exact ex-dates.
 
-    yfinance's public .dividends and .splits download every daily bar since listing (1.6 MB
-    for KO) to read the events Yahoo sends alongside them. Its private price-history cache
-    takes an interval, and weekly history carries the same events - verified equal for
-    stocks, ETFs, funds, indices, FX and crypto - in about a quarter of the data. A yfinance
-    without that cache gets the public path. Either way this is one Yahoo request block:
-    loading the price history can also look up the exchange timezone.
+    Read from yfinance's private price-history cache at a weekly interval: the same events
+    the public .dividends/.splits get from daily history, in about a quarter of the data.
+    Falls back to those public reads if the cache is gone. Run it as one request: it may
+    also fetch the exchange timezone.
     """
     load = getattr(ticker, "_lazy_load_price_history", None)
     price_history = load() if load is not None else None

@@ -128,7 +128,9 @@ def fake_ticker_factory(
     # Every attribute the client may read a statement from, so the stub cannot drift.
     statement_attrs = frozenset(FINANCIALS_ATTR.values())
 
-    def history_cache(period: str, interval: str) -> dict[str, Any]:
+    def history_cache(
+        period: str = "max", interval: str = "1d", repair: bool = False
+    ) -> dict[str, Any]:
         # yfinance's private price-history cache, which corporate_actions reads.
         if actions_error is not None:
             raise actions_error

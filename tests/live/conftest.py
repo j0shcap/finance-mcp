@@ -17,7 +17,8 @@ second Yahoo call.
 import asyncio
 import datetime
 import re
-from collections.abc import AsyncIterator, Sequence
+import time
+from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
 from functools import partial
 from itertools import pairwise
@@ -86,6 +87,20 @@ def _throttled_quote_errors(result: Any) -> list[str]:
     """
     errors = getattr(result, "errors", None) or []
     return [e.error for e in errors if _is_throttle_message(e.error)]
+
+
+def retry_throttled[T](fetch: Callable[[], T], what: str) -> T:
+    """``fetch()`` with Layer.call's throttle policy, for a test that calls yfinance itself."""
+    for delay in (*BACKOFF_SECONDS, None):  # None marks the final attempt
+        try:
+            return fetch()
+        except Exception as exc:
+            if not _is_rate_limited(exc):
+                raise
+            if delay is None:
+                pytest.skip(f"Yahoo rate-limited {what} after {MAX_ATTEMPTS} attempts: {exc}")
+            time.sleep(delay)
+    raise AssertionError("unreachable")
 
 
 @pytest.fixture(scope="session")

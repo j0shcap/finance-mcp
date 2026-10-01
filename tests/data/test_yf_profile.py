@@ -1,6 +1,7 @@
 """YFinanceClient.get_company_profile."""
 
 from types import SimpleNamespace
+from typing import Any
 
 import pandas as pd
 import pytest
@@ -135,11 +136,18 @@ def test_get_company_profile_reads_events_from_weekly_history() -> None:
     assert factory.captured_actions_calls == [("max", "1wk")]  # type: ignore[attr-defined]
 
 
-def test_corporate_actions_without_the_private_cache_uses_the_public_reads() -> None:
+@pytest.mark.parametrize(
+    "private",
+    [{}, {"_lazy_load_price_history": object}],
+    ids=["no-price-history", "no-history-cache"],
+)
+def test_corporate_actions_without_the_private_cache_uses_the_public_reads(
+    private: dict[str, Any],
+) -> None:
     dividends = make_series(["2024-02-09"], [0.24])
     splits = make_series(["2020-08-31"], [4.0])
     read_dividends, read_splits = corporate_actions(
-        SimpleNamespace(dividends=dividends, splits=splits)
+        SimpleNamespace(dividends=dividends, splits=splits, **private)
     )
     assert read_dividends is dividends and read_splits is splits
 
