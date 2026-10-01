@@ -3,6 +3,8 @@
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from tests.fakes import (
     QUOTE_FI,
     FakeClock,
@@ -84,3 +86,17 @@ def test_refreshing_a_present_key_makes_it_most_recently_used() -> None:
     # older slot would evict the entry that was just written.
     assert client._cache[("k", "A")][2] == "fresh"
     assert ("k", "B") not in client._cache
+
+
+@pytest.mark.parametrize("fetch", ["get_company_profile", "get_key_metrics", "get_analyst_data"])
+def test_fundamentals_are_cached_for_the_fundamentals_ttl(fetch: str) -> None:
+    info = {"longName": "Apple Inc.", "recommendationMean": 2.0}
+    factory, calls = counting(fake_ticker_factory(info=info))
+    clock = FakeClock()
+    get = getattr(make_client(factory, clock=clock, fundamentals_ttl=3600.0), fetch)
+    get("AAPL")
+    get("AAPL")
+    assert len(calls) == 1
+    clock.advance(3601.0)
+    get("AAPL")
+    assert len(calls) == 2

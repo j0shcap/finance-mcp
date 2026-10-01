@@ -14,8 +14,6 @@ from finance_mcp.data.yfinance_client import (
     _recommendation_trend,
 )
 from tests.fakes import (
-    FakeClock,
-    counting,
     fake_ticker_factory,
     make_client,
     make_recommendations_df,
@@ -160,16 +158,3 @@ def test_get_analyst_data_non_numeric_value_is_data_unavailable(field: str) -> N
     with pytest.raises(DataUnavailable) as exc:
         client.get_analyst_data("AAPL")
     assert "Failed to parse analyst data for 'AAPL'" in str(exc.value)
-
-
-def test_get_analyst_data_caches_within_ttl() -> None:
-    df = make_recommendations_df(ANALYST_TREND)
-    factory, calls = counting(fake_ticker_factory(info=ANALYST_INFO, recommendations=df))
-    clock = FakeClock()
-    client = make_client(factory, clock=clock, fundamentals_ttl=3600.0)
-    client.get_analyst_data("AAPL")
-    client.get_analyst_data("AAPL")
-    assert len(calls) == 1
-    clock.advance(3601.0)
-    client.get_analyst_data("AAPL")
-    assert len(calls) == 2

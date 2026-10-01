@@ -11,7 +11,6 @@ from finance_mcp.data.models import (
 )
 from tests.fakes import (
     SAP_INFO,
-    FakeClock,
     counting,
     fake_ticker_factory,
     make_client,
@@ -92,18 +91,6 @@ def test_get_key_metrics_mapping_failure_is_data_unavailable() -> None:
     with pytest.raises(DataUnavailable) as exc:
         client.get_key_metrics("AAPL")
     assert "Failed to parse metrics for 'AAPL'" in str(exc.value)
-
-
-def test_get_key_metrics_caches_within_ttl() -> None:
-    factory, calls = counting(fake_ticker_factory(info=METRICS_INFO))
-    clock = FakeClock()
-    client = make_client(factory, clock=clock, fundamentals_ttl=3600.0)
-    client.get_key_metrics("AAPL")
-    client.get_key_metrics("AAPL")
-    assert len(calls) == 1
-    clock.advance(3601.0)
-    client.get_key_metrics("AAPL")
-    assert len(calls) == 2
 
 
 def test_profile_and_metrics_caches_do_not_collide() -> None:

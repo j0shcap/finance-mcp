@@ -8,8 +8,6 @@ from yfinance.exceptions import (
 
 from finance_mcp.data.errors import DataUnavailable, SymbolNotFound
 from tests.fakes import (
-    FakeClock,
-    counting,
     fake_ticker_factory,
     make_client,
     make_series,
@@ -142,18 +140,6 @@ def test_get_company_profile_float_employees_coerced_to_int() -> None:
     info = {**FULL_INFO, "fullTimeEmployees": 166000.0}
     client = make_client(factory=fake_ticker_factory(info=info))
     assert client.get_company_profile("AAPL").employees == 166000
-
-
-def test_get_company_profile_caches_within_ttl() -> None:
-    factory, calls = counting(fake_ticker_factory(info=FULL_INFO))
-    clock = FakeClock()
-    client = make_client(factory, clock=clock, fundamentals_ttl=3600.0)
-    client.get_company_profile("AAPL")
-    client.get_company_profile("AAPL")
-    assert len(calls) == 1
-    clock.advance(3601.0)
-    client.get_company_profile("AAPL")
-    assert len(calls) == 2
 
 
 def test_get_company_profile_dividends_below_cap_returns_all() -> None:
