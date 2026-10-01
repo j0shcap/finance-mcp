@@ -9,14 +9,13 @@ else, transport failures included, stays a plain DataUnavailable.
 
 import difflib
 import math
-import statistics
 import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from typing import Any, NamedTuple, cast
 
 import yfinance as yf
@@ -45,7 +44,6 @@ from finance_mcp.data.models import (
     QuoteResult,
     RecommendationPeriod,
     RelevanceCheck,
-    RiskFreeSource,
     SplitEvent,
     Statement,
     StatementPeriod,
@@ -53,6 +51,15 @@ from finance_mcp.data.models import (
     SymbolSearchResult,
     TickerComparison,
     TickerComparisonRow,
+)
+from finance_mcp.data.risk_free import (
+    TREASURY_BILL_SYMBOL,
+    Bills,
+    RiskFree,
+    day,
+    rate_key,
+    risk_free_over,
+    table_risk_free,
 )
 
 DEFAULT_MAX_BARS = 260
@@ -78,12 +85,6 @@ SMA_LONG_WINDOW = 200
 # elapsed days depending on the call date, and the same request should not gain and lose
 # its annualized fields from one day to the next.
 MIN_ANNUALIZATION_DAYS = 85
-#: Yahoo's 13-week US Treasury bill yield, the default risk-free rate. Quoted in percent on
-#: a bank-discount basis; see analytics.treasury_bill_effective_rate.
-TREASURY_BILL_SYMBOL = "^IRX"
-#: How far inside a measured window the T-bill history may start or end and still count as
-#: covering it, so a bond-market holiday at either edge is not a gap.
-RISK_FREE_EDGE_TOLERANCE_DAYS = 7
 
 _FINANCIALS_ATTR = {
     ("income", "annual"): "income_stmt",
@@ -93,22 +94,6 @@ _FINANCIALS_ATTR = {
     ("cashflow", "annual"): "cashflow",
     ("cashflow", "quarterly"): "quarterly_cashflow",
 }
-
-
-class _RiskFree(NamedTuple):
-    """The risk-free rate one computation used, and how it was chosen."""
-
-    rate: float | None
-    source: RiskFreeSource
-    note: str | None = None
-    #: True only when the T-bill FETCH failed, so a retry could resolve the rate. A window
-    #: the history does not cover, or an implausible quote, gives the same answer each time.
-    retryable: bool = False
-
-
-#: The T-bill history a computation draws its default rate from: the bars, or why they
-#: could not be fetched. None when the caller passed a rate, so nothing was fetched.
-_Bills = list[PriceBar] | str | None
 
 
 class _Identity(NamedTuple):
@@ -363,7 +348,7 @@ class YFinanceClient:
         # in the key since the rate-dependent figures are computed from it. A result whose
         # T-bill fetch failed is not kept, so the next call retries it; a lasting gap is.
         stats, _ = self._cached(
-            ("performance", symbol, period, _rate_key(risk_free_rate)),
+            ("performance", symbol, period, rate_key(risk_free_rate)),
             self._history_ttl,
             lambda: self._fetch_performance(symbol, period, risk_free_rate),
             cacheable=lambda fetched: not fetched[1].retryable,
@@ -372,15 +357,15 @@ class YFinanceClient:
 
     def _fetch_performance(
         self, symbol: str, period: str, risk_free_rate: float | None
-    ) -> tuple[PerformanceStats, _RiskFree]:
+    ) -> tuple[PerformanceStats, RiskFree]:
         bars, bills = in_parallel(
             lambda: self._all_bars(symbol, period, "1d"),
             lambda: self._bills_for(period, risk_free_rate),
         )
-        risk_free = _risk_free_over(risk_free_rate, bills, bars[0].date, bars[-1].date)
+        risk_free = risk_free_over(risk_free_rate, bills, bars[0].date, bars[-1].date)
         return _performance(symbol, period, bars, risk_free), risk_free
 
-    def _bills_for(self, period: str, risk_free_rate: float | None) -> _Bills:
+    def _bills_for(self, period: str, risk_free_rate: float | None) -> Bills:
         """The T-bill history for a default rate; nothing when the caller gave a rate.
 
         A failed fetch is returned as its message rather than raised: only the rate-
@@ -430,7 +415,7 @@ class YFinanceClient:
         """
         pending, failures = _normalize_batch(symbols)
         errors = [ComparisonError(symbol=raw, error=reason) for raw, reason in failures]
-        bills: _Bills = None
+        bills: Bills = None
         built: list[TickerComparisonRow | ComparisonError] = []
         if pending:
             # Started alongside the rows; each row waits for it only after its own bars.
@@ -447,7 +432,7 @@ class YFinanceClient:
         base_currency = next((row.currency for row in rows if row.currency), None)
         for row in rows:
             row.currency_differs = row.currency is not None and row.currency != base_currency
-        table_rate = _table_risk_free(risk_free_rate, bills)
+        table_rate = table_risk_free(risk_free_rate, bills)
         return TickerComparison(
             period=period,
             risk_free_rate=risk_free_rate,
@@ -464,7 +449,7 @@ class YFinanceClient:
         symbol: str,
         period: str,
         risk_free_rate: float | None,
-        bills: Future[_Bills],
+        bills: Future[Bills],
     ) -> TickerComparisonRow | ComparisonError:
         """One ticker's row, or the reason it has none.
 
@@ -474,7 +459,7 @@ class YFinanceClient:
         """
         try:
             bars = self._all_bars(symbol, period, "1d")
-            risk_free = _risk_free_over(risk_free_rate, bills.result(), bars[0].date, bars[-1].date)
+            risk_free = risk_free_over(risk_free_rate, bills.result(), bars[0].date, bars[-1].date)
             perf = _performance(symbol, period, bars, risk_free)
         except DataUnavailable as exc:
             return ComparisonError(symbol=symbol, error=str(exc))
@@ -781,7 +766,7 @@ def _benchmark_comparison(
     asset_bars: list[PriceBar],
     bench_bars: list[PriceBar],
     risk_free_rate: float | None,
-    bills: _Bills,
+    bills: Bills,
 ) -> BenchmarkComparison:
     """Benchmark-relative statistics over the dates the two bar series share."""
     dates, asset_closes, bench_closes = analytics.align_closes(
@@ -794,7 +779,7 @@ def _benchmark_comparison(
             "check that both symbols traded over this window."
         )
     # Alpha's risk-free leg spans the dates actually compared, not either full history.
-    risk_free = _risk_free_over(risk_free_rate, bills, dates[0], dates[-1])
+    risk_free = risk_free_over(risk_free_rate, bills, dates[0], dates[-1])
     elapsed_days = _elapsed_days(dates[0], dates[-1])
     periods_per_year: float | None = None
     asset_cagr: float | None = None
@@ -881,7 +866,7 @@ def _comparison_row(
 
 
 def _performance(
-    symbol: str, period: str, bars: list[PriceBar], risk_free: _RiskFree
+    symbol: str, period: str, bars: list[PriceBar], risk_free: RiskFree
 ) -> PerformanceStats:
     """Return and risk statistics for ``bars``, with the rate-dependent set at ``risk_free``."""
     if len(bars) < 2:
@@ -933,90 +918,6 @@ def _performance(
     )
 
 
-_HOW_TO_PROCEED = (
-    "Pass risk_free_rate explicitly to get the rate-dependent figures (0 gives raw "
-    "return per unit of risk)."
-)
-
-
-def _bills_fetch_failed(reason: str) -> _RiskFree:
-    """No default rate because the T-bill history could not be fetched: worth a retry."""
-    return _RiskFree(
-        None,
-        "unavailable",
-        f"The 13-week T-bill yield ({TREASURY_BILL_SYMBOL}) could not be fetched: {reason}. "
-        f"{_HOW_TO_PROCEED}",
-        retryable=True,
-    )
-
-
-def _table_risk_free(risk_free_rate: float | None, bills: _Bills) -> _RiskFree:
-    """compare_tickers' header: the caller's rate, or whether the one T-bill fetch worked.
-
-    Window coverage is judged per row, so a header over a successful fetch says
-    "treasury_bill" and leaves any row-level gap to that row's own source and note.
-    """
-    if risk_free_rate is not None:
-        return _RiskFree(risk_free_rate, "caller")
-    if isinstance(bills, str):
-        return _bills_fetch_failed(bills)
-    return _RiskFree(None, "treasury_bill")
-
-
-def _rate_key(risk_free_rate: float | None) -> str:
-    """Cache-key component: the caller's rate, or a marker for the T-bill default."""
-    return "treasury_bill" if risk_free_rate is None else str(risk_free_rate)
-
-
-def _risk_free_over(risk_free_rate: float | None, bills: _Bills, start: str, end: str) -> _RiskFree:
-    """The caller's rate, else the mean effective T-bill rate over ``start``..``end``.
-
-    The window average, not today's yield: a Sharpe over 2021-2026 measured against a 4%
-    hurdle would charge the years when bills paid nothing as if they had paid 4%. The
-    history must reach both ends of the window (within a holiday's tolerance), since
-    averaging only part of it would misstate the cash return foregone.
-    """
-    if risk_free_rate is not None:
-        return _RiskFree(risk_free_rate, "caller")
-    # With no rate given, _bills_for always fetched: bills is the history or its error.
-    if not isinstance(bills, list):
-        return _bills_fetch_failed(str(bills))
-    first_day, last_day = _day(start), _day(end)
-    inside = [b for b in bills if first_day <= _day(b.date) <= last_day]
-    tolerance = RISK_FREE_EDGE_TOLERANCE_DAYS
-    if (
-        not inside
-        or (_day(inside[0].date) - first_day).days > tolerance
-        or (last_day - _day(inside[-1].date)).days > tolerance
-    ):
-        return _RiskFree(
-            None,
-            "unavailable",
-            f"The 13-week T-bill history ({TREASURY_BILL_SYMBOL}) covers {bills[0].date} to "
-            f"{bills[-1].date}, which does not span the measured window {start} to {end}. "
-            f"{_HOW_TO_PROCEED}",
-        )
-    try:
-        rates = [analytics.treasury_bill_effective_rate(b.close) for b in inside]
-    except InvalidInput as exc:
-        return _RiskFree(
-            None,
-            "unavailable",
-            f"The 13-week T-bill history ({TREASURY_BILL_SYMBOL}) has an implausible "
-            f"quote: {exc} {_HOW_TO_PROCEED}",
-        )
-    return _RiskFree(statistics.fmean(rates), "treasury_bill")
-
-
-def _day(timestamp: str) -> date:
-    """The calendar date of a PriceBar date or intraday timestamp.
-
-    ``datetime.fromisoformat`` rather than ``date.fromisoformat``: only it accepts both a
-    bare date ("2024-01-01") and a timestamp with an offset.
-    """
-    return datetime.fromisoformat(timestamp).date()
-
-
 def _flag_mentions(
     articles: list[NewsArticle], symbol: str, identity: _Identity | _IdentityGap
 ) -> tuple[RelevanceCheck, str | None]:
@@ -1037,7 +938,7 @@ def _flag_mentions(
 
 def _elapsed_days(start: str, end: str) -> int:
     """Calendar days between two PriceBar dates."""
-    return (_day(end) - _day(start)).days
+    return (day(end) - day(start)).days
 
 
 def _label_key(label: str) -> str:

@@ -6,7 +6,7 @@ import pytest
 from fastmcp.exceptions import ToolError
 
 from finance_mcp.data import analytics
-from finance_mcp.data.yfinance_client import TREASURY_BILL_SYMBOL
+from finance_mcp.data.risk_free import TREASURY_BILL_SYMBOL
 from tests.fakes import connect, fake_multi_ticker_factory, fake_ticker_factory, make_history_df
 
 METRICS_INFO = {

@@ -16,7 +16,7 @@ import pytest
 from yfinance.exceptions import YFException
 
 from finance_mcp.data import analytics
-from finance_mcp.data.yfinance_client import TREASURY_BILL_SYMBOL
+from finance_mcp.data.risk_free import TREASURY_BILL_SYMBOL
 from tests.fakes import counting, fake_multi_ticker_factory, make_client, make_history_df
 
 # 200 weekdays from Monday 2024-01-01 to Friday 2024-10-04: past the annualization gate.
