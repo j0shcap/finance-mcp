@@ -1,4 +1,4 @@
-"""Does a news headline name the company it was filed under? Pure text matching.
+"""Does a news headline name the company it was filed under? Text matching, then flagging.
 
 Yahoo's per-ticker news stream mixes market-wide stories ("S&P 500 dips...") in with
 company news, and its payload carries no related-ticker metadata to tell them apart, so the
@@ -10,9 +10,15 @@ verdict that the story is unrelated. The rules lean toward False, because the pr
 discount only False articles: a wrong True would pass a market-wide story off as company
 news. A company named by a common word can still collide with a Title-Case headline
 ("Price Target" for Target), which no text rule can rule out.
+
+``flag_mentions`` applies the matching to a fetched article list, given the company's
+identity (or why it is missing); everything else here is pure text.
 """
 
 import re
+from typing import NamedTuple
+
+from finance_mcp.data.models import NewsArticle, RelevanceCheck
 
 #: Legal forms, share-class markers and filler stripped from the END of a company name.
 _TRAILING_NOISE = frozenset(
@@ -175,3 +181,36 @@ def mentions_company(text: str, names: tuple[str, ...], symbols: tuple[str, ...]
         if re.search(pattern, text):
             return True
     return False
+
+
+class Identity(NamedTuple):
+    """What the relevance flags need to know about a symbol, from Yahoo's ``info``."""
+
+    quote_type: str | None
+    long_name: str | None
+    short_name: str | None
+
+
+class IdentityGap(NamedTuple):
+    """Why a symbol's identity is missing, and whether retrying could change that."""
+
+    reason: str
+    lasting: bool
+
+
+def flag_mentions(
+    articles: list[NewsArticle], symbol: str, identity: Identity | IdentityGap
+) -> tuple[RelevanceCheck, str | None]:
+    """Set each article's mentions_company; say whether that could be assessed, and why not."""
+    if isinstance(identity, IdentityGap):
+        return ("no_company_name" if identity.lasting else "unavailable"), identity.reason
+    # Only a company has a name a headline can omit; for an ETF, index, fund, coin or
+    # currency pair the market-wide stories are the relevant ones.
+    if identity.quote_type != "EQUITY":
+        return "not_an_equity", None
+    names = company_aliases(identity.long_name, identity.short_name)
+    symbols = symbol_aliases(symbol)
+    for article in articles:
+        text = f"{article.title} {article.summary or ''}"
+        article.mentions_company = mentions_company(text, names, symbols)
+    return "applied", None

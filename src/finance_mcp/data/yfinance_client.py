@@ -16,12 +16,11 @@ from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from typing import Any, NamedTuple, cast
+from typing import Any, cast
 
 import yfinance as yf
 from yfinance.exceptions import YFTickerMissingError
 
-from finance_mcp.data import relevance
 from finance_mcp.data.concurrency import in_parallel, map_concurrently
 from finance_mcp.data.errors import DataUnavailable, InvalidInput, SymbolNotFound
 from finance_mcp.data.models import (
@@ -43,7 +42,6 @@ from finance_mcp.data.models import (
     QuoteError,
     QuoteResult,
     RecommendationPeriod,
-    RelevanceCheck,
     SplitEvent,
     Statement,
     StatementPeriod,
@@ -53,6 +51,7 @@ from finance_mcp.data.models import (
     TickerComparisonRow,
 )
 from finance_mcp.data.performance import benchmark_comparison, comparison_row, performance
+from finance_mcp.data.relevance import Identity, IdentityGap, flag_mentions
 from finance_mcp.data.risk_free import (
     TREASURY_BILL_SYMBOL,
     Bills,
@@ -85,21 +84,6 @@ _FINANCIALS_ATTR = {
     ("cashflow", "annual"): "cashflow",
     ("cashflow", "quarterly"): "quarterly_cashflow",
 }
-
-
-class _Identity(NamedTuple):
-    """What the relevance flags need to know about a symbol, from Yahoo's ``info``."""
-
-    quote_type: str | None
-    long_name: str | None
-    short_name: str | None
-
-
-class _IdentityGap(NamedTuple):
-    """Why a symbol's identity is missing, and whether retrying could change that."""
-
-    reason: str
-    lasting: bool
 
 
 class YFinanceClient:
@@ -655,7 +639,7 @@ class YFinanceClient:
             lambda: self._news_articles(symbol, count),
             lambda: self._identity_or_gap(symbol),
         )
-        check, note = _flag_mentions(articles, symbol, identity)
+        check, note = flag_mentions(articles, symbol, identity)
         return NewsResult(
             symbol=symbol,
             articles=articles,
@@ -676,7 +660,7 @@ class YFinanceClient:
             articles = [a for a in (_news_article(it) for it in items) if a is not None][:count]
         return articles, "ticker"
 
-    def _identity_or_gap(self, symbol: str) -> _Identity | _IdentityGap:
+    def _identity_or_gap(self, symbol: str) -> Identity | IdentityGap:
         """The symbol's instrument type and names, or why Yahoo could not supply them.
 
         Only the relevance flags depend on this, so a failure degrades them to null rather
@@ -688,13 +672,13 @@ class YFinanceClient:
                 ("identity", symbol), self._fundamentals_ttl, lambda: self._fetch_identity(symbol)
             )
         except SymbolNotFound as exc:
-            return _IdentityGap(str(exc), lasting=True)
+            return IdentityGap(str(exc), lasting=True)
         except DataUnavailable as exc:
-            return _IdentityGap(str(exc), lasting=False)
+            return IdentityGap(str(exc), lasting=False)
 
-    def _fetch_identity(self, symbol: str) -> _Identity:
+    def _fetch_identity(self, symbol: str) -> Identity:
         _, info = self._ticker_with_info(symbol, "company identity", "identity")
-        return _Identity(
+        return Identity(
             quote_type=info.get("quoteType"),
             long_name=info.get("longName"),
             short_name=info.get("shortName"),
@@ -748,24 +732,6 @@ def _normalize_batch(symbols: list[str]) -> tuple[list[str], list[tuple[str, str
         if symbol not in pending:
             pending.append(symbol)
     return pending, failures
-
-
-def _flag_mentions(
-    articles: list[NewsArticle], symbol: str, identity: _Identity | _IdentityGap
-) -> tuple[RelevanceCheck, str | None]:
-    """Set each article's mentions_company; say whether that could be assessed, and why not."""
-    if isinstance(identity, _IdentityGap):
-        return ("no_company_name" if identity.lasting else "unavailable"), identity.reason
-    # Only a company has a name a headline can omit; for an ETF, index, fund, coin or
-    # currency pair the market-wide stories are the relevant ones.
-    if identity.quote_type != "EQUITY":
-        return "not_an_equity", None
-    names = relevance.company_aliases(identity.long_name, identity.short_name)
-    symbols = relevance.symbol_aliases(symbol)
-    for article in articles:
-        text = f"{article.title} {article.summary or ''}"
-        article.mentions_company = relevance.mentions_company(text, names, symbols)
-    return "applied", None
 
 
 def _label_key(label: str) -> str:
