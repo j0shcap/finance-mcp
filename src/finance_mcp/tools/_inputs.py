@@ -54,6 +54,9 @@ MAX_PERIODS_PER_YEAR = 365
 #: Enough to name every line item on any statement Yahoo returns, several times over.
 MAX_LINE_ITEMS = 100
 
+#: Most tickers one get_quote call may take; they are fetched in parallel.
+MAX_QUOTE_TICKERS = 25
+
 #: Most tickers one compare_tickers call may take. Each row costs two Yahoo calls, so the
 #: bound is what keeps a single tool call from opening dozens of connections.
 MAX_COMPARE_TICKERS = 10
