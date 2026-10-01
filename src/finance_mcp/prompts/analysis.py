@@ -59,20 +59,19 @@ sequential QoQ only as a secondary note.
 free cash flow.
 
 ## Phase 4 - Peer-relative valuation
-Name ~3 genuinely comparable competitors (same sector AND similar business model/size; state \
-these are your own selection, not from a tool). Call compare_tickers once with {ticker}, those \
-peers (and the same risk_free_rate, if you overrode it) - it returns performance and valuation \
-side by side for up to 10 tickers \
-in one call, so do not loop get_key_metrics over them. Compare on a GROWTH-ADJUSTED basis (PEG / \
-growth-vs-multiple), not raw P/E, and rank risk-adjusted return (sharpe_ratio) rather than raw \
-return. Read the table's errors list and any row's metrics_error before treating a blank cell as \
-a finding, and each row's periods_per_year before ranking volatility or sharpe_ratio - rows on \
-different calendars are not directly comparable. Currency: any row flagged currency_differs (or \
-a table with mixed_currencies true) is not denominated in base_currency - its returns carry an \
-FX move the others do not, so compare those rows on ratios and say so. A row \
-whose financial_currency differs from its own currency is a cross-listing: its price_to_sales, \
-price_to_book and EV multiples mix two currencies, so rank it on P/E, PEG and the margins only \
-(the glossary's cross-listing rule).
+Name ~3 genuinely comparable competitors (same sector AND similar business model/size; state these \
+are your own selection, not from a tool). Call compare_tickers once with {ticker}, those peers \
+(and the same risk_free_rate, if you overrode it) - it returns performance and valuation side by \
+side for up to 10 tickers in one call, so do not loop get_key_metrics over them. Compare on a \
+GROWTH-ADJUSTED basis (PEG / growth-vs-multiple), not raw P/E, and rank risk-adjusted return \
+(sharpe_ratio) rather than raw return. Read the table's errors list and any row's metrics_error \
+before treating a blank cell as a finding, and each row's periods_per_year before ranking \
+volatility or sharpe_ratio - rows on different calendars are not directly comparable. Currency: \
+any row flagged currency_differs (or a table with mixed_currencies true) is not denominated in \
+base_currency - its returns carry an FX move the others do not, so compare those rows on ratios \
+and say so. A row whose financial_currency differs from its own currency is a cross-listing: its \
+price_to_sales, price_to_book and EV multiples mix two currencies, so rank it on P/E, PEG and the \
+margins only (the glossary's cross-listing rule).
 
 ## Phase 5 - Performance, risk-adjusted return & technical posture
 From analyze_performance: total & annualized return, annualized volatility, max drawdown, the \
@@ -81,8 +80,8 @@ of total risk), sortino_ratio (per unit of DOWNSIDE risk; on a positive Sharpe, 
 means the swings were mostly upward - the comparison inverts when the Sharpe is negative), \
 downside_deviation_percent and calmar_ratio (CAGR per unit of worst drawdown). State the \
 risk_free_rate the result echoes and its source: by default these are excess over the T-bill \
-yield of the same window; a rate of 0 would make them raw return per unit of risk. \
-The volatility figure is scaled by periods_per_year, which is inferred per instrument (~252 for a \
+yield of the same window; a rate of 0 would make them raw return per unit of risk. The \
+volatility figure is scaled by periods_per_year, which is inferred per instrument (~252 for a \
 weekday-traded equity, ~365 for a 24/7 instrument such as crypto) - state it when comparing \
 volatility across asset classes.
 From compare_to_benchmark: beta (market sensitivity) read together with correlation (how much of \

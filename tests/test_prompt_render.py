@@ -40,8 +40,7 @@ def test_render_supplies_the_conventions_uri_and_disclaimer() -> None:
 
 
 def test_render_requires_every_prompt_to_point_at_conventions_and_end_with_the_disclaimer() -> None:
-    """Every prompt must reference the conventions resource and close with the disclaimer;
-    render() makes omitting either a hard error rather than a review comment."""
+    """Omitting either is a hard error rather than a review comment."""
     with pytest.raises(ValueError, match="unused"):
         render("{x} with no conventions pointer. {disclaimer}", x="1")
     with pytest.raises(ValueError, match="unused"):

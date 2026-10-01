@@ -92,7 +92,6 @@ async def test_analyze_stock_ends_with_disclaimer(client: Client[FastMCPTranspor
 async def test_analyze_stock_embeds_the_shared_units_glossary(
     client: Client[FastMCPTransport],
 ) -> None:
-    """The glossary has one definition (conventions.UNITS_GLOSSARY); the prompt renders it."""
     text = await _render(client, "analyze_stock", {"ticker": "AAPL"})
     assert UNITS_GLOSSARY in text
     assert CONVENTIONS_URI in text
@@ -574,7 +573,7 @@ def test_glossary_warns_that_cross_listing_price_multiples_mix_currencies(field:
     assert CROSS_LISTING_RULE in UNITS_GLOSSARY
 
 
-def test_glossary_no_longer_claims_enterprise_value_is_in_the_quote_currency() -> None:
+def test_glossary_does_not_claim_enterprise_value_is_in_the_quote_currency() -> None:
     """It is not, for a cross-listing: TM's 3.5e13 is neither JPY nor USD."""
     assert "enterprise_value and the EPS" not in UNITS_GLOSSARY
 
@@ -586,8 +585,8 @@ def test_glossary_no_longer_claims_enterprise_value_is_in_the_quote_currency() -
 async def test_peer_prompts_do_not_send_cross_listings_to_their_cross_currency_ratios(
     client: Client[FastMCPTransport], name: str, args: dict[str, str]
 ) -> None:
-    """They said only that a cross-listing's absolute amounts were inconsistent, leaving
-    "compare on ratios" to point the model at exactly the ratios that are wrong."""
+    """Saying only that a cross-listing's absolute amounts are inconsistent would leave
+    "compare on ratios" pointing the model at exactly the ratios that are wrong."""
     text = await _render(client, name, args)
     assert "rank it on P/E, PEG and the margins only" in text
     assert "price_to_sales, price_to_book and EV multiples" in text

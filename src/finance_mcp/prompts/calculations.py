@@ -157,8 +157,8 @@ prices, or Excel inside the final coupon period.
 - Clean vs dirty: market quotes are CLEAN. If the user gave an invoice (dirty) price, subtract \
 accrued interest before calling bond_ytm_dated. Accrued interest does not depend on the yield, so \
 read accrued_interest from bond_price_dated at any ytm (e.g. the coupon rate) with the same dates \
-and conventions. Prices default to per 100 of face; pass face for \
-cash amounts, and keep the two apart.
+and conventions. Prices default to per 100 of face; pass face for cash amounts, and keep the \
+two apart.
 - bond_ytm_dated returns the yield and the prices but no duration or convexity: call \
 bond_price_dated at the solved yield_to_maturity to get the risk figures.
 
