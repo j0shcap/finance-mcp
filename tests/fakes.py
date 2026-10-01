@@ -1,13 +1,17 @@
 """Fakes for yfinance and builders for the frames it returns, shared across tests."""
 
 import threading
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any
 
 import pandas as pd
+from fastmcp import Client
+from fastmcp.client.transports import FastMCPTransport
 
 from finance_mcp.data.yfinance_client import _FINANCIALS_ATTR, YFinanceClient
+from finance_mcp.server import create_server
 
 #: fast_info for a healthy quote.
 QUOTE_FI = {
@@ -324,6 +328,15 @@ def make_client(
         time_fn=clock if clock is not None else FakeClock(),
         **options,
     )
+
+
+@asynccontextmanager
+async def connect(
+    factory: Callable[[str], Any] | None = None, **options: Any
+) -> AsyncIterator[Client[FastMCPTransport]]:
+    """An in-memory MCP client on a server whose data layer is ``make_client(factory, ...)``."""
+    async with Client(create_server(yf_client=make_client(factory, **options))) as client:
+        yield client
 
 
 def counting(factory: Callable[[str], Any]) -> tuple[Callable[[str], Any], list[str]]:

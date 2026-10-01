@@ -12,9 +12,14 @@ from fastmcp import Client
 from fastmcp.client.transports import FastMCPTransport
 from fastmcp.exceptions import ToolError
 
-from finance_mcp.server import create_server
-from finance_mcp.tools._inputs import MAX_CASHFLOWS, MAX_COMPARE_TICKERS, TICKER_PATTERN
-from tests.fakes import counting, fake_ticker_factory, make_client
+from finance_mcp.tools._inputs import (
+    MAX_CASHFLOWS,
+    MAX_COMPARE_TICKERS,
+    MAX_LINE_ITEMS,
+    MAX_QUOTE_TICKERS,
+    TICKER_PATTERN,
+)
+from tests.fakes import connect, counting, fake_ticker_factory
 
 
 @pytest.fixture
@@ -26,8 +31,7 @@ async def fetches() -> AsyncIterator[tuple[Client[FastMCPTransport], list[str]]]
             fast_info={"last_price": 190.0, "currency": "USD"},
         )
     )
-    server = create_server(make_client(factory))
-    async with Client(server) as client:
+    async with connect(factory) as client:
         yield client, calls
 
 
@@ -68,12 +72,20 @@ async def test_untidy_ticker_is_still_accepted_and_normalized(
     assert result.data.symbol == "AAPL"
 
 
-async def test_a_malformed_ticker_in_a_quote_batch_is_rejected(
-    fetches: tuple[Client[FastMCPTransport], list[str]],
+@pytest.mark.parametrize(
+    "tickers",
+    [
+        [],
+        [f"SYM{i}" for i in range(MAX_QUOTE_TICKERS + 1)],
+        ["AAPL", "not a ticker!"],
+    ],
+)
+async def test_bad_quote_batch_is_rejected_without_a_fetch(
+    fetches: tuple[Client[FastMCPTransport], list[str]], tickers: list[str]
 ) -> None:
     client, calls = fetches
     with pytest.raises(ToolError):
-        await client.call_tool("get_quote", {"tickers": ["AAPL", "not a ticker!"]})
+        await client.call_tool("get_quote", {"tickers": tickers})
     assert calls == []
 
 
@@ -85,18 +97,14 @@ async def test_blank_search_query_is_rejected_without_a_fetch(
         await client.call_tool("search_symbols", {"query": "   "})
 
 
-async def test_too_many_line_items_is_rejected(
-    fetches: tuple[Client[FastMCPTransport], list[str]],
+@pytest.mark.parametrize("line_items", [[], [f"Item {i}" for i in range(MAX_LINE_ITEMS + 1)]])
+async def test_bad_line_items_filter_is_rejected_without_a_fetch(
+    fetches: tuple[Client[FastMCPTransport], list[str]], line_items: list[str]
 ) -> None:
     client, calls = fetches
     with pytest.raises(ToolError):
         await client.call_tool(
-            "get_financials",
-            {
-                "ticker": "AAPL",
-                "statement": "income",
-                "line_items": [f"Item {i}" for i in range(300)],
-            },
+            "get_financials", {"ticker": "AAPL", "statement": "income", "line_items": line_items}
         )
     assert calls == []
 
@@ -211,7 +219,7 @@ async def test_a_long_but_allowed_cashflow_series_still_computes(
 async def test_rate_bounds_are_visible_in_the_tool_schema(
     client: Client[FastMCPTransport],
 ) -> None:
-    """A model should see 'rate must exceed -1' in the schema, not discover it by erroring."""
+    # A model should see 'rate must exceed -1' in the schema, not discover it by erroring.
     by_name = {tool.name: tool for tool in await client.list_tools()}
     for tool, field in [
         ("npv", "rate"),
