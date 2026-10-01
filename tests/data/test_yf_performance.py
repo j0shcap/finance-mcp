@@ -76,7 +76,6 @@ def test_analyze_performance_computes_calmar_from_its_own_figures() -> None:
 
 
 def test_analyze_performance_nulls_risk_adjusted_stats_on_a_short_window() -> None:
-    """Every risk-adjusted figure needs periods_per_year, which a short window lacks."""
     p = make_client(
         factory=fake_ticker_factory(history_df=make_history_df([100.0, 101.0, 99.0, 103.0]))
     ).analyze_performance("AAPL", "5d", risk_free_rate=0.05)
@@ -89,7 +88,7 @@ def test_analyze_performance_nulls_risk_adjusted_stats_on_a_short_window() -> No
 
 
 def test_analyze_performance_rejects_a_risk_free_rate_of_minus_one() -> None:
-    """The tool bounds this, but the data layer is reachable directly."""
+    # The tool bounds this, but the data layer is reachable directly.
     client = make_client(
         factory=fake_ticker_factory(history_df=make_history_df([100.0 + i for i in range(120)]))
     )
@@ -103,12 +102,9 @@ def _perf_stats(closes: list[float], **df_kw: Any) -> PerformanceStats:
 
 
 def test_analyze_performance_one_year_annualized_equals_total_return() -> None:
-    """366 seven-day-a-week bars spanning one calendar year, as for BTC-USD.
-
-    The tolerance is not slop: 365 elapsed days is 365/365.25 = 0.99932 years, so the CAGR
-    exponent is 1.000685 and the figures differ in the 4th significant digit. Exact
-    equality at years=1.0 is pinned in test_analytics_logic.py.
-    """
+    # 366 daily bars, as for BTC-USD. The tolerance is not slop: 365 elapsed days is
+    # 0.99932 years, so the figures differ in the 4th significant digit. Exact equality at
+    # years=1.0 is pinned in test_analytics_logic.py.
     closes = [100.0 * (0.7702 ** (i / 365)) for i in range(366)]
     p = _perf_stats(closes)
     assert p.bars == 366
@@ -188,11 +184,8 @@ def test_analyze_performance_does_not_annualize_below_the_threshold() -> None:
 
 
 def test_analyze_performance_annualizes_the_shortest_three_month_window() -> None:
-    """A 3mo window must annualize whatever the call date.
-
-    Depending on the date, period="3mo" spans 87-95 elapsed days between the first and last
-    bar; 88 bars = 87 elapsed days is the shortest.
-    """
+    # period="3mo" spans 87-95 elapsed days depending on the call date; 88 daily bars is
+    # the shortest.
     p = _perf_stats([100.0 + i for i in range(88)])
     assert p.annualized_return_percent is not None
     assert p.annualized_volatility_percent is not None
@@ -295,7 +288,6 @@ def test_analyze_performance_caches_within_ttl_and_keys_on_period() -> None:
 
 
 def test_analyze_performance_cache_keys_on_the_risk_free_rate() -> None:
-    """A second call at a different rate recomputes rather than replaying the first result."""
     df = make_history_df([100.0 + i for i in range(300)])
     client = make_client(factory=fake_ticker_factory(history_df=df))
 

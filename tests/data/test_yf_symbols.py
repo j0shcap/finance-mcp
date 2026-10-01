@@ -16,7 +16,6 @@ from tests.fakes import (
 
 
 def test_symbols_are_normalized_before_caching_and_echoed_normalized() -> None:
-    """'aapl' and ' AAPL ' name the same instrument, so they must share one cache entry."""
     factory, calls = counting(fake_ticker_factory(fast_info=QUOTE_FI))
     client = make_client(factory)
     lower = client.get_quote(["aapl"]).quotes

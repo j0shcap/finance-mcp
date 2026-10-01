@@ -67,13 +67,8 @@ def test_get_news_happy_path_maps_fields_newest_first() -> None:
 
 
 def test_get_news_falls_back_to_search_when_the_ticker_stream_is_empty() -> None:
-    """An empty ticker stream is cross-checked, because Yahoo returns one for an outage.
-
-    yfinance parses a 500 from the news endpoint into an empty list, so a server error and
-    a symbol with genuinely no coverage are indistinguishable at the call site. If the
-    search endpoint has articles for the symbol, the empty stream was a failure - reporting
-    "no recent news" there tells the model a company had no catalysts when it did.
-    """
+    # yfinance parses a 500 from the news endpoint into an empty list, so an outage and a
+    # symbol with no coverage look the same until search is asked.
     search = FakeSearch(
         news=[
             make_search_news_item("Apple beats", "Reuters", "https://x/a", 1790647283),
@@ -89,7 +84,6 @@ def test_get_news_falls_back_to_search_when_the_ticker_stream_is_empty() -> None
 
 
 def test_get_news_search_fallback_maps_the_flat_payload_shape() -> None:
-    """The fallback's payload is flat with a unix timestamp, not the nested content shape."""
     search = FakeSearch(
         news=[make_search_news_item("Apple beats", "Reuters", "https://x/a", 1790647283)]
     )
@@ -106,7 +100,6 @@ def test_get_news_search_fallback_maps_the_flat_payload_shape() -> None:
 
 
 def test_get_news_does_not_call_search_when_the_ticker_stream_has_news() -> None:
-    """The fallback costs a request, so it must only run when the primary came back empty."""
     search = FakeSearch(news=[make_search_news_item("should not be used")])
     client = make_client(factory=fake_ticker_factory(news=NEWS_ITEMS), search_factory=search)
 
@@ -118,7 +111,6 @@ def test_get_news_does_not_call_search_when_the_ticker_stream_has_news() -> None
 
 
 def test_get_news_empty_from_both_sources_is_still_empty() -> None:
-    """A symbol with no coverage anywhere reports no news, not an error."""
     search = FakeSearch(news=[])
     client = make_client(factory=fake_ticker_factory(news=[]), search_factory=search)
 
@@ -128,7 +120,6 @@ def test_get_news_empty_from_both_sources_is_still_empty() -> None:
 
 
 def test_get_news_a_failing_search_fallback_leaves_the_empty_result_intact() -> None:
-    """The primary succeeded with "no news"; a broken cross-check must not make it an error."""
     search = FakeSearch(error=YFException("search down"))
     client = make_client(factory=fake_ticker_factory(news=[]), search_factory=search)
 
