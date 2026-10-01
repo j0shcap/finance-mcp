@@ -55,12 +55,10 @@ def _bisect_bracket(f: Callable[[float], float], low: float, high: float) -> flo
 
 
 def _bisect(f: Callable[[float], float], low: float = -0.999999, high: float = 10.0) -> float:
-    """Find a single root of ``f``, expanding ``high`` to bracket a sign change.
+    """Find the single root of a monotonic ``f``, doubling ``high`` until it is bracketed.
 
-    For monotonic functions (TVM rate, bond yield). Raises InvalidInput if no sign
-    change can be bracketed within the search range — including when ``f`` overflows
-    for large arguments (e.g. ``(1+r)**nper`` with very large ``nper``) before a
-    bracket is found, rather than letting a raw OverflowError escape.
+    Raises InvalidInput when no sign change can be bracketed, including when ``f``
+    overflows (e.g. ``(1+r)**nper`` for a large ``nper``) before one is found.
     """
     f_low = f(low)
     try:
@@ -118,27 +116,24 @@ def _find_all_roots(
 ) -> list[float]:
     """Find every real root of ``f`` on (low, log_high] by scanning a fixed grid.
 
-    Deterministic: fixed abscissae, iteration counts, and tolerances. The abscissae are
-    ``grid_points`` uniform samples on (low, high] followed by ``log_points`` geometric
-    samples on (high, log_high] — log spacing keeps the very large rates affordable, so
-    an IRR of several hundred times the principal is still found.
+    Used for IRR/XIRR, where non-conventional cashflows can have several roots.
+    Deterministic: fixed abscissae, iteration counts and tolerances. The abscissae are
+    ``grid_points`` uniform samples on (low, high] then ``log_points`` geometric samples
+    on (high, log_high]; log spacing keeps very large rates affordable, so an IRR of
+    several hundred times the principal is still found.
 
     Three kinds of root are recorded:
 
     * an exact zero landing on an abscissa;
     * a sign change between adjacent abscissae, refined by bisection;
-    * a turning point of the sampled sequence, refined by golden-section search. This is
-      what catches a tangent (double) root, where ``f`` touches zero without changing
-      sign, and a pair of roots closer together than one grid step, where both lie
-      inside a single interval and the endpoints share a sign. A refined turning point
-      counts as a root when ``|f|`` there has collapsed to the floating-point
-      cancellation floor, measured relative to the SMALLER bracket endpoint
-      (``tangent_tol``) - next to the rate == -1 pole the other one can be ~1e15, which
-      would pass a plain local minimum off as a double root;
-      if instead it has crossed zero, the two halves each hold a root and are bisected
-      separately.
-
-    Used for IRR/XIRR, where non-conventional cashflows can have several roots.
+    * a turning point of the sampled sequence, refined by golden-section search. This
+      catches a tangent (double) root, where ``f`` touches zero without changing sign,
+      and two roots inside one grid step, whose endpoints share a sign. The turning
+      point is a double root when ``|f|`` there has collapsed to the cancellation floor:
+      at most ``tangent_tol`` times the SMALLER bracket endpoint's ``|f|`` (next to the
+      rate == -1 pole the larger one can be ~1e15, which would pass a plain local
+      minimum off as a double root). If it has instead crossed zero, each half that
+      straddles zero is bisected.
     """
     step = (high - low) / (grid_points - 1)
     abscissae = [low + i * step for i in range(grid_points)]
@@ -352,22 +347,16 @@ def loan_schedule(
     """Build an amortization summary for a fixed-rate loan or mortgage.
 
     ``annual_rate`` is a nominal APR compounded monthly: the periodic rate is
-    ``annual_rate / 12`` (not derived from an effective annual rate), and payments
-    are monthly. To use an effective annual rate, convert it first with
-    ``convert_rate(rate, 12, "effective_to_nominal")``. ``extra_payment`` is an
-    additional amount applied to principal each month; it shortens the term.
-    The summary (payment, totals, payoff count) is always computed; the full
+    ``annual_rate / 12``, with monthly payments. Convert an effective annual rate first
+    with ``convert_rate(rate, 12, "effective_to_nominal")``. ``extra_payment`` goes to
+    principal each month and shortens the term; ``interest_saved`` and
+    ``payments_saved`` compare against the same loan without it (0 when it is 0). The
     per-period rows are returned only when ``include_schedule`` is True.
-    ``interest_saved`` and ``payments_saved`` compare against the same loan without the
-    extra payment, and are 0 when ``extra_payment`` is 0.
 
-    Rounding: ``monthly_payment`` and the per-row ``payment``/``principal``/``interest``/
-    ``balance`` amounts are rounded to cents for presentation, while ``total_paid`` and
-    ``total_interest`` accumulate the unrounded values and are rounded only at the end, as
-    is ``interest_saved``, the difference of the two unrounded interest totals.
-    Summing the rounded rows can therefore differ from the reported totals by a few
-    cents. The last period's payment is adjusted to clear the remaining balance exactly,
-    so the schedule always ends at a zero balance and the principal is fully amortized.
+    Rounding: ``monthly_payment`` and every row amount are rounded to cents, while
+    ``total_paid``, ``total_interest`` and ``interest_saved`` are computed unrounded and
+    rounded once at the end, so summing the rows can differ from the totals by a few
+    cents. The last payment is adjusted to clear the remaining balance exactly.
     """
     if principal <= 0.0:
         raise InvalidInput("principal must be positive.")
@@ -753,8 +742,10 @@ def _coupon_schedule(
 def _metrics_compound(
     face: float, coupon: float, y: float, n: int, f: float
 ) -> tuple[float, float, float]:
-    """Street convention: the part period is COMPOUNDED, so cashflow k is discounted over
-    ``w_k = (k - 1) + f`` periods. Returns ``(dirty, macaulay_periods, convexity_periods)``.
+    """Street convention: the part period is COMPOUNDED.
+
+    Cashflow k is discounted over ``w_k = (k - 1) + f`` periods. Returns
+    ``(dirty, macaulay_periods, convexity_periods)``.
     """
     base = 1.0 + y
     price = 0.0
@@ -975,25 +966,22 @@ def bond_price_dated(
 ) -> BondDatedAnalytics:
     """Price a fixed-coupon bond for a settlement date, which may fall between coupons.
 
-    The dated counterpart to ``bond_price``, which prices on a coupon date only. Coupon
-    dates are generated backward from ``maturity`` every ``12 / frequency`` months, so the
-    schedule is anchored on the maturity day-of-month and month-ends are preserved (a 31
-    March maturity pays on 30 September).
+    The dated counterpart to ``bond_price``, which prices on a coupon date only. The
+    coupon schedule is built backward from ``maturity`` (see ``_coupon_schedule``).
 
     ``coupon_rate`` and ``ytm`` are annual decimals. ``day_count`` measures the elapsed
-    part of the current coupon period and defaults to Actual/Actual ICMA -- the convention
-    for US Treasuries and most sovereigns. Pass ``"30/360"`` for the US corporate/municipal
-    convention, which is also Excel's default (``basis=0``) and reproduces its PRICE -- except
-    in the final coupon period, where Excel discounts the stub with SIMPLE interest, which is
+    part of the current coupon period and defaults to Actual/Actual ICMA (US Treasuries
+    and most sovereigns). ``"30/360"`` is the US corporate/municipal convention and
+    Excel's default (``basis=0``), and reproduces Excel's PRICE except in the final coupon
+    period, where Excel discounts the stub with simple interest:
     ``first_period_discount="simple"`` here.
 
     Returns the clean and dirty prices (per ``face`` and per 100), the accrued interest,
-    and duration/convexity computed with the fractional first period discounted per
-    ``first_period_discount``: compounded, ``(1+y)**(DSC/E)``, by default.
+    and duration/convexity with the fractional first period discounted per
+    ``first_period_discount`` (compounded, ``(1+y)**(DSC/E)``, by default).
 
-    Assumes a regular schedule: every coupon period is a whole ``12 / frequency`` months.
-    Bonds with an odd (long or short) first or last coupon period are out of scope, and
-    pricing one here would silently use the wrong first period.
+    Assumes a regular schedule: a bond with an odd (long or short) first or last coupon
+    period would silently be priced with the wrong first period.
     """
     previous, next_coupon, periods, accrued_days, period_days = _dated_terms(
         settlement, maturity, face, frequency, day_count
@@ -1013,10 +1001,9 @@ def bond_price_dated(
     accrued = face * coupon_rate / frequency * fraction
     clean = dirty - accrued
     if clean <= 0.0:
-        # At a high enough yield the discounted cashflows are worth less than the accrued
-        # interest already earned. Such a quote has no market interpretation, it makes
-        # current_yield negative (or a division by zero at clean == 0), and bond_ytm_dated
-        # rejects it -- so refuse it here rather than return a price that cannot round-trip.
+        # At a high enough yield the remaining cashflows are worth less than the interest
+        # already accrued. Such a price has no market meaning, makes current_yield negative
+        # (or divides by zero), and bond_ytm_dated rejects it, so it could not round-trip.
         raise InvalidInput(
             f"ytm={ytm} leaves a non-positive clean price ({clean}) for this bond: the "
             f"present value of the remaining cashflows ({dirty}) does not cover the accrued "
