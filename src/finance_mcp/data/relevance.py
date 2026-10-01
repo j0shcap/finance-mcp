@@ -6,7 +6,10 @@ only signal is the text. This matches the company's name and ticker as whole wor
 
 It is deliberately a flag, not a filter: brand and executive names ("Google" for
 Alphabet, "Musk" for Tesla) are not matched, so a False is a hint to read the title, not a
-verdict that the story is unrelated.
+verdict that the story is unrelated. The rules lean toward False, because the prompts
+discount only False articles: a wrong True would pass a market-wide story off as company
+news. A company named by a common word can still collide with a Title-Case headline
+("Price Target" for Target), which no text rule can rule out.
 """
 
 import re
@@ -77,14 +80,24 @@ _GENERIC_FIRST_WORDS = frozenset(
         "texas",
         "union",
         "standard",
+        # Also words and surnames that stand for other things: "US home sales" is not Home
+        # Depot, "J.P. Morgan" is not Morgan Stanley.
+        "home",
+        "morgan",
+        "philip",
+        "johnson",
+        "wells",
+        "best",
+        "dollar",
     }
 )
 
 #: A first word shorter than this is too likely to be a common word to match alone.
 _MIN_FIRST_WORD = 4
 
-#: Names shorter than this ("3M") are matched case-sensitively, so "3m ago" is not 3M.
-_MIN_CASELESS_NAME = 4
+#: Tickers this short are everyday words or acronyms (F, T, AI, ET, PM, US), so they
+#: count only as a cashtag or in parentheses: "$ET", "(AI)".
+_MAX_SHORT_TICKER = 2
 
 _NOT_ALNUM_BEFORE = r"(?<![A-Za-z0-9])"
 _NOT_ALNUM_AFTER = r"(?![A-Za-z0-9])"
@@ -140,20 +153,23 @@ def symbol_aliases(symbol: str) -> tuple[str, ...]:
 def mentions_company(text: str, names: tuple[str, ...], symbols: tuple[str, ...]) -> bool:
     """True if ``text`` names the company or its ticker as a whole word.
 
-    Names match case-insensitively (except very short ones such as "3M"); tickers match
-    case-sensitively, since a lower-case "tsla" is not a ticker. A one-letter ticker (F, T,
-    C) matches only as a cashtag or in parentheses -- "$F", "(F)" -- because a bare capital
-    letter is far too common in headlines.
+    Names match in their own capitalisation, so "price target" is not Target and "to
+    block" is not Block; an all-caps name ("NVIDIA") also matches however a headline
+    capitalises it ("Nvidia"). Tickers match case-sensitively, since a lower-case "tsla" is
+    not a ticker, and one of one or two letters (F, T, AI, ET) only as a cashtag or in
+    parentheses -- "$F", "(AI)" -- because those are everyday words and acronyms.
     """
     for name in names:
-        flags = 0 if len(name) < _MIN_CASELESS_NAME else re.IGNORECASE
+        letters = [c for c in name if c.isalpha()]
+        all_caps = len(letters) >= 2 and all(c.isupper() for c in letters)
+        flags = re.IGNORECASE if all_caps else 0
         if re.search(_NOT_ALNUM_BEFORE + re.escape(name) + _NOT_ALNUM_AFTER, text, flags):
             return True
     for symbol in symbols:
         escaped = re.escape(symbol)
         pattern = (
             rf"\${escaped}{_NOT_ALNUM_AFTER}|\({escaped}\)"
-            if len(symbol) == 1
+            if len(symbol) <= _MAX_SHORT_TICKER
             else _NOT_ALNUM_BEFORE + escaped + _NOT_ALNUM_AFTER
         )
         if re.search(pattern, text):

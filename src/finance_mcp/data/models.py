@@ -650,9 +650,11 @@ class NewsArticle(MarketData):
         default=None,
         description="True if the title or summary names the company or its ticker; False if "
         "neither does, which usually means a market-wide story Yahoo filed under the ticker. "
-        "It is a whole-word text match: brand and executive names ('Google' for Alphabet, "
-        "'Musk' for Tesla) do not count, so read a False article's title before discarding "
-        "it. Null when not assessed - see the result's relevance_check.",
+        "It is a whole-word text match that leans toward False: brand and executive names "
+        "('Google' for Alphabet, 'Musk' for Tesla) and bare one- or two-letter tickers ('HD' "
+        "without '$' or parentheses) do not count, so read a False article's title before "
+        "discarding it. A company named by a common word can still match a Title-Case "
+        "headline ('Price Target'). Null when not assessed - see the result's relevance_check.",
     )
 
 

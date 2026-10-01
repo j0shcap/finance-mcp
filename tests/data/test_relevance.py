@@ -55,7 +55,7 @@ TESLA = {"names": ("Tesla",), "symbols": ("TSLA",)}
     ("text", "expected"),
     [
         ("Tesla Postpones Roadster Reveal Event", True),
-        ("Wall Street expects a drop in tesla deliveries", True),  # names are case-insensitive
+        ("Wall Street expects a drop in tesla deliveries", False),  # names keep their case
         ("Why $TSLA keeps rising", True),
         ("Shares of TSLA fell 2%", True),
         ("NASDAQ:TSLA hits a new high", True),
@@ -69,7 +69,7 @@ def test_mentions_company(text: str, expected: bool) -> None:
     assert mentions_company(text, **TESLA) is expected
 
 
-def test_a_one_letter_ticker_needs_a_cashtag_or_parentheses() -> None:
+def test_a_one_or_two_letter_ticker_needs_a_cashtag_or_parentheses() -> None:
     ford = {"names": ("Ford Motor",), "symbols": ("F",)}
     assert mentions_company("Shares of Ford Motor (F) rose", **ford)
     assert mentions_company("$F jumps after earnings", **ford)
@@ -81,6 +81,51 @@ def test_a_short_name_is_matched_case_sensitively() -> None:
     three_m = {"names": ("3M",), "symbols": ("MMM",)}
     assert mentions_company("3M settles earplug suits", **three_m)
     assert not mentions_company("Posted 3m ago", **three_m)
+
+
+def test_an_all_caps_name_also_matches_how_headlines_write_it() -> None:
+    nvidia = {"names": ("NVIDIA",), "symbols": ("NVDA",)}
+    assert mentions_company("Nvidia beats estimates", **nvidia)
+    assert mentions_company("NVIDIA beats estimates", **nvidia)
+
+
+@pytest.mark.parametrize(
+    ("long_name", "symbol", "headline"),
+    [
+        # A company named by a common word must not match that word in lower case.
+        ("Target Corporation", "TGT", "Analyst raises S&P 500 price target to 7,000"),
+        ("Block, Inc.", "XYZ", "Trump moves to block chip exports"),
+        ("The Home Depot, Inc.", "HD", "US home sales slump to lowest since 2010"),
+        # A first word that is also a common word or surname is not an alias on its own.
+        ("Morgan Stanley", "MS", "J.P. Morgan cuts outlook"),
+        ("The Home Depot, Inc.", "HD", "Home Sales Slump To Lowest Since 2010"),
+        # Two-letter tickers that are everyday acronyms need a cashtag or parentheses.
+        ("C3.ai, Inc.", "AI", "AI stocks rally as Nvidia surges"),
+        ("Energy Transfer LP", "ET", "Stocks close higher at 4 p.m. ET"),
+        ("Philip Morris International Inc.", "PM", "Fed minutes due at 2 PM"),
+    ],
+)
+def test_market_wide_headlines_that_merely_share_a_word_do_not_count(
+    long_name: str, symbol: str, headline: str
+) -> None:
+    names = company_aliases(long_name, None)
+    assert not mentions_company(headline, names=names, symbols=symbol_aliases(symbol))
+
+
+@pytest.mark.parametrize(
+    ("long_name", "symbol", "headline"),
+    [
+        ("Target Corporation", "TGT", "Target cuts its sales forecast"),
+        ("The Home Depot, Inc.", "HD", "Home Depot beats on pro demand"),
+        ("Morgan Stanley", "MS", "Morgan Stanley wealth unit hits record"),
+        ("C3.ai, Inc.", "AI", "C3.ai (AI) slides after guidance"),
+        ("Energy Transfer LP", "ET", "$ET yields 7%"),
+        ("Ford Motor Company", "F", "Ford recalls 100,000 trucks"),
+    ],
+)
+def test_the_company_itself_still_counts(long_name: str, symbol: str, headline: str) -> None:
+    names = company_aliases(long_name, None)
+    assert mentions_company(headline, names=names, symbols=symbol_aliases(symbol))
 
 
 def test_names_with_punctuation_match_as_whole_words() -> None:
