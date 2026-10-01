@@ -33,9 +33,11 @@ classifiers = [
 ]
 dependencies = [
   # fastmcp is the API surface we build on (FastMCP, Client, ToolError,
-  # client.transports), so cap below the next major: a 4.x release may break it.
-  "fastmcp>=3.0,<4",
-  "pydantic>=2.11.7", # floor required by fastmcp 3.x
+  # client.transports, middleware), written against 4.x; cap below the next major,
+  # which may break it.
+  "fastmcp>=4.0.10,<5",
+  # Floor required by fastmcp 4.x: fastmcp-slim requires pydantic[email]>=2.12.0.
+  "pydantic>=2.12",
   "pydantic-settings>=2.0",
   # yf.Search and Ticker.get_news(count=, tab=) landed in the 0.2.5x line along
   # with the current news `content` payload; 1.0 is the first stable release
@@ -106,6 +108,9 @@ markers = [
 # wins because -m takes a single value. --strict-markers turns a misspelled marker into an
 # error rather than a test that silently never runs. tests/test_live_marker.py pins both.
 addopts = "-m 'not live and not e2e' --strict-markers --cov=finance_mcp --cov-report=term-missing --cov-report=xml --cov-fail-under=90"
+# fastmcp 4 keeps the MCP SDK's old camelCase field names (inputSchema, serverInfo...)
+# working with a deprecation warning; fail on one so a read of an old name can't creep in.
+filterwarnings = ["error::fastmcp.FastMCPDeprecationWarning"]
 
 [tool.coverage.run]
 source = ["finance_mcp"]

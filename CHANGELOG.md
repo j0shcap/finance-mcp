@@ -17,6 +17,9 @@ contain breaking changes, and each one is listed under **Breaking changes**.
 - Calculator rate parameters and results state per-period or annual and "as a decimal"
   consistently, and bond prices are stated in the units of `face`; descriptions only, no schema
   change.
+- Requires fastmcp 4.x (`>=4.0.10,<5`, which brings the MCP Python SDK 2.x) and pydantic
+  `>=2.12`; supersedes #16. A result model rejecting a value inside a tool still reaches the
+  model as the masked "Error calling tool" error, not as invalid arguments.
 
 ## [0.4.2] - 2026-10-01
 

@@ -5,12 +5,13 @@ an internal validator (``call[get_quote]``), ``[type=..., input_value=..., input
 diagnostics and a documentation URL per error. This middleware replaces that with
 ``Invalid arguments for get_quote: tickers: List should have at least 1 item ...``.
 
-Only argument errors are rewritten. FastMCP 3.0-3.3 raise pydantic's ValidationError
-itself; 3.4 wraps it in ``fastmcp.exceptions.ValidationError`` with pydantic's error as
-the cause. Either way the pydantic error's title is ``call[<tool name>]``, the title of the
-validator FastMCP builds around the tool function. A pydantic error raised inside a tool
-body carries its model's title instead: that is a server bug, so it is left for FastMCP's
-error handling rather than reported as the caller's mistake.
+Only argument errors are rewritten. FastMCP wraps them in
+``fastmcp.exceptions.ValidationError`` with pydantic's error as the cause, and that error's
+title is ``call[<tool name>]``, the title of the validator FastMCP builds around the tool
+function. A pydantic error raised inside a tool body carries its model's title instead: that
+is a server bug, not the caller's mistake. FastMCP 4 re-raises it as it is, and the MCP SDK
+then answers with a JSON-RPC "Invalid request parameters" error, past error masking. So it
+is re-raised here as the tool error masking gives any other unexpected failure.
 """
 
 from typing import Any
@@ -19,8 +20,11 @@ import mcp.types as mt
 from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.tools import ToolResult
+from fastmcp.utilities.logging import get_logger
 from pydantic import ValidationError
 from pydantic_core import ErrorDetails
+
+logger = get_logger(__name__)
 
 #: Longest offending value quoted back in a pattern error; a longer one is cut short.
 MAX_QUOTED_VALUE = 20
@@ -39,9 +43,16 @@ class ArgumentErrorMiddleware(Middleware):
         except Exception as exc:
             name = context.message.name
             invalid = _argument_error(exc, name)
-            if invalid is None:
-                raise
-            raise ToolError(describe_argument_error(name, invalid)) from exc
+            if invalid is not None:
+                raise ToolError(describe_argument_error(name, invalid)) from exc
+            if isinstance(exc, ValidationError):
+                # FastMCP's own masked wording and log line. Its masking runs inside
+                # call_next, before this point, so the error has to leave here already a
+                # tool error; and it logs this one only as an argument warning, so the
+                # traceback naming the rejecting model is logged here.
+                logger.exception(f"Error calling tool {name!r}")
+                raise ToolError(f"Error calling tool {name!r}") from exc
+            raise
 
 
 def _argument_error(exc: BaseException, tool_name: str) -> ValidationError | None:
