@@ -865,3 +865,35 @@ def test_find_all_roots_skips_flat_sampled_regions() -> None:
 
 def test_minimize_finds_interior_minimum() -> None:
     assert _minimize(lambda x: (x - 0.25) ** 2, -1.0, 1.0) == pytest.approx(0.25, abs=1e-9)
+
+
+# Found by the property cross-checks (tests/test_calculators_crosscheck.py): below ~1e-16,
+# (1 + rate)**nper - 1 cancels to exactly 0, so the annuity term vanished (fv) or was
+# divided by (pmt raised ZeroDivisionError, which the server masks as an internal error).
+@pytest.mark.parametrize("rate", [1e-18, 6e-132, 2.2e-309])
+def test_tvm_with_a_vanishingly_small_rate_matches_the_zero_rate_answer(rate: float) -> None:
+    fv = time_value_of_money(solve_for="fv", pv=-100, pmt=-10, rate=rate, nper=12)
+    assert fv.solved_value == pytest.approx(220.0)
+    pv = time_value_of_money(solve_for="pv", fv=220, pmt=-10, rate=rate, nper=12)
+    assert pv.solved_value == pytest.approx(-100.0)
+    pmt = time_value_of_money(solve_for="pmt", pv=-100, fv=220, rate=rate, nper=12)
+    assert pmt.solved_value == pytest.approx(-10.0)
+    nper = time_value_of_money(solve_for="nper", pv=-100, fv=220, pmt=-10, rate=rate)
+    assert nper.solved_value == pytest.approx(12.0)
+
+
+def test_irr_does_not_report_a_turning_point_next_to_a_sign_change_as_a_root() -> None:
+    """[0, -150, 1] has one IRR, -99.33% (1/(1+r) = 150). Near r = -1 the first grid step
+    both changes sign and turns, and the turning-point branch bisected a half that never
+    straddled zero, reporting its endpoint (-98%, NPV -4997) as the headline IRR."""
+    result = irr([0, -150, 1])
+    assert result.all_irrs == [pytest.approx(-149 / 150)]
+    assert result.is_unique
+
+
+def test_irr_does_not_report_a_minimum_next_to_the_pole_as_a_tangent_root() -> None:
+    """[0, 0, -117, 1] has one IRR, 1/117 - 1. The local minimum of its NPV near -98.7%
+    (NPV -237276) passed the tangent test, whose tolerance scaled with a neighbouring
+    sample next to the rate == -1 pole, where the NPV is ~1e15."""
+    result = irr([0, 0, -117, 1])
+    assert result.all_irrs == [pytest.approx(1 / 117 - 1)]
