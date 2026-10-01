@@ -66,8 +66,10 @@ def record() -> dict[str, Any]:
         "statement_quarterly": frame_shape(
             _fetch(lambda: apple.quarterly_balance_sheet), named_columns=False
         ),
-        "dividends": series_shape(_fetch(lambda: apple.dividends)),
-        "splits": series_shape(_fetch(lambda: apple.splits)),
+        # The same Series .dividends/.splits return, over a shorter window: those read the
+        # whole price history, megabytes for AAPL. 10y still includes AAPL's 2020 split.
+        "dividends": series_shape(_fetch(lambda: apple.get_dividends(period="2y"))),
+        "splits": series_shape(_fetch(lambda: apple.get_splits(period="10y"))),
         "recommendations": frame_shape(recommendations),
         "recommendation_row": mapping_shape(recommendations.to_dict("records"), keys["row"]),
         "info_equity": mapping_shape([_fetch(lambda: apple.info)], keys["info"]),

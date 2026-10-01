@@ -29,7 +29,8 @@ snapshot:
 
 # Record the shapes of real Yahoo payloads into tests/shapes/yahoo.json - index kinds,
 # dtypes, key types, the unknown-symbol exception; none of Yahoo's values - merged with any
-# committed recording. `uv run python -m scripts.record_shapes --check` reports new shapes.
+# committed recording. The nightly live job runs `--check` and fails on anything new; after
+# re-recording, tests/test_fakes_match_shapes.py names the fakes that need updating.
 record-shapes:
 	uv run python -m scripts.record_shapes
 

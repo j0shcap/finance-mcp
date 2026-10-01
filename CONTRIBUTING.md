@@ -48,8 +48,11 @@ need the network or a built wheel are marked `live` or `e2e` and are deselected 
 `make record-shapes` records the *shape* of every kind of payload `data/yahoo.py` parses -
 index kinds and timezones, column dtypes, the type of each key it reads (found by scanning
 `yahoo.py`), what an unknown symbol raises - into `tests/shapes/yahoo.json`, with none of
-Yahoo's values. `tests/fakes.py` builds data of those shapes, so the unit suite parses
-realistic payloads; keep new fakes to them.
+Yahoo's values. `tests/test_fakes_match_shapes.py` holds the fakes in `tests/fakes.py` to
+it, so the unit suite parses realistic payloads. The nightly live job runs
+`scripts/record_shapes.py --check` and fails when Yahoo, yfinance or pandas starts returning
+something new; then run `make record-shapes` (it merges with what is committed), update the
+fakes the shape test names, and fix any parser that needs it.
 
 ## The contract snapshot
 
