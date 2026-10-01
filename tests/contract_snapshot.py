@@ -8,12 +8,13 @@ slipping past an allow-list. Only the keys named in this module are dropped.
 
 import difflib
 import json
+import re
 from pathlib import Path
 from typing import Any
 
 from fastmcp import Client
 from fastmcp.client.transports import FastMCPTransport
-from mcp.types import TextContent
+from mcp.types import TextContent, TextResourceContents
 from pydantic import BaseModel
 
 from tests.prompt_samples import SAMPLE_ARGS
@@ -23,6 +24,8 @@ SNAPSHOT_ROOT = Path(__file__).parent / "snapshots" / "contract"
 SNAPSHOT_SUFFIXES = (".json", ".md")
 #: Longest diff shown per changed file before it is cut short.
 MAX_DIFF_LINES = 80
+#: Names become file names, so they must be unique and stay inside the snapshot root.
+_SAFE_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
 async def collect_contract(client: Client[FastMCPTransport]) -> dict[str, str]:
@@ -30,15 +33,28 @@ async def collect_contract(client: Client[FastMCPTransport]) -> dict[str, str]:
     server_info = client.server_info
     assert server_info is not None
     # The version is left out: it changes every release and steers nothing.
-    files = {"server.md": f"# {server_info.name}\n\n{client.instructions or ''}"}
+    files = {
+        "server.md": f"# {server_info.name}\n\n{client.instructions or ''}",
+        "server.json": _dumps(
+            {key: value for key, value in _wire(server_info).items() if key != "version"}
+        ),
+    }
 
     tools = await client.list_tools()
+    prompts = await client.list_prompts()
+    resources = await client.list_resources()
+    for kind, names in (
+        ("tool", [tool.name for tool in tools]),
+        ("prompt", [prompt.name for prompt in prompts]),
+        ("resource", [resource.name for resource in resources]),
+    ):
+        _check_names(kind, names)
+
     for tool in tools:
         files[f"tools/{tool.name}.json"] = _dumps(_wire(tool))
         # The JSON is the faithful record; a verbatim copy of the description diffs readably.
         files[f"tools/{tool.name}.md"] = tool.description or ""
 
-    prompts = await client.list_prompts()
     for prompt in prompts:
         if prompt.name not in SAMPLE_ARGS:
             raise AssertionError(
@@ -63,13 +79,14 @@ async def collect_contract(client: Client[FastMCPTransport]) -> dict[str, str]:
         )
         files[f"prompts/{prompt.name}.md"] = "\n\n---\n\n".join(texts)
 
-    resources = await client.list_resources()
     for resource in resources:
         files[f"resources/{resource.name}.json"] = _dumps(_wire(resource))
         contents = await client.read_resource(resource.uri)
-        files[f"resources/{resource.name}.md"] = "".join(
-            getattr(content, "text", "") for content in contents
-        )
+        texts = []
+        for content in contents:
+            assert isinstance(content, TextResourceContents), "only text resources are snapshotted"
+            texts.append(content.text)
+        files[f"resources/{resource.name}.md"] = "".join(texts)
     templates = await client.list_resource_templates()
     files["resource_templates.json"] = _dumps([_wire(template) for template in templates])
 
@@ -102,7 +119,11 @@ def compare(root: Path, expected: dict[str, str]) -> list[str]:
 
 
 def update(root: Path, expected: dict[str, str]) -> tuple[int, int]:
-    """Write the expected files and delete stale ones; returns (written, deleted)."""
+    """Write the expected files and delete stale ones; returns (written, deleted).
+
+    Every ``.json``/``.md`` file under ``root`` belongs to the snapshot, so one that no longer
+    corresponds to the contract is deleted, along with directories left empty.
+    """
     written = 0
     for relative, text in expected.items():
         path = root / relative
@@ -114,7 +135,17 @@ def update(root: Path, expected: dict[str, str]) -> tuple[int, int]:
     stale = _snapshot_files(root) - expected.keys()
     for relative in stale:
         (root / relative).unlink()
+    for directory in sorted((p for p in root.rglob("*") if p.is_dir()), reverse=True):
+        if not any(directory.iterdir()):
+            directory.rmdir()
     return written, len(stale)
+
+
+def _check_names(kind: str, names: list[str]) -> None:
+    unsafe = [name for name in names if not _SAFE_NAME.match(name)]
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    assert not unsafe, f"{kind} names unusable as snapshot file names: {unsafe}"
+    assert not duplicates, f"duplicate {kind} names would overwrite each other: {duplicates}"
 
 
 def _wire(model: BaseModel) -> dict[str, Any]:

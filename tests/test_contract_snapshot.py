@@ -7,6 +7,7 @@ reads best). A fastmcp, mcp or pydantic bump can change it too; that is intended
 """
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -14,9 +15,14 @@ from fastmcp import Client
 
 from finance_mcp import __version__
 from finance_mcp.server import create_server
-from tests.contract_snapshot import SNAPSHOT_ROOT, collect_contract, compare, update
+from tests.contract_snapshot import (
+    MAX_DIFF_LINES,
+    SNAPSHOT_ROOT,
+    collect_contract,
+    compare,
+    update,
+)
 from tests.fakes import make_client
-from tests.prompt_samples import SAMPLE_ARGS
 
 
 async def _contract() -> dict[str, str]:
@@ -36,40 +42,24 @@ async def test_contract_matches_the_snapshot(request: pytest.FixtureRequest) -> 
     )
 
 
-async def test_contract_covers_every_tool_prompt_and_resource() -> None:
-    files = await _contract()
-    async with Client(create_server(yf_client=make_client())) as client:
-        tools = [t.name for t in await client.list_tools()]
-        prompts = [p.name for p in await client.list_prompts()]
-        resources = [r.name for r in await client.list_resources()]
-    for tool in tools:
-        assert {f"tools/{tool}.json", f"tools/{tool}.md"} <= files.keys()
-    for prompt in prompts:
-        assert {f"prompts/{prompt}.json", f"prompts/{prompt}.md"} <= files.keys()
-    for resource in resources:
-        assert {f"resources/{resource}.json", f"resources/{resource}.md"} <= files.keys()
-    assert {"server.md", "index.json", "resource_templates.json"} <= files.keys()
-    assert set(prompts) == set(SAMPLE_ARGS)
-
-
 async def test_contract_does_not_depend_on_the_release() -> None:
     # The server version reaches clients in serverInfo and, in newer protocol eras, in every
     # get_prompt result's _meta. Neither is steering text, and pinning it would fail the
     # snapshot on every release.
     files = await _contract()
-    assert not [path for path, text in files.items() if __version__ in text]
+    version = re.compile(rf"(?<![\d.]){re.escape(__version__)}(?![\d.])")
+    assert not [path for path, text in files.items() if version.search(text)]
 
 
-async def test_contract_records_the_wire_order() -> None:
-    # Per-file storage hides the order clients list things in, so index.json pins it.
+async def test_contract_files_are_exactly_what_the_index_lists() -> None:
     files = await _contract()
-    async with Client(create_server(yf_client=make_client())) as client:
-        order = {
-            "tools": [t.name for t in await client.list_tools()],
-            "prompts": [p.name for p in await client.list_prompts()],
-            "resources": [r.name for r in await client.list_resources()],
+    index = json.loads(files["index.json"])
+    expected = {"server.md", "server.json", "index.json", "resource_templates.json"}
+    for kind, folder in (("tools", "tools"), ("prompts", "prompts"), ("resources", "resources")):
+        expected |= {
+            f"{folder}/{name}{suffix}" for name in index[kind] for suffix in (".json", ".md")
         }
-    assert json.loads(files["index.json"]) == order
+    assert set(files) == expected
 
 
 # --- the guard's own behaviour ---------------------------------------------------------
@@ -137,3 +127,41 @@ def test_snapshot_text_round_trips_byte_for_byte(tmp_path: Path) -> None:
     files = {"prompts/p.md": "line one\r\nline two\n€ and ü\n"}
     update(tmp_path, files)
     assert compare(tmp_path, files) == []
+
+
+def test_compare_cuts_a_long_diff_short(tmp_path: Path) -> None:
+    old = "".join(f"line {i}\n" for i in range(200))
+    _write(tmp_path, {"prompts/p.md": old})
+    [problem] = compare(tmp_path, {"prompts/p.md": old.replace("line", "row")})
+    assert "more diff lines" in problem
+    assert problem.count("\n") < MAX_DIFF_LINES + 10
+
+
+def test_update_removes_directories_left_empty(tmp_path: Path) -> None:
+    _write(tmp_path, {"resources/gone.json": "{}\n", "server.md": "x\n"})
+    update(tmp_path, {"server.md": "x\n"})
+    assert not (tmp_path / "resources").exists()
+
+
+async def test_a_duplicate_resource_name_is_rejected() -> None:
+    server = create_server(yf_client=make_client())
+
+    @server.resource("finance://other", name="finance_conventions")
+    def other() -> str:
+        return "text"
+
+    async with Client(server) as client:
+        with pytest.raises(AssertionError, match="duplicate resource names"):
+            await collect_contract(client)
+
+
+async def test_a_binary_resource_is_rejected_rather_than_snapshotted_empty() -> None:
+    server = create_server(yf_client=make_client())
+
+    @server.resource("finance://blob", name="blob", mime_type="application/octet-stream")
+    def blob() -> bytes:
+        return b"\x00\x01"
+
+    async with Client(server) as client:
+        with pytest.raises(AssertionError, match="only text resources"):
+            await collect_contract(client)

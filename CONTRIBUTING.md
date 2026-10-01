@@ -55,7 +55,9 @@ long prose (tool descriptions, rendered prompts) so it diffs line by line.
 A `fastmcp`, `mcp` or `pydantic` bump can change generated schemas or appended text, and
 that fails the snapshot too, on purpose. Dependabot groups those packages into one PR:
 check it out, run `make snapshot`, review and push. Pushing to a Dependabot branch stops
-its automatic rebases, which is fine for a one-off.
+its automatic rebases, which is fine for a one-off. `mcp` and `pydantic-core` are transitive,
+so they usually move with a `fastmcp` or `pydantic` bump; a manual `uv lock --upgrade` can
+move them too, and needs `make snapshot` like any other change to the lock.
 
 ## Adding a tool
 
