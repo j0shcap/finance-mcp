@@ -1,4 +1,4 @@
-.PHONY: install test test-live e2e lint format typecheck security check build run clean
+.PHONY: install test test-live e2e snapshot record-shapes release-prep release lint format typecheck security check build run clean
 
 install:
 	uv sync
@@ -20,6 +20,42 @@ test-live:
 # because the server under test runs in a subprocess, out of coverage's reach.
 e2e:
 	uv run pytest -m "e2e and not live" --no-cov
+
+# Rewrite the committed model-facing contract (tests/snapshots/contract/) from the server,
+# after an intended change to a tool, prompt, description or schema - or a fastmcp, mcp or
+# pydantic bump. Review the result with `git diff --word-diff` before committing it.
+snapshot:
+	uv run pytest tests/test_contract_snapshot.py --update-snapshots --no-cov -q -rs
+
+# Record the shapes of real Yahoo payloads into tests/shapes/yahoo.json - index kinds,
+# dtypes, key types, the unknown-symbol exception; none of Yahoo's values - merged with any
+# committed recording. The nightly live job runs `--check` and fails on anything new; after
+# re-recording, tests/test_fakes_match_shapes.py names the fakes that need updating.
+record-shapes:
+	uv run python -m scripts.record_shapes
+
+# Cut a release in CHANGELOG.md: move [Unreleased] under VERSION and update the compare
+# links. Commit it in a PR; merging that PR is the release PR.
+release-prep:
+	@test -n "$(VERSION)" || { echo "usage: make release-prep VERSION=X.Y.Z" >&2; exit 1; }
+	uv run python scripts/changelog.py release $(VERSION)
+
+# Publish the GitHub Release for VERSION on origin/master, with its CHANGELOG section as the
+# notes; that triggers .github/workflows/release.yml, which verifies, publishes to PyPI and
+# smoke-tests. Run after the release-prep PR is merged. Needs an authenticated gh.
+release:
+	@test -n "$(VERSION)" || { echo "usage: make release VERSION=X.Y.Z" >&2; exit 1; }
+	git fetch origin master
+	@if git ls-remote --exit-code --tags origin "refs/tags/v$(VERSION)" > /dev/null; then \
+		echo "v$(VERSION) already exists on origin. After a failed release, remove it first:" >&2; \
+		echo "  gh release delete v$(VERSION) --cleanup-tag --yes" >&2; \
+		exit 1; \
+	fi
+	git show origin/master:CHANGELOG.md > .release-changelog.md
+	uv run python scripts/changelog.py notes $(VERSION) --file .release-changelog.md > .release-notes.md
+	gh release create v$(VERSION) --target "$$(git rev-parse origin/master)" \
+		--title v$(VERSION) --notes-file .release-notes.md
+	rm -f .release-changelog.md .release-notes.md
 
 lint:
 	uv run ruff check .

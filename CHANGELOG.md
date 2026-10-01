@@ -14,6 +14,15 @@ contain breaking changes, and each one is listed under **Breaking changes**.
   lists drift from the server.
 
 ### Changed
+- Yahoo requests are capped at 8 in flight across all concurrent tool calls
+  (`FINANCE_MCP_MAX_CONCURRENT_REQUESTS`), and a request Yahoo throttles or the network drops
+  is retried up to twice with backoff (`FINANCE_MCP_REQUEST_RETRIES`, 0 to disable), within
+  about 15 seconds: throttling, dropped or refused connections, DNS blips, truncated responses,
+  HTTP/2 stream errors and 5xx. Unknown symbols, timeouts and SSL errors still fail at once.
+- The package version now comes from the git tag, so an install from an untagged commit reports
+  a `.devN` version rather than the last release's number. Releases are cut from this changelog,
+  and the publish workflow tests the exact wheel before uploading it and checks afterwards that
+  PyPI serves those same files.
 - Calculator rate parameters and results state per-period or annual and "as a decimal"
   consistently, and bond prices are stated in the units of `face`; descriptions only, no schema
   change.

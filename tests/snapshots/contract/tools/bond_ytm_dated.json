@@ -1,0 +1,111 @@
+{
+  "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Bond Yield by Settlement Date"
+  },
+  "description": "Solve the annual yield to maturity from a bond's CLEAN price at a settlement date.\n\nThe dated counterpart to bond_ytm, and the inverse of bond_price_dated: use it when\nsettlement may fall between coupon dates. Also returns the accrued interest and the\ndirty price, so a clean-price quote still tells you the cash amount. Day count\ndefaults to Actual/Actual ICMA; '30/360' reproduces Excel's YIELD with basis=0, except\nin the final coupon period -- pass first_period_discount='simple' to match Excel there.",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "clean_price": {
+        "description": "The CLEAN market price per 'face' -- the quoted price, EXCLUDING accrued interest. If you have the dirty/invoice price, subtract accrued interest first.",
+        "exclusiveMinimum": 0,
+        "type": "number"
+      },
+      "coupon_rate": {
+        "description": "Annual coupon rate as a decimal, e.g. 0.05 for 5%.",
+        "type": "number"
+      },
+      "day_count": {
+        "default": "actual/actual",
+        "description": "Day count for the accrued part of the coupon period. 'actual/actual' (the default) is Actual/Actual ICMA, used by US Treasuries and most sovereigns. '30/360' is the US (NASD) convention for corporates and munis, and is what Excel uses by default (basis=0).",
+        "enum": [
+          "actual/actual",
+          "30/360"
+        ],
+        "type": "string"
+      },
+      "face": {
+        "default": 100.0,
+        "description": "Face (par) value. Defaults to 100, so prices come back per 100 of face -- the market quoting convention. Pass the real position size to get cash amounts.",
+        "exclusiveMinimum": 0,
+        "type": "number"
+      },
+      "first_period_discount": {
+        "default": "compound",
+        "description": "How to discount the part period before the next coupon. 'compound' (the default) is the street convention, (1+y)**stub, and matches Excel's PRICE/YIELD while more than one coupon remains. 'simple' is 1 + stub*y -- the US Treasury convention in 31 CFR 356 appendix B, and also what Excel switches to in the FINAL coupon period, where 'compound' is ~0.01 per 100 higher. They differ by a few thousandths per 100 elsewhere, so use 'simple' to match Treasury's published figures or Excel inside the last period.",
+        "enum": [
+          "compound",
+          "simple"
+        ],
+        "type": "string"
+      },
+      "frequency": {
+        "default": 2,
+        "description": "Coupon payments per year, e.g. 2 for semiannual. Must divide 12 evenly (1, 2, 3, 4, 6 or 12) so coupon dates fall a whole number of months apart.",
+        "exclusiveMinimum": 0,
+        "maximum": 12,
+        "type": "integer"
+      },
+      "maturity": {
+        "description": "Maturity (redemption) date (ISO 8601). Coupon dates are generated backward from here, so the schedule sits on this day-of-month.",
+        "format": "date",
+        "type": "string"
+      },
+      "settlement": {
+        "description": "Settlement date (ISO 8601, e.g. 2024-03-07): the date the trade settles and the buyer pays. May fall between coupon dates.",
+        "format": "date",
+        "type": "string"
+      }
+    },
+    "required": [
+      "settlement",
+      "maturity",
+      "coupon_rate",
+      "clean_price"
+    ],
+    "type": "object"
+  },
+  "name": "bond_ytm_dated",
+  "outputSchema": {
+    "description": "Yield to maturity solved from a bond's clean price for a given settlement date.",
+    "properties": {
+      "accrued_interest": {
+        "description": "Interest accrued to settlement, per 'face', implied by the coupon schedule.",
+        "type": "number"
+      },
+      "clean_price": {
+        "description": "The CLEAN price that was solved from, per 'face' (echoed back as given).",
+        "type": "number"
+      },
+      "dirty_price": {
+        "description": "clean_price + accrued_interest per 'face': the cash the buyer pays.",
+        "type": "number"
+      },
+      "first_period_discount": {
+        "description": "Part-period discounting convention the yield was solved under: 'compound' (street/Excel) or 'simple' (US Treasury).",
+        "enum": [
+          "compound",
+          "simple"
+        ],
+        "type": "string"
+      },
+      "yield_to_maturity": {
+        "description": "Annual yield to maturity as a decimal (0.065 = 6.5%), compounded at 'frequency' per year.",
+        "type": "number"
+      }
+    },
+    "required": [
+      "yield_to_maturity",
+      "clean_price",
+      "accrued_interest",
+      "dirty_price",
+      "first_period_discount"
+    ],
+    "type": "object"
+  },
+  "title": "Bond Yield by Settlement Date"
+}

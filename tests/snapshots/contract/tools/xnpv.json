@@ -1,0 +1,70 @@
+{
+  "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Net Present Value (Dated Cashflows)"
+  },
+  "description": "Net present value of cashflows on actual calendar dates (irregular spacing allowed).\n\nActual/365 day count (matches Excel XNPV); base date is the earliest cashflow.",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "cashflows": {
+        "description": "Dated cashflows; discounted by actual days from the earliest date.",
+        "items": {
+          "description": "A single cashflow on a calendar date (for XNPV/XIRR).",
+          "properties": {
+            "amount": {
+              "description": "Cashflow amount; outflows negative, inflows positive.",
+              "type": "number"
+            },
+            "date": {
+              "description": "Cashflow date (ISO 8601, e.g. 2024-01-31).",
+              "format": "date",
+              "type": "string"
+            }
+          },
+          "required": [
+            "date",
+            "amount"
+          ],
+          "type": "object"
+        },
+        "maxItems": 1000,
+        "minItems": 1,
+        "type": "array"
+      },
+      "rate": {
+        "description": "Annual discount rate as a decimal, e.g. 0.08 for 8%.",
+        "exclusiveMinimum": -1,
+        "type": "number"
+      }
+    },
+    "required": [
+      "rate",
+      "cashflows"
+    ],
+    "type": "object"
+  },
+  "name": "xnpv",
+  "outputSchema": {
+    "description": "Net present value at a given discount rate.",
+    "properties": {
+      "npv": {
+        "description": "Net present value.",
+        "type": "number"
+      },
+      "rate": {
+        "description": "Discount rate used, as a decimal: per period for npv, annual for xnpv.",
+        "type": "number"
+      }
+    },
+    "required": [
+      "rate",
+      "npv"
+    ],
+    "type": "object"
+  },
+  "title": "Net Present Value (Dated Cashflows)"
+}

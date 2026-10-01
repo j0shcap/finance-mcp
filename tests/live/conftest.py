@@ -135,6 +135,9 @@ class Layer:
     async def call(self, tool: str, **kwargs: Any) -> Any:
         """Call `tool`, retrying while throttled and skipping if it never clears.
 
+        The server already retries a throttled request (YahooSource), so these outer retries
+        give Yahoo longer to clear: up to nine attempts before a throttled test skips.
+
         Returns the same model at either layer, so one test body covers both.
         """
         for delay in (*BACKOFF_SECONDS, None):  # None marks the final attempt

@@ -1,0 +1,138 @@
+{
+  "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": false,
+    "openWorldHint": true,
+    "readOnlyHint": true,
+    "title": "Ticker Symbol Search"
+  },
+  "description": "Resolve a company or instrument name to ticker symbol(s), best match first.\n\nReturns all instrument types (EQUITY, ETF, CRYPTOCURRENCY, FUTURE, INDEX, …); use each\nmatch's quote_type to choose. Use this to find a symbol before calling the other tools.\nAn unmatched query returns an empty match list (not an error).",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "max_results": {
+        "default": 8,
+        "description": "Maximum number of matches to return.",
+        "maximum": 20,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "query": {
+        "description": "Company or instrument name to resolve, e.g. 'Apple'.",
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "\\S",
+        "type": "string"
+      }
+    },
+    "required": [
+      "query"
+    ],
+    "type": "object"
+  },
+  "name": "search_symbols",
+  "outputSchema": {
+    "description": "Search results for a query, best-match first.",
+    "properties": {
+      "matches": {
+        "description": "Matching symbols ordered by relevance (best match first).",
+        "items": {
+          "description": "One search hit resolving a name/query to a tradable symbol.",
+          "properties": {
+            "exchange": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Exchange display name where the instrument trades, e.g. 'NASDAQ'."
+            },
+            "industry": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Industry classification, if available."
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Company or instrument long name, or short name as a fallback."
+            },
+            "quote_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Instrument type returned by Yahoo: EQUITY, ETF, CRYPTOCURRENCY, FUTURE, INDEX, MUTUALFUND, or similar."
+            },
+            "score": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Yahoo relevance score for this result (higher = better match to the query)."
+            },
+            "sector": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Sector classification, if available."
+            },
+            "symbol": {
+              "description": "Ticker symbol, e.g. 'AAPL'.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "symbol"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "query": {
+        "description": "The search query that produced these results.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "query",
+      "matches"
+    ],
+    "type": "object"
+  },
+  "title": "Ticker Symbol Search"
+}

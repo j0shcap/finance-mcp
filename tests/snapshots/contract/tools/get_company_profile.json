@@ -1,0 +1,241 @@
+{
+  "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": false,
+    "openWorldHint": true,
+    "readOnlyHint": true,
+    "title": "Company Profile"
+  },
+  "description": "Company profile and key stats.\n\nIncludes sector, industry, market cap and P/E, with recent dividends and splits.\nNote: dividend_yield is a percent (e.g. 5.92 means 5.92%).",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "ticker": {
+        "description": "Ticker symbol, e.g. 'AAPL'. Case-insensitive. Yahoo suffixes and prefixes are allowed (BRK-B, ^GSPC, RY.TO, BTC-USD, EURUSD=X); one symbol per value.",
+        "maxLength": 24,
+        "minLength": 1,
+        "pattern": "^\\s*[A-Za-z0-9.\\-^=]{1,20}\\s*$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "ticker"
+    ],
+    "type": "object"
+  },
+  "name": "get_company_profile",
+  "outputSchema": {
+    "description": "Company profile and key stats, with recent corporate actions.",
+    "properties": {
+      "beta": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Beta vs the market over ~5 years (1.0 = moves with the market)."
+      },
+      "country": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Country."
+      },
+      "currency": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Quote currency (ISO 4217, e.g. 'USD'). Financial statements may be reported in a different currency."
+      },
+      "dividend_yield": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Trailing dividend yield as a PERCENT (5.92 = 5.92%, not 0.0592)."
+      },
+      "employees": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Number of full-time employees."
+      },
+      "forward_pe": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Forward price/earnings ratio (next-year estimate)."
+      },
+      "industry": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Industry."
+      },
+      "market_cap": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Market capitalization in quote currency (absolute units)."
+      },
+      "name": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Company name."
+      },
+      "recent_dividends": {
+        "description": "Most recent dividends (newest last).",
+        "items": {
+          "description": "A single cash dividend.",
+          "properties": {
+            "amount": {
+              "description": "Cash dividend per share, in quote currency.",
+              "type": "number"
+            },
+            "date": {
+              "description": "Ex-dividend date (ISO 8601).",
+              "type": "string"
+            }
+          },
+          "required": [
+            "date",
+            "amount"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "sector": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Sector."
+      },
+      "splits": {
+        "description": "Stock split history.",
+        "items": {
+          "description": "A single stock split.",
+          "properties": {
+            "date": {
+              "description": "Split date (ISO 8601).",
+              "type": "string"
+            },
+            "ratio": {
+              "description": "Shares after the split per share before (e.g. 4.0 = a 4-for-1 split).",
+              "type": "number"
+            }
+          },
+          "required": [
+            "date",
+            "ratio"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "summary": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Business description (free text)."
+      },
+      "symbol": {
+        "description": "Ticker symbol.",
+        "type": "string"
+      },
+      "trailing_pe": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Trailing twelve-month price/earnings ratio."
+      },
+      "website": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Website URL."
+      }
+    },
+    "required": [
+      "symbol"
+    ],
+    "type": "object"
+  },
+  "title": "Company Profile"
+}

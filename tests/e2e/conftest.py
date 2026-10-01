@@ -18,10 +18,11 @@ import os
 import shutil
 import subprocess
 import sys
-import tomllib
+import zipfile
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
+from email.parser import HeaderParser
 from pathlib import Path
 
 import pytest
@@ -33,13 +34,11 @@ from fastmcp.client.transports import StdioTransport
 _E2E_DIR = Path(__file__).parent
 REPO_ROOT = _E2E_DIR.parent.parent
 
-#: The version the built artifact must report: pyproject is the source of truth for it.
-PROJECT_VERSION: str = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())["project"][
-    "version"
-]
-
 #: Point this at a prebuilt wheel to test that artifact instead of building one.
 WHEEL_ENV_VAR = "FINANCE_MCP_E2E_WHEEL"
+#: The exact version the wheel must carry. The release workflow sets it to the tag; unset,
+#: the wheel's own metadata is the expectation (the version comes from git).
+EXPECT_VERSION_ENV_VAR = "FINANCE_MCP_E2E_EXPECT_VERSION"
 
 #: Generous: the first launch of a fresh venv compiles bytecode for pandas and yfinance.
 INIT_TIMEOUT_SECONDS = 120.0
@@ -83,7 +82,7 @@ def wheel(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """The wheel under test: freshly built, never whatever is lying around in dist/.
 
     A stale dist/*.whl from an earlier version would otherwise pass for this one; the
-    version assertion in the protocol tests ties the artifact back to pyproject.
+    version assertion in the protocol tests ties the server to the artifact's metadata.
     """
     override = os.environ.get(WHEEL_ENV_VAR)
     if override:
@@ -92,6 +91,18 @@ def wheel(tmp_path_factory: pytest.TempPathFactory) -> Path:
     _run(_require("uv"), "build", "--wheel", "--out-dir", str(out))
     (built,) = out.glob("mcp_finance-*.whl")
     return built
+
+
+@pytest.fixture(scope="session")
+def project_version(wheel: Path) -> str:
+    """The version the wheel under test carries, which the server must report."""
+    with zipfile.ZipFile(wheel) as archive:
+        metadata = next(n for n in archive.namelist() if n.endswith(".dist-info/METADATA"))
+        version = HeaderParser().parsestr(archive.read(metadata).decode())["Version"]
+    expected = os.environ.get(EXPECT_VERSION_ENV_VAR)
+    if expected and version != expected:
+        pytest.fail(f"the wheel is version {version}, but {expected} was expected")
+    return str(version)
 
 
 @pytest.fixture(scope="session")

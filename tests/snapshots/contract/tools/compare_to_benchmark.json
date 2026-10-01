@@ -1,0 +1,251 @@
+{
+  "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": false,
+    "openWorldHint": true,
+    "readOnlyHint": true,
+    "title": "Benchmark-Relative Statistics"
+  },
+  "description": "Beta, correlation, Jensen's alpha, tracking error, information ratio and excess\nreturn versus a benchmark, over the dates the two instruments share.\n\nThe two daily close series are inner-joined on date, so a 24/7 instrument compared\nagainst an equity benchmark contributes only its weekday closes (the weekend move\nlands in the Monday return). overlapping_observations reports how many dates were\nactually used - a thin overlap makes every figure noisy, so read it first.\n\nAnnualized figures (both CAGRs, alpha, tracking error, information ratio) are null\nwhen the overlap spans under 85 days; beta, correlation and excess return are not,\nsince they need no annualization. risk_free_rate only affects alpha; left out, it is\nthe 13-week T-bill yield averaged over the overlapping dates (alpha is null if that\ncannot be formed). Returns are in each instrument's own quote currency, so a\ncross-currency pair folds an FX move into every figure - say so rather than reading\nit straight.",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "benchmark": {
+        "default": "SPY",
+        "description": "Benchmark to measure against; defaults to SPY (S&P 500). Use a benchmark that matches the asset: ^GSPC or SPY for US large-cap, QQQ for US tech, a local index for a non-US listing (returns are compared in each instrument's own quote currency).",
+        "maxLength": 24,
+        "minLength": 1,
+        "pattern": "^\\s*[A-Za-z0-9.\\-^=]{1,20}\\s*$",
+        "type": "string"
+      },
+      "period": {
+        "default": "1y",
+        "description": "Look-back window for the comparison.",
+        "enum": [
+          "1d",
+          "5d",
+          "1mo",
+          "3mo",
+          "6mo",
+          "1y",
+          "2y",
+          "5y",
+          "10y",
+          "ytd",
+          "max"
+        ],
+        "type": "string"
+      },
+      "risk_free_rate": {
+        "anyOf": [
+          {
+            "maximum": 1.0,
+            "minimum": -0.5,
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Annual risk-free rate as a DECIMAL, not a percent: 0.045 means 4.5%. Leave it out to use the 13-week US T-bill yield averaged over the measured dates, so the Sharpe, Sortino and alpha are excess return over cash. Pass 0 for RAW return per unit of risk."
+      },
+      "ticker": {
+        "description": "Ticker symbol, e.g. 'AAPL'. Case-insensitive. Yahoo suffixes and prefixes are allowed (BRK-B, ^GSPC, RY.TO, BTC-USD, EURUSD=X); one symbol per value.",
+        "maxLength": 24,
+        "minLength": 1,
+        "pattern": "^\\s*[A-Za-z0-9.\\-^=]{1,20}\\s*$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "ticker"
+    ],
+    "type": "object"
+  },
+  "name": "compare_to_benchmark",
+  "outputSchema": {
+    "description": "How one instrument performed relative to a benchmark over the dates they share.\n\nBoth series are daily auto-adjusted closes, INNER-JOINED on date: a 24/7 instrument's\nweekend closes are dropped because the benchmark has none, so the asset's weekend move\nlands in the following session's return. ``overlapping_observations`` is the number of\nshared dates actually used - read it before trusting any figure here, since a thin\noverlap (a recent listing, a long halt) makes every statistic noisy.\n\nReturns are in each instrument's own quote currency. Comparing a non-USD listing against\na USD benchmark therefore mixes an FX move into beta, alpha and excess return; compare\nlike-for-like listings, or treat a cross-currency figure as indicative only.",
+    "properties": {
+      "alpha_percent": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Annualized Jensen's alpha in percentage POINTS: (Ra - Rf) - beta * (Rb - Rf), the return earned beyond what the beta exposure predicted. Null when beta, either annualized return, or risk_free_rate is null."
+      },
+      "annualized_return_percent": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "The asset's CAGR over the shared dates, percent. Null when the overlap spans under 85 days."
+      },
+      "benchmark": {
+        "description": "Benchmark ticker compared against.",
+        "type": "string"
+      },
+      "benchmark_annualized_return_percent": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "The benchmark's CAGR over the same shared dates, percent. Null when the overlap spans under 85 days."
+      },
+      "benchmark_total_return_percent": {
+        "description": "The benchmark's total return over the same shared dates, as a PERCENT.",
+        "type": "number"
+      },
+      "beta": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Sensitivity to the benchmark: 1.0 moves with it, above 1 amplifies it, negative moves against it. Null when the overlap has under two returns or the benchmark never moved."
+      },
+      "correlation": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Pearson correlation of the daily returns, -1 to 1. Read it alongside beta: a large beta at a low correlation means the moves are big but unrelated, so the beta explains little. Null when either series never moved."
+      },
+      "end_date": {
+        "description": "Last shared close date (ISO 8601).",
+        "type": "string"
+      },
+      "excess_return_percent": {
+        "description": "total_return_percent minus benchmark_total_return_percent, in percentage POINTS. A simple difference, not a ratio and not beta-adjusted - for the beta-adjusted version read alpha_percent.",
+        "type": "number"
+      },
+      "information_ratio": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Mean active return per unit of tracking error, annualized and dimensionless: how reliably the asset out- or under-performed rather than by how much. Null when the overlap spans under 85 days or tracking error is zero."
+      },
+      "overlapping_observations": {
+        "description": "Daily closes the two instruments share over the window, after the inner join on date. Fewer than the asset's own bar count whenever the calendars differ (a 7-day crypto series against a 5-day equity benchmark).",
+        "type": "integer"
+      },
+      "period": {
+        "description": "Look-back window requested, e.g. '1y'.",
+        "type": "string"
+      },
+      "periods_per_year": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Observations per year inferred from the OVERLAPPING dates - roughly 252 when either leg trades weekdays only, even if the other trades every day. Null when the overlap spans under 85 days."
+      },
+      "risk_free_rate": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Annual risk-free rate used for alpha, as an effective annual decimal (0.042 = 4.2%). By default the 13-week T-bill yield averaged over the overlapping dates; with a beta of exactly 1 it cancels out of alpha entirely. Null when no rate was passed and the T-bill average could not be formed, and alpha is then null too."
+      },
+      "risk_free_rate_note": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Why the rate is unavailable and how to proceed (pass risk_free_rate explicitly); null otherwise."
+      },
+      "risk_free_rate_source": {
+        "description": "Where risk_free_rate came from. 'caller': the rate passed in. 'treasury_bill': none was passed, so it is the 13-week US T-bill yield (Yahoo ^IRX) averaged over the measured dates and converted from its discount quote to an effective annual rate. 'unavailable': none was passed and that average could not be formed - see risk_free_rate_note; the figures that need a rate are null.",
+        "enum": [
+          "caller",
+          "treasury_bill",
+          "unavailable"
+        ],
+        "type": "string"
+      },
+      "start_date": {
+        "description": "First shared close date (ISO 8601).",
+        "type": "string"
+      },
+      "symbol": {
+        "description": "Ticker symbol analyzed.",
+        "type": "string"
+      },
+      "total_return_percent": {
+        "description": "The asset's total return over the shared dates, as a PERCENT (12.3 = 12.3%).",
+        "type": "number"
+      },
+      "tracking_error_percent": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Annualized standard deviation of the daily active return (asset minus benchmark), percent. 0 for a perfect tracker. Null when the overlap spans under 85 days."
+      }
+    },
+    "required": [
+      "symbol",
+      "benchmark",
+      "period",
+      "overlapping_observations",
+      "start_date",
+      "end_date",
+      "risk_free_rate",
+      "risk_free_rate_source",
+      "total_return_percent",
+      "benchmark_total_return_percent",
+      "excess_return_percent"
+    ],
+    "type": "object"
+  },
+  "title": "Benchmark-Relative Statistics"
+}

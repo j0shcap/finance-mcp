@@ -1,0 +1,30 @@
+{
+  "arguments": [
+    {
+      "description": "The cashflows in any form: a list ('-1000, 300, 300, 400'), a description ('-50k now, then 12k a year for 6 years'), or dated amounts.\n\nProvide a value matching the following JSON schema: {\"description\":\"The cashflows in any form: a list ('-1000, 300, 300, 400'), a description ('-50k now, then 12k a year for 6 years'), or dated amounts.\",\"type\":\"string\"}. Encode non-string values as JSON.",
+      "name": "cashflows",
+      "required": true
+    },
+    {
+      "description": "Hurdle / discount rate, e.g. '8%' or '8% annual'.\n\nProvide a value matching the following JSON schema: {\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"description\":\"Hurdle / discount rate, e.g. '8%' or '8% annual'.\"}. Encode non-string values as JSON.",
+      "name": "discount_rate",
+      "required": false
+    },
+    {
+      "description": "Rate interim inflows can realistically be reinvested at (MIRR).\n\nProvide a value matching the following JSON schema: {\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"description\":\"Rate interim inflows can realistically be reinvested at (MIRR).\"}. Encode non-string values as JSON.",
+      "name": "reinvest_rate",
+      "required": false
+    }
+  ],
+  "description": "Evaluate an investment's cashflows with NPV, IRR, MIRR and XIRR: structures the\nflows and their timing, diagnoses multiple or missing IRRs and borrowing-type flows,\nmakes NPV the decision rule, and explains when MIRR is the better single figure.",
+  "name": "investment_cashflows",
+  "rendered_description": "Evaluate an investment's cashflows with NPV, IRR, MIRR and XIRR: structures the\nflows and their timing, diagnoses multiple or missing IRRs and borrowing-type flows,\nmakes NPV the decision rule, and explains when MIRR is the better single figure.",
+  "rendered_roles": [
+    "user"
+  ],
+  "sample_arguments": {
+    "cashflows": "-1000, 300, 300, 400",
+    "discount_rate": "8%",
+    "reinvest_rate": "6%"
+  }
+}

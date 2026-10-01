@@ -1,0 +1,450 @@
+{
+  "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": false,
+    "openWorldHint": true,
+    "readOnlyHint": true,
+    "title": "Side-by-Side Ticker Comparison"
+  },
+  "description": "Side-by-side performance and key valuation metrics for 2-10 tickers.\n\nEach row carries total/annualized return, volatility, max drawdown and the\nrisk-adjusted ratios over `period` - measured against the caller's risk_free_rate,\nor by default the 13-week T-bill yield over that row's own dates (each row echoes\nits rate) - plus Yahoo's valuation metrics (P/E, forward P/E, P/B, P/S, PEG,\nEV/EBITDA, margins, ROE, debt/equity) in their as-reported units - margins and ROE\nare fractions, debt_to_equity is already a percent. Rank peers on PEG or\ngrowth-vs-multiple rather than raw P/E.\n\nTickers are fetched in parallel and results are partial: a ticker whose price\nhistory could not be fetched is named in `errors` with the reason and has no row,\nand a row whose valuation metrics failed is still present with those fields null\nand `metrics_error` set. One bad ticker never invalidates the rest.\n\nRows whose quote currency differs from the table's base_currency are flagged with\ncurrency_differs, and mixed_currencies summarises it: those returns carry an FX\ncomponent the other rows do not, so compare such rows on ratios and say so. A row\nwhose financial_currency differs from its currency is a cross-listing: its P/S, P/B\nand EV multiples mix two currencies, so rank it on P/E, PEG and the margins.",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "period": {
+        "default": "1y",
+        "description": "Look-back window applied to every row.",
+        "enum": [
+          "1d",
+          "5d",
+          "1mo",
+          "3mo",
+          "6mo",
+          "1y",
+          "2y",
+          "5y",
+          "10y",
+          "ytd",
+          "max"
+        ],
+        "type": "string"
+      },
+      "risk_free_rate": {
+        "anyOf": [
+          {
+            "maximum": 1.0,
+            "minimum": -0.5,
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Annual risk-free rate as a DECIMAL, not a percent: 0.045 means 4.5%. Leave it out to use the 13-week US T-bill yield averaged over the measured dates, so the Sharpe, Sortino and alpha are excess return over cash. Pass 0 for RAW return per unit of risk."
+      },
+      "tickers": {
+        "description": "2-10 ticker symbols to compare, e.g. ['AAPL', 'MSFT', 'GOOGL']. For one ticker use analyze_performance.",
+        "items": {
+          "description": "Ticker symbol, e.g. 'AAPL'. Case-insensitive. Yahoo suffixes and prefixes are allowed (BRK-B, ^GSPC, RY.TO, BTC-USD, EURUSD=X); one symbol per value.",
+          "maxLength": 24,
+          "minLength": 1,
+          "pattern": "^\\s*[A-Za-z0-9.\\-^=]{1,20}\\s*$",
+          "type": "string"
+        },
+        "maxItems": 10,
+        "minItems": 2,
+        "type": "array"
+      }
+    },
+    "required": [
+      "tickers"
+    ],
+    "type": "object"
+  },
+  "name": "compare_tickers",
+  "outputSchema": {
+    "description": "Side-by-side performance and valuation for a small set of tickers.\n\nResults are partial, like get_quote: a ticker whose price history could not be fetched\nappears in ``errors`` with no row, and one row's failure never discards the others. Rows\nfollow the order the tickers were requested (duplicate spellings collapse).",
+    "properties": {
+      "base_currency": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "The `currency` of the first row that reported one; the reference for each row's currency_differs flag. Null when no row reported a currency."
+      },
+      "errors": {
+        "description": "One entry per ticker that produced no row; empty when all succeeded.",
+        "items": {
+          "description": "Why one ticker in a compare_tickers batch has no row.",
+          "properties": {
+            "error": {
+              "description": "Why no row could be built: an invalid/delisted symbol, too little price history, or a source failure. Read it before retrying - retrying an invalid symbol will not help.",
+              "type": "string"
+            },
+            "symbol": {
+              "description": "The ticker that failed, normalized (or exactly as given if it could not be).",
+              "type": "string"
+            }
+          },
+          "required": [
+            "symbol",
+            "error"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "mixed_currencies": {
+        "default": false,
+        "description": "True when at least one row's currency differs from base_currency. The returns in this table are then not in one unit: an FX move is mixed into the rows that differ, so compare them on ratios and say so.",
+        "type": "boolean"
+      },
+      "period": {
+        "description": "Look-back window used for every row, e.g. '1y'.",
+        "type": "string"
+      },
+      "risk_free_rate": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "The annual risk-free rate the caller passed, applied to every row, as a decimal (0.045 = 4.5%). Null when none was passed: each row then carries its own 13-week T-bill average over its own dates - read the rows' risk_free_rate."
+      },
+      "risk_free_rate_note": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Why the table-level source is 'unavailable', and how to proceed; null otherwise."
+      },
+      "risk_free_rate_source": {
+        "description": "'caller': every row uses risk_free_rate. 'treasury_bill': each row uses the T-bill yield over its own dates (a row's own risk_free_rate_source is 'unavailable' where its window is not covered). 'unavailable': the T-bill history could not be fetched, so no row has a rate - see risk_free_rate_note.",
+        "enum": [
+          "caller",
+          "treasury_bill",
+          "unavailable"
+        ],
+        "type": "string"
+      },
+      "rows": {
+        "description": "One row per ticker whose price history was fetched, in request order.",
+        "items": {
+          "description": "One ticker's row in a side-by-side comparison: performance plus key valuation.\n\nPerformance figures come from daily auto-adjusted closes over the requested window\n(returns therefore already include reinvested dividends); valuation figures are Yahoo's\nas-reported ratios, with the units the get_key_metrics glossary describes. A row is\npresent whenever its price history was fetched, so the valuation fields can be null with\n``metrics_error`` explaining why.",
+          "properties": {
+            "annualized_return_percent": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "CAGR over the window, percent; null under 85 days."
+            },
+            "annualized_volatility_percent": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Annualized volatility, percent; null under 85 days."
+            },
+            "bars": {
+              "description": "Daily closes used for this row's performance figures.",
+              "type": "integer"
+            },
+            "calmar_ratio": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "CAGR per unit of max drawdown; null under 85 days or with no drawdown."
+            },
+            "currency": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Quote currency (ISO 4217) this row's returns are denominated in."
+            },
+            "currency_differs": {
+              "default": false,
+              "description": "True when this row's `currency` is known and differs from the table's base_currency: its returns include an FX component the other rows do not, so do not rank absolute amounts against them. False when the currency is unknown - a null currency is unlabelled, not proven different.",
+              "type": "boolean"
+            },
+            "debt_to_equity": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Debt-to-equity as a PERCENT (79.5 = 79.5%), not a multiple."
+            },
+            "end_date": {
+              "description": "Last close date (ISO 8601).",
+              "type": "string"
+            },
+            "ev_to_ebitda": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Enterprise value / EBITDA. Unreliable for a cross-listing: Yahoo mixes both currencies into the enterprise value."
+            },
+            "financial_currency": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Currency the company reports financials in. Differs from `currency` for ADRs and other cross-listings, whose price_to_sales, price_to_book and EV multiples Yahoo computes across both currencies - rank such a row on P/E, PEG and the margins."
+            },
+            "forward_pe": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Forward P/E ratio."
+            },
+            "max_drawdown_percent": {
+              "description": "Largest peak-to-trough decline, as a negative percent.",
+              "type": "number"
+            },
+            "metrics_error": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Set when the valuation metrics could not be fetched for this ticker, leaving every valuation field above null. The performance figures are unaffected."
+            },
+            "peg_ratio": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "P/E-to-growth ratio - the growth-adjusted multiple to rank on, rather than raw P/E."
+            },
+            "periods_per_year": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Trading periods per year inferred for THIS row (~252 for a weekday-traded equity, ~365 for a 24/7 instrument), which scales its annualized and risk-adjusted figures. Rows with different values were annualized on different calendars - say so before ranking their volatility or Sharpe against each other. Null under 85 days."
+            },
+            "price_to_book": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Price/book ratio. Unreliable for a cross-listing (financial_currency != currency): Yahoo divides the listed price by book value in another currency."
+            },
+            "price_to_sales": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Price/sales (TTM) ratio. Unreliable for a cross-listing: Yahoo divides market cap in `currency` by revenue in `financial_currency`."
+            },
+            "profit_margins": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Net profit margin as a FRACTION (0.27 = 27%)."
+            },
+            "return_on_equity": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Return on equity as a FRACTION (0.27 = 27%)."
+            },
+            "risk_free_rate": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Annual risk-free rate this row's Sharpe and Sortino are measured against, as an effective annual decimal: the caller's rate, or by default the 13-week T-bill average over THIS row's dates (a younger listing covers fewer of them). Null when the T-bill average could not be formed."
+            },
+            "risk_free_rate_note": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Why the rate is unavailable and how to proceed (pass risk_free_rate explicitly); null otherwise."
+            },
+            "risk_free_rate_source": {
+              "description": "Where risk_free_rate came from. 'caller': the rate passed in. 'treasury_bill': none was passed, so it is the 13-week US T-bill yield (Yahoo ^IRX) averaged over the measured dates and converted from its discount quote to an effective annual rate. 'unavailable': none was passed and that average could not be formed - see risk_free_rate_note; the figures that need a rate are null.",
+              "enum": [
+                "caller",
+                "treasury_bill",
+                "unavailable"
+              ],
+              "type": "string"
+            },
+            "sharpe_ratio": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Annualized Sharpe against this row's risk_free_rate; null under 85 days, when returns never varied, or when the row has no rate."
+            },
+            "sortino_ratio": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Annualized Sortino against this row's risk_free_rate; null under 85 days, with no downside, or when the row has no rate."
+            },
+            "start_date": {
+              "description": "First close date (ISO 8601).",
+              "type": "string"
+            },
+            "symbol": {
+              "description": "Ticker symbol.",
+              "type": "string"
+            },
+            "total_return_percent": {
+              "description": "Total return over the window, as a PERCENT (12.3 = 12.3%).",
+              "type": "number"
+            },
+            "trailing_pe": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Trailing P/E ratio."
+            }
+          },
+          "required": [
+            "symbol",
+            "bars",
+            "start_date",
+            "end_date",
+            "total_return_percent",
+            "max_drawdown_percent",
+            "risk_free_rate",
+            "risk_free_rate_source"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "period",
+      "risk_free_rate",
+      "risk_free_rate_source",
+      "rows"
+    ],
+    "type": "object"
+  },
+  "title": "Side-by-Side Ticker Comparison"
+}

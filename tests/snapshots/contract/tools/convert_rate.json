@@ -1,0 +1,91 @@
+{
+  "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Nominal / Effective Rate Conversion"
+  },
+  "description": "Convert between a nominal annual rate (APR) and an effective annual rate (APY/EAR).\n\nDiscrete uses periods_per_year (e.g. 12 = monthly); continuous ignores it\n(EAR = e^nominal - 1; nominal = ln(1 + EAR)).",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "compounding": {
+        "default": "discrete",
+        "description": "Compounding: 'discrete' uses periods_per_year; 'continuous' uses e^r.",
+        "enum": [
+          "discrete",
+          "continuous"
+        ],
+        "type": "string"
+      },
+      "direction": {
+        "description": "Which way to convert.",
+        "enum": [
+          "nominal_to_effective",
+          "effective_to_nominal"
+        ],
+        "type": "string"
+      },
+      "periods_per_year": {
+        "description": "Compounding periods per year, e.g. 12 for monthly (365 = daily is the finest discrete step; use compounding='continuous' for the limit).",
+        "exclusiveMinimum": 0,
+        "maximum": 365,
+        "type": "integer"
+      },
+      "rate": {
+        "description": "The annual rate to convert (nominal or effective, per direction) as a decimal, e.g. 0.05 for 5%.",
+        "type": "number"
+      }
+    },
+    "required": [
+      "rate",
+      "periods_per_year",
+      "direction"
+    ],
+    "type": "object"
+  },
+  "name": "convert_rate",
+  "outputSchema": {
+    "description": "Result of a nominal<->effective annual rate conversion.",
+    "properties": {
+      "compounding": {
+        "default": "discrete",
+        "description": "Compounding convention used for the conversion.",
+        "enum": [
+          "discrete",
+          "continuous"
+        ],
+        "type": "string"
+      },
+      "converted_rate": {
+        "description": "The resulting rate, as a decimal.",
+        "type": "number"
+      },
+      "direction": {
+        "description": "Conversion performed.",
+        "enum": [
+          "nominal_to_effective",
+          "effective_to_nominal"
+        ],
+        "type": "string"
+      },
+      "input_rate": {
+        "description": "The rate provided, as a decimal.",
+        "type": "number"
+      },
+      "periods_per_year": {
+        "description": "Compounding periods per year used.",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "input_rate",
+      "periods_per_year",
+      "direction",
+      "converted_rate"
+    ],
+    "type": "object"
+  },
+  "title": "Nominal / Effective Rate Conversion"
+}

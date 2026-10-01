@@ -1,0 +1,1 @@
+Price a fixed-coupon bond at a given yield, with duration and convexity.

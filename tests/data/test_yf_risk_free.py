@@ -16,7 +16,7 @@ import pytest
 from yfinance.exceptions import YFException
 
 from finance_mcp.data import analytics
-from finance_mcp.data.yfinance_client import TREASURY_BILL_SYMBOL, _in_parallel
+from finance_mcp.data.risk_free import TREASURY_BILL_SYMBOL
 from tests.fakes import counting, fake_multi_ticker_factory, make_client, make_history_df
 
 # 200 weekdays from Monday 2024-01-01 to Friday 2024-10-04: past the annualization gate.
@@ -363,26 +363,3 @@ def test_compare_tickers_with_nothing_to_fetch_does_not_fetch_bills() -> None:
     table = make_client(factory).compare_tickers(["  "], "1y")
     assert table.rows == []
     assert calls == []
-
-
-# --- _in_parallel --------------------------------------------------------------------
-
-
-def test_in_parallel_keeps_the_second_error_when_both_fail() -> None:
-    def first() -> None:
-        raise ValueError("first failed")
-
-    def second() -> None:
-        raise KeyError("second failed")
-
-    with pytest.raises(ValueError, match="first failed") as excinfo:
-        _in_parallel(first, second)
-    assert any("second failed" in note for note in excinfo.value.__notes__)
-
-
-def test_in_parallel_raises_the_second_error_when_only_it_fails() -> None:
-    def second() -> None:
-        raise KeyError("second failed")
-
-    with pytest.raises(KeyError, match="second failed"):
-        _in_parallel(lambda: 1, second)

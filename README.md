@@ -121,6 +121,8 @@ launches the server in whatever working directory it chooses.
 | `FINANCE_MCP_HISTORY_CACHE_TTL_SECONDS` | `300` | Price-history cache lifetime. |
 | `FINANCE_MCP_FUNDAMENTALS_CACHE_TTL_SECONDS` | `3600` | Fundamentals/profile cache lifetime. |
 | `FINANCE_MCP_MAX_HISTORY_BARS` | `260` | Most bars `get_price_history` returns before truncating (the summary still covers the full window). |
+| `FINANCE_MCP_MAX_CONCURRENT_REQUESTS` | `8` | Most Yahoo requests in flight at once, across all concurrent tool calls. |
+| `FINANCE_MCP_REQUEST_RETRIES` | `2` | Retries, with backoff, of a request Yahoo throttled or the network dropped; `0` disables them. |
 
 ## Install
 

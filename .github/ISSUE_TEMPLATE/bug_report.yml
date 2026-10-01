@@ -12,7 +12,7 @@ body:
     attributes:
       label: mcp-finance version
       description: "`pip show mcp-finance`, or `uv pip show mcp-finance` in the environment that runs it."
-      placeholder: "0.4.2"
+      placeholder: "e.g. 0.5.0 (pip show mcp-finance)"
     validations:
       required: true
   - type: input

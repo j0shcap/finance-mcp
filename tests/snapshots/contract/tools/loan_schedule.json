@@ -1,0 +1,126 @@
+{
+  "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Loan Payment & Amortization Schedule"
+  },
+  "description": "Compute the monthly payment, total interest, and (optionally) the full schedule.\n\nannual_rate is a nominal APR compounded monthly (periodic rate = annual_rate/12),\nwith monthly payments. With an extra_payment, interest_saved and payments_saved\ncompare against the same loan without it. By default returns just the summary; set\ninclude_schedule=True for every row.",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "annual_rate": {
+        "description": "Annual interest rate (nominal APR, compounded monthly) as a decimal, e.g. 0.06 for 6%.",
+        "minimum": 0,
+        "type": "number"
+      },
+      "extra_payment": {
+        "default": 0.0,
+        "description": "Extra principal paid each month; shortens the term.",
+        "minimum": 0,
+        "type": "number"
+      },
+      "include_schedule": {
+        "default": false,
+        "description": "Return the full per-period amortization rows (can be large).",
+        "type": "boolean"
+      },
+      "principal": {
+        "description": "Loan amount borrowed.",
+        "exclusiveMinimum": 0,
+        "type": "number"
+      },
+      "term_months": {
+        "description": "Loan term in months, e.g. 360 for 30 years.",
+        "exclusiveMinimum": 0,
+        "maximum": 1200,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "principal",
+      "annual_rate",
+      "term_months"
+    ],
+    "type": "object"
+  },
+  "name": "loan_schedule",
+  "outputSchema": {
+    "description": "Amortization summary and full schedule for a loan or mortgage.",
+    "properties": {
+      "interest_saved": {
+        "description": "Interest the extra payment saves versus the same loan without it; 0 when extra_payment is 0.",
+        "type": "number"
+      },
+      "monthly_payment": {
+        "description": "Scheduled monthly payment (excl. extra).",
+        "type": "number"
+      },
+      "n_payments": {
+        "description": "Number of payments until payoff.",
+        "type": "integer"
+      },
+      "payments_saved": {
+        "description": "Monthly payments the extra payment saves (months off the term) versus the same loan without it; 0 when extra_payment is 0.",
+        "type": "integer"
+      },
+      "schedule": {
+        "description": "Per-period amortization rows.",
+        "items": {
+          "description": "One period of a loan amortization schedule.",
+          "properties": {
+            "balance": {
+              "description": "Remaining principal after this period.",
+              "type": "number"
+            },
+            "interest": {
+              "description": "Portion applied to interest.",
+              "type": "number"
+            },
+            "payment": {
+              "description": "Total payment made this period.",
+              "type": "number"
+            },
+            "period": {
+              "description": "1-based period index.",
+              "type": "integer"
+            },
+            "principal": {
+              "description": "Portion applied to principal.",
+              "type": "number"
+            }
+          },
+          "required": [
+            "period",
+            "payment",
+            "principal",
+            "interest",
+            "balance"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "total_interest": {
+        "description": "Total interest paid over the loan.",
+        "type": "number"
+      },
+      "total_paid": {
+        "description": "Sum of all payments made.",
+        "type": "number"
+      }
+    },
+    "required": [
+      "monthly_payment",
+      "n_payments",
+      "total_paid",
+      "total_interest",
+      "interest_saved",
+      "payments_saved",
+      "schedule"
+    ],
+    "type": "object"
+  },
+  "title": "Loan Payment & Amortization Schedule"
+}

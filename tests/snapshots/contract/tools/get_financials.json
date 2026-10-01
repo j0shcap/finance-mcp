@@ -1,0 +1,160 @@
+{
+  "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": false,
+    "openWorldHint": true,
+    "readOnlyHint": true,
+    "title": "Financial Statements"
+  },
+  "description": "Income statement, balance sheet, or cash flow.\n\nReturns line items by period (most recent first); values are in the currency named by\n`currency` (the company's reporting currency, which can differ from the currency its\nshares trade in) in absolute units (e.g. 416161000000 = 416.161 billion), null where not\nreported. Filtered labels that do not exist are reported in `missing_line_items`, with\n`available_line_items` and `line_item_suggestions` to retry from.",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "line_items": {
+        "anyOf": [
+          {
+            "items": {
+              "maxLength": 120,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Specific line-item labels to return (as they appear in the statement, e.g. 'Total Revenue'; case and extra whitespace are ignored); omit for the full statement."
+      },
+      "period": {
+        "default": "annual",
+        "description": "Reporting period granularity.",
+        "enum": [
+          "annual",
+          "quarterly"
+        ],
+        "type": "string"
+      },
+      "statement": {
+        "description": "Which statement: 'income', 'balance', or 'cashflow'.",
+        "enum": [
+          "income",
+          "balance",
+          "cashflow"
+        ],
+        "type": "string"
+      },
+      "ticker": {
+        "description": "Ticker symbol, e.g. 'AAPL'. Case-insensitive. Yahoo suffixes and prefixes are allowed (BRK-B, ^GSPC, RY.TO, BTC-USD, EURUSD=X); one symbol per value.",
+        "maxLength": 24,
+        "minLength": 1,
+        "pattern": "^\\s*[A-Za-z0-9.\\-^=]{1,20}\\s*$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "ticker",
+      "statement"
+    ],
+    "type": "object"
+  },
+  "name": "get_financials",
+  "outputSchema": {
+    "description": "A financial statement (income/balance/cashflow) as a label -> per-period values table.",
+    "properties": {
+      "available_line_items": {
+        "description": "Every line-item label the statement contains. Populated only when some requested label was missing (otherwise it would just repeat line_items' keys).",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "currency": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Currency (ISO 4217) the values are reported in: Yahoo's financialCurrency, falling back to the quote currency. This can differ from the currency the shares trade in (SAP reports in EUR while its US listing quotes in USD), so never compare absolute figures across companies without checking it. Null if Yahoo does not report it."
+      },
+      "line_item_suggestions": {
+        "additionalProperties": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "description": "For each missing label, the closest actual labels (e.g. 'Revenue' -> 'Total Revenue'). Omits labels with no close match.",
+        "type": "object"
+      },
+      "line_items": {
+        "additionalProperties": {
+          "items": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "description": "Line item label -> values aligned to period_ends, in the company's reporting currency in absolute units (e.g. 416161000000 = 416.161B); null if not reported.",
+        "type": "object"
+      },
+      "missing_line_items": {
+        "description": "Requested line-item labels that this statement does not contain. Labels are matched ignoring case and extra whitespace, so anything listed here is genuinely a different label - check line_item_suggestions and available_line_items and retry.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "period": {
+        "description": "Reporting period granularity.",
+        "enum": [
+          "annual",
+          "quarterly"
+        ],
+        "type": "string"
+      },
+      "period_ends": {
+        "description": "Period-end dates (ISO 8601), most recent first; values align to this order.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "statement": {
+        "description": "Which statement.",
+        "enum": [
+          "income",
+          "balance",
+          "cashflow"
+        ],
+        "type": "string"
+      },
+      "symbol": {
+        "description": "Ticker symbol.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "symbol",
+      "statement",
+      "period",
+      "period_ends",
+      "line_items"
+    ],
+    "type": "object"
+  },
+  "title": "Financial Statements"
+}
