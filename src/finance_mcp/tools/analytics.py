@@ -31,8 +31,9 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
         margins and ROE/ROA are fractions (0.27 = 27%); debt_to_equity is a percent
         (79.5 = 79.5%); EV, total debt/cash, FCF, EBITDA are absolute amounts. Those
         amounts are not all in one currency: debt/cash/FCF/EBITDA and the per-share
-        revenue/book value are in `financial_currency`, EV and the EPS fields in
-        `currency`. They differ for ADRs and other cross-listings.
+        revenue/book value are in `financial_currency`, the EPS fields in `currency`. They
+        differ for ADRs and other cross-listings, where Yahoo computes P/S, P/B, EV and the
+        EV multiples across both currencies: use P/E, PEG and the margins for those.
         """
         return await run_data(lambda: client.get_key_metrics(ticker))
 
@@ -134,6 +135,8 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
 
         Rows whose quote currency differs from the table's base_currency are flagged with
         currency_differs, and mixed_currencies summarises it: those returns carry an FX
-        component the other rows do not, so compare such rows on ratios and say so.
+        component the other rows do not, so compare such rows on ratios and say so. A row
+        whose financial_currency differs from its currency is a cross-listing: its P/S, P/B
+        and EV multiples mix two currencies, so rank it on P/E, PEG and the margins.
         """
         return await run_data(lambda: client.compare_tickers(tickers, period, risk_free_rate))
