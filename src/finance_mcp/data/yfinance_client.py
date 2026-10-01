@@ -56,28 +56,26 @@ from finance_mcp.data.models import (
 
 DEFAULT_MAX_BARS = 260
 DEFAULT_CACHE_MAX_ENTRIES = 256
-# The LRU bounds how many entries are held, not how large they are. A period="max" daily
-# history is ~11.5k PriceBar models (~9 MB), so 256 of those would retain gigabytes. Bar
-# lists longer than this are still returned in full; they are just not kept. ~2000 daily
-# bars is about eight years, so every ordinary window stays cached.
+# The LRU bounds how many entries are held, not how large they are: a period="max" daily
+# history is ~11.5k bars (~9 MB). Longer bar lists are returned in full but not kept;
+# ~2000 daily bars is about eight years, so every ordinary window stays cached.
 MAX_CACHEABLE_BARS = 2000
-# Quotes in a batch are independent single requests, so they are fetched in parallel; the
-# bound keeps a large batch from opening a connection per ticker at once.
+# Keeps a large quote batch from opening a connection per ticker at once.
 QUOTE_MAX_WORKERS = 8
 # The fewest shared closes that yield a single return to compare.
 MIN_OVERLAP_OBSERVATIONS = 2
-# Each comparison row costs two Yahoo calls (history + info), so the worker bound is lower
-# than the quote bound for the same ceiling on concurrent connections.
+# Each comparison row costs two Yahoo calls (history + info), hence a lower bound than
+# quotes for the same ceiling on concurrent connections.
 COMPARE_MAX_WORKERS = 5
 # Intervals whose bars are points in time rather than whole sessions. Kept in sync with
 # HistoryInterval (a test pins it): everything that is not a daily-or-longer interval.
 _INTRADAY_INTERVALS = frozenset({"1m", "5m", "15m", "30m", "1h"})
 SMA_SHORT_WINDOW = 50
 SMA_LONG_WINDOW = 200
-# Below roughly a quarter of calendar time, annualizing compounds short-run noise into a
-# yearly figure that reads as a forecast. Set just under three months because a
-# period="3mo" window spans 87-95 elapsed days depending on the call date, and the same
-# request should not gain and lose its annualized fields from one day to the next.
+# Below about a quarter, annualizing compounds short-run noise into a yearly figure that
+# reads as a forecast. Just under three months because a period="3mo" window spans 87-95
+# elapsed days depending on the call date, and the same request should not gain and lose
+# its annualized fields from one day to the next.
 MIN_ANNUALIZATION_DAYS = 85
 #: Yahoo's 13-week US Treasury bill yield, the default risk-free rate. Quoted in percent on
 #: a bank-discount basis; see analytics.treasury_bill_effective_rate.
@@ -142,8 +140,7 @@ class YFinanceClient:
         cache_max_entries: int = DEFAULT_CACHE_MAX_ENTRIES,
     ) -> None:
         self._ticker = ticker_factory
-        # yf.Search is called with keyword args (max_results/news_count/lists_count);
-        # widen to Callable[..., Any] so those kwargs typecheck.
+        # Widened so the keyword arguments yf.Search is called with typecheck.
         self._search: Callable[..., Any] = search_factory
         self._now = time_fn
         self._quote_ttl = quote_ttl
@@ -151,17 +148,16 @@ class YFinanceClient:
         self._fundamentals_ttl = fundamentals_ttl
         self._max_bars = max_bars
         self._cache_max_entries = cache_max_entries
-        # key -> (stored_at, ttl, value). Insertion order is LRU order (oldest use first);
-        # the per-entry ttl is stored so the purge pass can judge expiry without knowing
-        # which caller wrote the entry.
+        # key -> (stored_at, ttl, value), in LRU order (oldest use first). The ttl is kept
+        # per entry so the purge pass can judge expiry without knowing who wrote it.
         self._cache: OrderedDict[tuple[str, ...], tuple[float, float, Any]] = OrderedDict()
         # get_quote fetches concurrently, so cache bookkeeping is guarded. Fetches run
         # OUTSIDE the lock: two threads racing on one uncached key just fetch it twice.
         self._cache_lock = threading.Lock()
         # By default yfinance's price and statement fetches swallow a transport failure and
-        # return an empty frame -- which reads exactly like an unknown symbol. Every
-        # classification below assumes failures arrive as exceptions, so turn that off.
-        # Process-wide, but this server is the only yfinance user in its process.
+        # return an empty frame, which reads exactly like an unknown symbol; every
+        # classification below needs failures as exceptions. Process-wide, but this server
+        # is the only yfinance user in its process.
         yf.config.debug.hide_exceptions = False
 
     def _cached[T](
@@ -285,14 +281,11 @@ class YFinanceClient:
         )
 
     def _all_bars(self, symbol: str, period: str, interval: str) -> list[PriceBar]:
-        """Parsed bars for one (symbol, period, interval), cached once for every consumer.
-
-        get_price_history and analyze_performance are two views of the same fetch; keying the
-        raw bars separately from the derived models keeps them on a single network round-trip.
+        """Parsed bars for one (symbol, period, interval), shared by every view of them.
 
         Histories longer than MAX_CACHEABLE_BARS are not retained, so a very long window
-        costs one fetch per view instead of retaining megabytes of bars. Both views cache
-        their own small derived result, so repeat calls still avoid the network.
+        costs one fetch per view; each view caches its own small result, so repeat calls
+        still avoid the network.
         """
         return self._cached(
             ("bars", symbol, period, interval),
@@ -365,14 +358,9 @@ class YFinanceClient:
         against the 13-week T-bill yield averaged over the same dates.
         """
         symbol = _norm(symbol)
-        # The bars this reads are usually cached by _all_bars, but a history past
-        # MAX_CACHEABLE_BARS is not retained -- without an entry here every call to a long
-        # window would go back to the network. PerformanceStats is a few hundred bytes.
-        # The rate is part of the key because the Sharpe, Sortino and downside figures are
-        # computed from it: keying on (symbol, period) alone would serve the first caller's
-        # rate to every later one. A result whose T-bill FETCH failed is not kept, so the
-        # next call retries it instead of replaying the gap; one whose rate is unavailable
-        # for a lasting reason is cached like any other.
+        # Cached in its own right because bars past MAX_CACHEABLE_BARS are not. The rate is
+        # in the key since the rate-dependent figures are computed from it. A result whose
+        # T-bill fetch failed is not kept, so the next call retries it; a lasting gap is.
         stats, _ = self._cached(
             ("performance", symbol, period, _rate_key(risk_free_rate)),
             self._history_ttl,
@@ -409,9 +397,8 @@ class YFinanceClient:
     ) -> BenchmarkComparison:
         """Benchmark-relative statistics over the dates the two instruments share.
 
-        The two histories (and, for a default rate, the T-bill history) are independent
-        fetches, so they run in parallel; all are the same cached ``_all_bars`` entries the
-        other analytics tools use.
+        The two histories and, for a default rate, the T-bill history are fetched in
+        parallel.
         """
         symbol, bench = _norm(symbol), _norm(benchmark)
         if symbol == bench:
@@ -491,13 +478,10 @@ class YFinanceClient:
     ) -> TickerComparison:
         """Side-by-side performance and valuation for a small batch, fetched concurrently.
 
-        Each row is two independent lookups over the cached fetchers the single-ticker tools
-        already use, so a batch costs no more than calling them one at a time -- and one
-        ticker's failure reports itself instead of discarding the rows that worked.
-
-        For a default rate the T-bill history is fetched ONCE, alongside the rows, and each
-        row averages it over its own dates: a period="max" history is too long to cache,
-        so fetching it per row would cost a round trip per ticker.
+        One ticker's failure reports itself in ``errors`` instead of discarding the rows
+        that worked. For a default rate the T-bill history is fetched once, alongside the
+        rows, and each row averages it over its own dates: a period="max" history is too
+        long to cache, so fetching it per row would cost a round trip per ticker.
         """
         pending, failures = _normalize_batch(symbols)
         errors = [ComparisonError(symbol=raw, error=reason) for raw, reason in failures]
@@ -539,11 +523,9 @@ class YFinanceClient:
     ) -> TickerComparisonRow | ComparisonError:
         """One ticker's row, or the reason it has none.
 
-        Performance is the row's backbone: without it there is nothing to compare, so a
-        history failure becomes a ComparisonError. Valuation metrics are supplementary, so a
-        metrics failure leaves the row in place with those fields null and the reason in
-        metrics_error -- dropping a whole row because Yahoo's ``info`` blipped would lose the
-        return figures that did arrive.
+        A history failure becomes a ComparisonError, since without performance there is
+        nothing to compare. Valuation metrics are supplementary: a metrics failure keeps
+        the row, with those fields null and the reason in metrics_error.
         """
         try:
             bars = self._all_bars(symbol, period, "1d")
@@ -636,11 +618,9 @@ class YFinanceClient:
     def _statement_currency(self, symbol: str, ticker: Any) -> str | None:
         """The currency a statement is reported in, cached per symbol.
 
-        It comes from ``.info``, a different Yahoo endpoint than the statement itself, and
-        is the same for all six statement/period combinations — so it is cached under its
-        own key rather than re-requested per statement against a rate-limited source.
-        Best-effort: a failed read leaves the statement unlabelled instead of failing it,
-        and is NOT cached, because a rate limit says nothing about the reporting currency.
+        It comes from ``.info``, a separate Yahoo endpoint shared by all six statements, so
+        it has its own cache key. Best-effort: a failed read leaves the statement
+        unlabelled rather than failing it, and is not cached.
         """
         try:
             return self._cached(
@@ -790,10 +770,9 @@ class YFinanceClient:
         with _unavailable_on_error(f"Failed to fetch news for '{symbol}'"):
             items = self._ticker(symbol).get_news(count=count, tab="news")
         if not items:
-            # An empty stream is ambiguous: yfinance turns a 500 from the news endpoint into
-            # an empty list, so an outage is indistinguishable from a symbol with no
-            # coverage. Cross-check against search rather than reporting "no recent news",
-            # which the model would read as "no catalysts" and put in a research note.
+            # Ambiguous: yfinance turns a 500 from the news endpoint into an empty list.
+            # Cross-check search rather than report "no recent news", which the model
+            # would read as "no catalysts".
             return self._search_news(symbol, count), "search"
         with _unavailable_on_error(f"Failed to parse news for '{symbol}'"):
             articles = [a for a in (_news_article(it) for it in items) if a is not None][:count]
@@ -824,12 +803,10 @@ class YFinanceClient:
         )
 
     def _search_news(self, symbol: str, count: int) -> list[NewsArticle]:
-        """News for `symbol` from the search endpoint, or none if it cannot supply any.
+        """News for ``symbol`` from the search endpoint, or none if it cannot supply any.
 
-        Only reached when the ticker news stream came back empty. A failure here is
-        swallowed deliberately: the primary call already succeeded with "no news", so the
-        worst case is the empty result the caller would have returned anyway, and raising
-        would turn a symbol with genuinely no coverage into an error.
+        A failure is swallowed deliberately: the ticker stream already answered "no news",
+        so raising would turn a symbol with genuinely no coverage into an error.
         """
         try:
             found = self._search(symbol, max_results=1, news_count=count, lists_count=0).news
@@ -878,11 +855,7 @@ def _normalize_batch(symbols: list[str]) -> tuple[list[str], list[tuple[str, str
 def _fetch_concurrently[T](
     items: list[str], fetch: Callable[[str], T], max_workers: int
 ) -> list[T]:
-    """Run ``fetch`` over ``items`` in parallel, preserving input order.
-
-    Independent single-symbol lookups have no reason to serialize. ``pool.map`` keeps the
-    results in request order so callers can pair them back up positionally.
-    """
+    """Run ``fetch`` over ``items`` in parallel, returning results in input order."""
     if not items:
         return []
     with ThreadPoolExecutor(max_workers=min(max_workers, len(items))) as pool:
@@ -896,15 +869,14 @@ def _performance(
     if len(bars) < 2:
         raise DataUnavailable(f"Not enough price history to compute performance for '{symbol}'.")
     closes = [b.close for b in bars]
-    # Annualize off wall-clock time, not the bar count: how many bars a year holds is a
-    # property of the instrument's trading calendar (~252 weekday, ~365 for crypto), so
-    # both the CAGR exponent and the volatility factor are read from the dates.
+    # Annualize off calendar time, not the bar count: bars per year depends on the
+    # trading calendar (~252 weekday, ~365 for crypto).
     elapsed_days = _elapsed_days(bars[0].date, bars[-1].date)
     annualized_return: float | None = None
     annualized_volatility: float | None = None
     periods_per_year: float | None = None
-    # Every risk-adjusted figure needs periods_per_year (Calmar needs the CAGR), so they
-    # share the annualization gate. Sharpe, Sortino and downside also need a rate.
+    # The risk-adjusted figures need periods_per_year (Calmar the CAGR), so they share
+    # the annualization gate; Sharpe, Sortino and downside also need a rate.
     sharpe: float | None = None
     sortino: float | None = None
     downside: float | None = None
@@ -981,15 +953,14 @@ def _rate_key(risk_free_rate: float | None) -> str:
 def _risk_free_over(risk_free_rate: float | None, bills: _Bills, start: str, end: str) -> _RiskFree:
     """The caller's rate, else the mean effective T-bill rate over ``start``..``end``.
 
-    The window average, not today's yield: a Sharpe over 2021-2026 measured against a
-    4% hurdle would charge the years when bills paid nothing as if they had paid 4%. The
-    T-bill history must reach both ends of the window (within a holiday's tolerance) --
-    averaging only part of it would understate or overstate the cash return foregone.
+    The window average, not today's yield: a Sharpe over 2021-2026 measured against a 4%
+    hurdle would charge the years when bills paid nothing as if they had paid 4%. The
+    history must reach both ends of the window (within a holiday's tolerance), since
+    averaging only part of it would misstate the cash return foregone.
     """
     if risk_free_rate is not None:
         return _RiskFree(risk_free_rate, "caller")
-    # _bills_for fetches whenever no rate was given, so bills is the history or the
-    # reason it could not be fetched.
+    # With no rate given, _bills_for always fetched: bills is the history or its error.
     if not isinstance(bills, list):
         return _bills_fetch_failed(str(bills))
     first_day, last_day = _day(start), _day(end)
@@ -1078,10 +1049,9 @@ def _label_key(label: str) -> str:
 def _filter_line_items(full: FinancialStatement, requested: list[str]) -> FinancialStatement:
     """Narrow a statement to the requested labels, reporting whatever did not match.
 
-    Labels are matched on _label_key, so 'total revenue' finds 'Total Revenue' (the exact
-    Yahoo spelling is easy to get almost right). Anything still unmatched is reported in
-    missing_line_items with close-match suggestions and the full label list, instead of
-    being dropped silently and leaving the caller to wonder why the statement is short.
+    Labels match case- and whitespace-insensitively ('total revenue' finds 'Total
+    Revenue'). Unmatched ones are reported in missing_line_items with close-match
+    suggestions and the full label list, rather than dropped silently.
     """
     available = list(full.line_items)
     by_key = {_label_key(label): label for label in available}
@@ -1119,20 +1089,15 @@ def _read_statement_currency(ticker: Any) -> str | None:
 def _bar_date(idx: Any, intraday: bool) -> str:
     """Format a bar's index value.
 
-    Intraday bars are moments, so they keep the clock time and the exchange's UTC offset
-    (2026-09-25T09:35:00-04:00). Daily and longer bars are whole sessions indexed at
-    midnight in the exchange's timezone, so they stay date-only — emitting the timestamp
-    would imply a trade time, and normalizing it to UTC would shift the calendar date.
+    Intraday bars keep the clock time and the exchange's UTC offset. Daily and longer bars
+    are sessions indexed at exchange-local midnight, so they stay date-only: a timestamp
+    would imply a trade time, and converting it to UTC would shift the calendar date.
     """
     return str(idx.isoformat() if intraday else idx.date().isoformat())
 
 
 def _norm(symbol: str) -> str:
-    """Normalize a ticker so equivalent spellings share one cache entry and one fetch.
-
-    Yahoo symbols are upper-case; callers routinely pass 'aapl' or 'AAPL '. Normalizing
-    here (before the cache key is built) is also what makes the echoed symbol canonical.
-    """
+    """Upper-case and strip a ticker, so equivalent spellings share one cache entry."""
     normalized = symbol.strip().upper()
     if not normalized:
         raise SymbolNotFound("Empty ticker symbol.")
@@ -1160,9 +1125,8 @@ def _is_no_data_error(exc: Exception) -> bool:
 def _data_error(exc: Exception, fetch_label: str, kind: str, symbol: str) -> DataUnavailable:
     """Classify a raw fetch failure as a missing symbol or an unavailable source.
 
-    A connection reset, DNS failure, timeout, HTTP 5xx, rate limit or malformed payload
-    says nothing about the symbol, so it stays a DataUnavailable carrying the underlying
-    message; only the no-data signals become SymbolNotFound.
+    Only the no-data signals become SymbolNotFound: a transport failure, rate limit or
+    malformed payload says nothing about the symbol.
     """
     if _is_no_data_error(exc):
         return SymbolNotFound(_no_data_msg(kind, symbol))
@@ -1171,11 +1135,7 @@ def _data_error(exc: Exception, fetch_label: str, kind: str, symbol: str) -> Dat
 
 @contextmanager
 def _unavailable_on_error(message: str) -> Iterator[None]:
-    """Re-raise any failure in the block as DataUnavailable("<message>: <error>").
-
-    yfinance and the payloads it returns fail in more ways than can be enumerated, so the
-    underlying error text is passed on for the caller to read.
-    """
+    """Re-raise any failure in the block as DataUnavailable("<message>: <error>")."""
     try:
         yield
     except Exception as exc:
@@ -1216,11 +1176,10 @@ def _symbol_match(q: dict[str, Any]) -> SymbolMatch:
 
 
 def _search_news_article(item: dict[str, Any]) -> NewsArticle | None:
-    """Parse the FLAT news shape the search endpoint returns.
+    """Parse the flat news shape the search endpoint returns.
 
-    Distinct from :func:`_news_article`: the fields sit at the top level rather than under
-    ``content``, the timestamp is unix seconds rather than an ISO string, and there is no
-    summary at all - which is reported as null rather than filled in from the title.
+    Unlike :func:`_news_article`'s, the fields sit at the top level, the timestamp is unix
+    seconds, and there is no summary (reported as null, not filled from the title).
     """
     title = item.get("title")
     if not title:
