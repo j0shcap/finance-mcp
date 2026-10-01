@@ -23,6 +23,7 @@ import yfinance as yf
 from yfinance.exceptions import YFTickerMissingError
 
 from finance_mcp.data import analytics, relevance
+from finance_mcp.data.concurrency import in_parallel, map_concurrently
 from finance_mcp.data.errors import DataUnavailable, InvalidInput, SymbolNotFound
 from finance_mcp.data.models import (
     AnalystData,
@@ -226,7 +227,7 @@ class YFinanceClient:
         """
         pending, failures = _normalize_batch(symbols)
         errors = [QuoteError(symbol=raw, error=reason) for raw, reason in failures]
-        fetched = _fetch_concurrently(pending, self._quote_or_error, QUOTE_MAX_WORKERS)
+        fetched = map_concurrently(pending, self._quote_or_error, QUOTE_MAX_WORKERS)
         errors.extend(r for r in fetched if isinstance(r, QuoteError))
         return QuoteResult(quotes=[r for r in fetched if isinstance(r, Quote)], errors=errors)
 
@@ -372,7 +373,7 @@ class YFinanceClient:
     def _fetch_performance(
         self, symbol: str, period: str, risk_free_rate: float | None
     ) -> tuple[PerformanceStats, _RiskFree]:
-        bars, bills = _in_parallel(
+        bars, bills = in_parallel(
             lambda: self._all_bars(symbol, period, "1d"),
             lambda: self._bills_for(period, risk_free_rate),
         )
@@ -406,8 +407,8 @@ class YFinanceClient:
                 f"A benchmark comparison needs two different symbols; '{symbol}' was given "
                 "for both. Use analyze_performance for a single instrument."
             )
-        (asset_bars, bench_bars), bills = _in_parallel(
-            lambda: _in_parallel(
+        (asset_bars, bench_bars), bills = in_parallel(
+            lambda: in_parallel(
                 lambda: self._all_bars(symbol, period, "1d"),
                 lambda: self._all_bars(bench, period, "1d"),
             ),
@@ -435,7 +436,7 @@ class YFinanceClient:
             # Started alongside the rows; each row waits for it only after its own bars.
             with ThreadPoolExecutor(max_workers=1) as bill_pool:
                 bills_future = bill_pool.submit(self._bills_for, period, risk_free_rate)
-                built = _fetch_concurrently(
+                built = map_concurrently(
                     pending,
                     lambda s: self._ticker_row(s, period, risk_free_rate, bills_future),
                     COMPARE_MAX_WORKERS,
@@ -674,7 +675,7 @@ class YFinanceClient:
 
     def _fetch_news(self, symbol: str, count: int) -> NewsResult:
         # The identity behind the relevance flags is an independent request.
-        (articles, source), identity = _in_parallel(
+        (articles, source), identity = in_parallel(
             lambda: self._news_articles(symbol, count),
             lambda: self._identity_or_gap(symbol),
         )
@@ -771,16 +772,6 @@ def _normalize_batch(symbols: list[str]) -> tuple[list[str], list[tuple[str, str
         if symbol not in pending:
             pending.append(symbol)
     return pending, failures
-
-
-def _fetch_concurrently[T](
-    items: list[str], fetch: Callable[[str], T], max_workers: int
-) -> list[T]:
-    """Run ``fetch`` over ``items`` in parallel, returning results in input order."""
-    if not items:
-        return []
-    with ThreadPoolExecutor(max_workers=min(max_workers, len(items))) as pool:
-        return list(pool.map(fetch, items))
 
 
 def _benchmark_comparison(
@@ -1024,25 +1015,6 @@ def _day(timestamp: str) -> date:
     bare date ("2024-01-01") and a timestamp with an offset.
     """
     return datetime.fromisoformat(timestamp).date()
-
-
-def _in_parallel[A, B](first: Callable[[], A], second: Callable[[], B]) -> tuple[A, B]:
-    """Run two independent blocking fetches at once; either one's exception propagates.
-
-    If both fail, the first error is raised with the second attached as a note, so
-    neither is lost.
-    """
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        first_future = pool.submit(first)
-        second_future = pool.submit(second)
-        try:
-            first_result = first_future.result()
-        except Exception as exc:
-            second_error = second_future.exception()
-            if second_error is not None:
-                exc.add_note(f"The fetch run alongside it also failed: {second_error!r}")
-            raise
-        return first_result, second_future.result()
 
 
 def _flag_mentions(
