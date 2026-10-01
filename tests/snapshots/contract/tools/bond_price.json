@@ -1,0 +1,83 @@
+{
+  "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Bond Price, Duration & Convexity"
+  },
+  "description": "Price a fixed-coupon bond at a given yield, with duration and convexity.",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "coupon_rate": {
+        "description": "Annual coupon rate as a decimal, e.g. 0.05 for 5%.",
+        "type": "number"
+      },
+      "face": {
+        "description": "Face (par) value of the bond.",
+        "exclusiveMinimum": 0,
+        "type": "number"
+      },
+      "frequency": {
+        "default": 2,
+        "description": "Coupon payments per year, e.g. 2 for semiannual.",
+        "exclusiveMinimum": 0,
+        "maximum": 12,
+        "type": "integer"
+      },
+      "years_to_maturity": {
+        "description": "Years until maturity.",
+        "exclusiveMinimum": 0,
+        "maximum": 100,
+        "type": "number"
+      },
+      "ytm": {
+        "description": "Annual yield to maturity as a decimal, e.g. 0.06 for 6%.",
+        "type": "number"
+      }
+    },
+    "required": [
+      "face",
+      "coupon_rate",
+      "years_to_maturity",
+      "ytm"
+    ],
+    "type": "object"
+  },
+  "name": "bond_price",
+  "outputSchema": {
+    "description": "Price and interest-rate risk metrics for a fixed-coupon bond.",
+    "properties": {
+      "convexity": {
+        "description": "Convexity in years^2.",
+        "type": "number"
+      },
+      "current_yield": {
+        "description": "Annual coupon divided by price, as a decimal.",
+        "type": "number"
+      },
+      "macaulay_duration": {
+        "description": "Macaulay duration in years.",
+        "type": "number"
+      },
+      "modified_duration": {
+        "description": "Modified duration in years (price sensitivity).",
+        "type": "number"
+      },
+      "price": {
+        "description": "Present value of the bond, in the same units as face. Priced on a coupon date, so clean and dirty price coincide.",
+        "type": "number"
+      }
+    },
+    "required": [
+      "price",
+      "current_yield",
+      "macaulay_duration",
+      "modified_duration",
+      "convexity"
+    ],
+    "type": "object"
+  },
+  "title": "Bond Price, Duration & Convexity"
+}

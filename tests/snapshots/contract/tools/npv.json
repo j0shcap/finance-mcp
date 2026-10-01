@@ -1,0 +1,54 @@
+{
+  "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Net Present Value"
+  },
+  "description": "Net present value of equally-spaced cashflows (cashflows[0] is at t=0, undiscounted).",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "cashflows": {
+        "description": "Cashflows by period; cashflows[0] is at t=0 (now), outflows negative.",
+        "items": {
+          "type": "number"
+        },
+        "maxItems": 1000,
+        "minItems": 1,
+        "type": "array"
+      },
+      "rate": {
+        "description": "Discount rate per period as a decimal, e.g. 0.10 for 10%.",
+        "exclusiveMinimum": -1,
+        "type": "number"
+      }
+    },
+    "required": [
+      "rate",
+      "cashflows"
+    ],
+    "type": "object"
+  },
+  "name": "npv",
+  "outputSchema": {
+    "description": "Net present value at a given discount rate.",
+    "properties": {
+      "npv": {
+        "description": "Net present value.",
+        "type": "number"
+      },
+      "rate": {
+        "description": "Discount rate used, as a decimal: per period for npv, annual for xnpv.",
+        "type": "number"
+      }
+    },
+    "required": [
+      "rate",
+      "npv"
+    ],
+    "type": "object"
+  },
+  "title": "Net Present Value"
+}

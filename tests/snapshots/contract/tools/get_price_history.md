@@ -1,0 +1,1 @@
+Historical OHLCV bars plus a summary; long windows are truncated (summary is full).

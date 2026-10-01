@@ -1,0 +1,24 @@
+{
+  "arguments": [
+    {
+      "description": "The bond in plain words: coupon, maturity, price or yield, and if known the settlement date, frequency, face and issuer type, e.g. 'UST 4% due 2036-01-15, settles 2026-03-15, clean 92.30'.\n\nProvide a value matching the following JSON schema: {\"description\":\"The bond in plain words: coupon, maturity, price or yield, and if known the settlement date, frequency, face and issuer type, e.g. 'UST 4% due 2036-01-15, settles 2026-03-15, clean 92.30'.\",\"type\":\"string\"}. Encode non-string values as JSON.",
+      "name": "bond",
+      "required": true
+    },
+    {
+      "description": "Parallel rate shock as a number of basis points, applied up and down, e.g. '100' (not '1%').\n\nProvide a value matching the following JSON schema: {\"description\":\"Parallel rate shock as a number of basis points, applied up and down, e.g. '100' (not '1%').\",\"type\":\"string\"}. Encode non-string values as JSON.",
+      "name": "shock_bp",
+      "required": false
+    }
+  ],
+  "description": "Interpret a fixed-coupon bond: price, yield, accrued interest, duration, convexity\nand DV01, then a +/- rate shock estimated from duration and convexity and\ncross-checked by exact repricing - with the conventions (day count, clean vs dirty)\nand the limits of option-free analytics made explicit.",
+  "name": "bond_analysis",
+  "rendered_description": "Interpret a fixed-coupon bond: price, yield, accrued interest, duration, convexity\nand DV01, then a +/- rate shock estimated from duration and convexity and\ncross-checked by exact repricing - with the conventions (day count, clean vs dirty)\nand the limits of option-free analytics made explicit.",
+  "rendered_roles": [
+    "user"
+  ],
+  "sample_arguments": {
+    "bond": "UST 4% due 2036-01-15, clean 92.30",
+    "shock_bp": "50"
+  }
+}

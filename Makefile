@@ -1,4 +1,4 @@
-.PHONY: install test test-live e2e lint format typecheck security check build run clean
+.PHONY: install test test-live e2e snapshot lint format typecheck security check build run clean
 
 install:
 	uv sync
@@ -20,6 +20,12 @@ test-live:
 # because the server under test runs in a subprocess, out of coverage's reach.
 e2e:
 	uv run pytest -m "e2e and not live" --no-cov
+
+# Rewrite the committed model-facing contract (tests/snapshots/contract/) from the server,
+# after an intended change to a tool, prompt, description or schema - or a fastmcp, mcp or
+# pydantic bump. Review the result with `git diff --word-diff` before committing it.
+snapshot:
+	uv run pytest tests/test_contract_snapshot.py --update-snapshots --no-cov -q -rs
 
 lint:
 	uv run ruff check .

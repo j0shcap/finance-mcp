@@ -1,0 +1,191 @@
+{
+  "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": false,
+    "openWorldHint": true,
+    "readOnlyHint": true,
+    "title": "Analyst Ratings & Price Targets"
+  },
+  "description": "Sell-side analyst consensus: price targets, the consensus recommendation, and the\nrecent rating trend (analyst counts over the last four months).\n\nrecommendation_mean runs 1.0 (strong buy) to 5.0 (strong sell). Price targets and\ncurrent_price are in the result's currency. ETFs, indices, and crypto have no\nanalyst coverage and return an error.",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "ticker": {
+        "description": "Ticker symbol, e.g. 'AAPL'. Case-insensitive. Yahoo suffixes and prefixes are allowed (BRK-B, ^GSPC, RY.TO, BTC-USD, EURUSD=X); one symbol per value.",
+        "maxLength": 24,
+        "minLength": 1,
+        "pattern": "^\\s*[A-Za-z0-9.\\-^=]{1,20}\\s*$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "ticker"
+    ],
+    "type": "object"
+  },
+  "name": "get_analyst_data",
+  "outputSchema": {
+    "description": "Sell-side analyst consensus and price targets as reported by Yahoo.",
+    "properties": {
+      "currency": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Currency (ISO 4217, e.g. 'USD') for all *_price fields."
+      },
+      "current_price": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Latest traded price, in the result's currency."
+      },
+      "number_of_analysts": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Number of analysts contributing to the consensus estimates."
+      },
+      "recommendation_key": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Consensus recommendation string, e.g. 'buy', 'hold', 'strong_buy'."
+      },
+      "recommendation_mean": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Mean analyst recommendation on a 1-5 scale: 1.0 = Strong Buy, 2.0 = Buy, 3.0 = Hold, 4.0 = Sell, 5.0 = Strong Sell."
+      },
+      "recommendation_trend": {
+        "description": "Per-period recommendation counts, newest first (up to 4 months). Empty list if no analyst coverage data is available.",
+        "items": {
+          "description": "Analyst recommendation counts for one period bucket.",
+          "properties": {
+            "buy": {
+              "description": "Number of analysts with a Buy rating.",
+              "type": "integer"
+            },
+            "hold": {
+              "description": "Number of analysts with a Hold rating.",
+              "type": "integer"
+            },
+            "period": {
+              "description": "Period bucket relative to the current month: '0m' = current month, '-1m' = one month ago, '-2m' = two months ago, '-3m' = three months ago.",
+              "type": "string"
+            },
+            "sell": {
+              "description": "Number of analysts with a Sell rating.",
+              "type": "integer"
+            },
+            "strong_buy": {
+              "description": "Number of analysts with a Strong Buy rating.",
+              "type": "integer"
+            },
+            "strong_sell": {
+              "description": "Number of analysts with a Strong Sell rating.",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "period",
+            "strong_buy",
+            "buy",
+            "hold",
+            "sell",
+            "strong_sell"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "symbol": {
+        "description": "Ticker symbol.",
+        "type": "string"
+      },
+      "target_high_price": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Highest analyst 12-month price target, in the result's currency."
+      },
+      "target_low_price": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Lowest analyst 12-month price target, in the result's currency."
+      },
+      "target_mean_price": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Mean analyst 12-month price target, in the result's currency."
+      },
+      "target_median_price": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Median analyst 12-month price target, in the result's currency."
+      }
+    },
+    "required": [
+      "symbol"
+    ],
+    "type": "object"
+  },
+  "title": "Analyst Ratings & Price Targets"
+}

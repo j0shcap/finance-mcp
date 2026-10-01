@@ -1,0 +1,245 @@
+{
+  "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": false,
+    "openWorldHint": true,
+    "readOnlyHint": true,
+    "title": "Return & Risk Statistics"
+  },
+  "description": "Return and risk stats from daily auto-adjusted closes over the window.\n\nIncludes total and annualized return, annualized volatility, max drawdown\n(negative percent), 50/200-day SMAs (null if insufficient history), and the\nrisk-adjusted set: Sharpe, Sortino, downside deviation and Calmar (CAGR per unit\nof max drawdown).\n\nAnnualized figures use the actual calendar span between the first and last bar,\nso over a one-year window the annualized return equals the total return for any\ninstrument. Volatility is scaled by an observations-per-year factor inferred from\nthe data and reported as periods_per_year (roughly 252 for a weekday-traded\nequity, 365 for a 24/7 instrument such as crypto). The annualized figures,\nperiods_per_year and every risk-adjusted ratio are null when the window spans\nunder 85 days (just under three months), because annualizing a sub-quarter move\nextrapolates noise into a yearly rate.\n\nLeft out, risk_free_rate is the 13-week US T-bill yield averaged over the same\ndates, so Sharpe, Sortino and downside deviation are excess over cash; pass 0 for\nraw figures. The rate and its source are echoed in the result, and if the T-bill\naverage cannot be formed those three are null with risk_free_rate_note saying why.\nFor beta, alpha or a comparison against an index, use compare_to_benchmark.",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "period": {
+        "default": "1y",
+        "description": "Look-back window for the statistics.",
+        "enum": [
+          "1d",
+          "5d",
+          "1mo",
+          "3mo",
+          "6mo",
+          "1y",
+          "2y",
+          "5y",
+          "10y",
+          "ytd",
+          "max"
+        ],
+        "type": "string"
+      },
+      "risk_free_rate": {
+        "anyOf": [
+          {
+            "maximum": 1.0,
+            "minimum": -0.5,
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Annual risk-free rate as a DECIMAL, not a percent: 0.045 means 4.5%. Leave it out to use the 13-week US T-bill yield averaged over the measured dates, so the Sharpe, Sortino and alpha are excess return over cash. Pass 0 for RAW return per unit of risk."
+      },
+      "ticker": {
+        "description": "Ticker symbol, e.g. 'AAPL'. Case-insensitive. Yahoo suffixes and prefixes are allowed (BRK-B, ^GSPC, RY.TO, BTC-USD, EURUSD=X); one symbol per value.",
+        "maxLength": 24,
+        "minLength": 1,
+        "pattern": "^\\s*[A-Za-z0-9.\\-^=]{1,20}\\s*$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "ticker"
+    ],
+    "type": "object"
+  },
+  "name": "analyze_performance",
+  "outputSchema": {
+    "description": "Return and risk statistics computed from daily closes over the requested window.",
+    "properties": {
+      "annualized_return_percent": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Annualized return (CAGR) over the actual calendar span between start_date and end_date, percent. Over a one-year window this equals total_return_percent. Null when the span is under 85 days (just under three months), because annualizing a sub-quarter move extrapolates short-run noise into a yearly figure - use total_return_percent for such windows and do not annualize it yourself."
+      },
+      "annualized_volatility_percent": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Annualized volatility of daily returns, percent, scaled by periods_per_year. Null when the window is under 85 days, for the same reason as annualized_return_percent."
+      },
+      "bars": {
+        "description": "Number of daily closes used.",
+        "type": "integer"
+      },
+      "calmar_ratio": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "annualized_return_percent divided by the magnitude of max_drawdown_percent: compound return per unit of worst peak-to-trough pain. Dimensionless. Null when the window is under 85 days or the series never drew down."
+      },
+      "downside_deviation_percent": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Annualized dispersion of returns BELOW risk_free_rate, percent - the denominator of sortino_ratio. Measured as a root-mean-square shortfall below the target rather than a spread around the mean, so it can EXCEED annualized_volatility_percent when most returns fell short. Null when the window is under 85 days or risk_free_rate is null; 0.0 means no return fell below the target."
+      },
+      "end_date": {
+        "description": "Last close date (ISO 8601).",
+        "type": "string"
+      },
+      "max_drawdown_percent": {
+        "description": "Largest peak-to-trough decline, as a negative percent (-23.4 = -23.4%).",
+        "type": "number"
+      },
+      "period": {
+        "description": "Look-back window requested, e.g. '1y'.",
+        "type": "string"
+      },
+      "periods_per_year": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Observations per year inferred from the data and used to scale annualized_volatility_percent: roughly 252 for a weekday-traded equity and 365 for a 24/7 instrument such as crypto, and lower for one that was halted or thinly traded. Null when the window is under 85 days."
+      },
+      "risk_free_rate": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Annual risk-free rate the Sharpe, Sortino and downside figures are measured against, as an effective annual DECIMAL (0.042 = 4.2%). By default the 13-week T-bill yield over the window, so those figures are excess-over-cash; a caller's rate of 0 makes them RAW return per unit of risk. Null when no rate was passed and the T-bill average could not be formed. Echoed even when the window is too short to use it."
+      },
+      "risk_free_rate_note": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Why the rate is unavailable and how to proceed (pass risk_free_rate explicitly); null otherwise."
+      },
+      "risk_free_rate_source": {
+        "description": "Where risk_free_rate came from. 'caller': the rate passed in. 'treasury_bill': none was passed, so it is the 13-week US T-bill yield (Yahoo ^IRX) averaged over the measured dates and converted from its discount quote to an effective annual rate. 'unavailable': none was passed and that average could not be formed - see risk_free_rate_note; the figures that need a rate are null.",
+        "enum": [
+          "caller",
+          "treasury_bill",
+          "unavailable"
+        ],
+        "type": "string"
+      },
+      "sharpe_ratio": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Annualized Sharpe ratio: mean return in excess of risk_free_rate divided by the standard deviation of those excess returns, scaled by periods_per_year. Dimensionless, so it is comparable across instruments. Null when the window is under 85 days (no periods_per_year to scale by), the returns never varied, or risk_free_rate is null."
+      },
+      "sma_200": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "200-day simple moving average; null if < 200 bars."
+      },
+      "sma_50": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "50-day simple moving average; null if < 50 bars."
+      },
+      "sortino_ratio": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Annualized Sortino ratio: the same numerator as sharpe_ratio, but divided by downside_deviation instead of total volatility, so upside swings are not penalized. When the numerator is POSITIVE it sits above the Sharpe if the dispersion was mostly upside; when the numerator is negative the comparison inverts, so only read the gap between the two on a positive Sharpe. Null when the window is under 85 days, risk_free_rate is null, or nothing fell below the risk-free target - null there means 'no downside observed', not 'bad'."
+      },
+      "start_date": {
+        "description": "First close date (ISO 8601).",
+        "type": "string"
+      },
+      "symbol": {
+        "description": "Ticker symbol.",
+        "type": "string"
+      },
+      "total_return_percent": {
+        "description": "Total return over the window, as a PERCENT (12.3 = 12.3%).",
+        "type": "number"
+      }
+    },
+    "required": [
+      "symbol",
+      "period",
+      "bars",
+      "start_date",
+      "end_date",
+      "total_return_percent",
+      "max_drawdown_percent",
+      "risk_free_rate",
+      "risk_free_rate_source"
+    ],
+    "type": "object"
+  },
+  "title": "Return & Risk Statistics"
+}

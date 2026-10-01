@@ -1,0 +1,24 @@
+{
+  "arguments": [
+    {
+      "description": "2-10 ticker symbols separated by commas or spaces, e.g. 'AAPL, MSFT, GOOGL'.\n\nProvide a value matching the following JSON schema: {\"description\":\"2-10 ticker symbols separated by commas or spaces, e.g. 'AAPL, MSFT, GOOGL'.\",\"type\":\"string\"}. Encode non-string values as JSON.",
+      "name": "tickers",
+      "required": true
+    },
+    {
+      "description": "Investment time horizon to frame the ranking, e.g. '12mo', '3y'.\n\nProvide a value matching the following JSON schema: {\"description\":\"Investment time horizon to frame the ranking, e.g. '12mo', '3y'.\",\"type\":\"string\"}. Encode non-string values as JSON.",
+      "name": "horizon",
+      "required": false
+    }
+  ],
+  "description": "Rank a peer group side by side: a comparability screen, a rubric fixed before the\nresults are read, growth-adjusted valuation derived from the data, risk-adjusted\nperformance checked across two windows, and currency caveats - ending in a ranked\nverdict that separates ties and data gaps from real differences.",
+  "name": "compare_stocks",
+  "rendered_description": "Rank a peer group side by side: a comparability screen, a rubric fixed before the\nresults are read, growth-adjusted valuation derived from the data, risk-adjusted\nperformance checked across two windows, and currency caveats - ending in a ranked\nverdict that separates ties and data gaps from real differences.",
+  "rendered_roles": [
+    "user"
+  ],
+  "sample_arguments": {
+    "horizon": "3y",
+    "tickers": "KO, PEP, MDLZ"
+  }
+}

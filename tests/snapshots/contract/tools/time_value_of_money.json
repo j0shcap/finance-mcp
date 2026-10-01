@@ -1,0 +1,152 @@
+{
+  "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Time Value of Money"
+  },
+  "description": "Solve compound interest / present & future value / annuity payment / period count / CAGR.\n\nCovers most personal-finance math via one equation. Examples: future value of a\ndeposit (solve_for='fv'), a loan/mortgage payment (solve_for='pmt'), or a CAGR\nbetween two values with no interim payments (solve_for='rate', pmt=0). Use\nwhen='begin' for begin-of-period (annuity-due) payments.",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "fv": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Future value (defaults to 0 if omitted, as in Excel)."
+      },
+      "nper": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Number of periods."
+      },
+      "pmt": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Payment per period (defaults to 0 if omitted)."
+      },
+      "pv": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Present value. Sign convention: cash received is positive, cash paid is negative."
+      },
+      "rate": {
+        "anyOf": [
+          {
+            "exclusiveMinimum": -1,
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Interest rate per period as a decimal, e.g. 0.05 for 5%."
+      },
+      "solve_for": {
+        "description": "Which unknown to solve for. Provide all other variables.",
+        "enum": [
+          "pv",
+          "fv",
+          "pmt",
+          "rate",
+          "nper"
+        ],
+        "type": "string"
+      },
+      "when": {
+        "default": "end",
+        "description": "Payment timing: 'end' (ordinary) or 'begin' (annuity-due).",
+        "enum": [
+          "end",
+          "begin"
+        ],
+        "type": "string"
+      }
+    },
+    "required": [
+      "solve_for"
+    ],
+    "type": "object"
+  },
+  "name": "time_value_of_money",
+  "outputSchema": {
+    "description": "Result of a time-value-of-money computation.",
+    "properties": {
+      "fv": {
+        "description": "Future value (same sign convention as pv).",
+        "type": "number"
+      },
+      "nper": {
+        "description": "Number of periods.",
+        "type": "number"
+      },
+      "pmt": {
+        "description": "Payment per period (same sign convention as pv).",
+        "type": "number"
+      },
+      "pv": {
+        "description": "Present value (cash received positive, cash paid negative).",
+        "type": "number"
+      },
+      "rate": {
+        "description": "Interest rate per period (decimal, e.g. 0.05).",
+        "type": "number"
+      },
+      "solved_for": {
+        "description": "Which variable was solved for.",
+        "enum": [
+          "pv",
+          "fv",
+          "pmt",
+          "rate",
+          "nper"
+        ],
+        "type": "string"
+      },
+      "solved_value": {
+        "description": "The computed value of the solved_for variable.",
+        "type": "number"
+      }
+    },
+    "required": [
+      "solved_for",
+      "solved_value",
+      "pv",
+      "fv",
+      "pmt",
+      "rate",
+      "nper"
+    ],
+    "type": "object"
+  },
+  "title": "Time Value of Money"
+}
