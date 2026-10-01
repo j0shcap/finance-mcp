@@ -1,6 +1,6 @@
 [project]
 name = "mcp-finance"
-version = "0.4.1"
+version = "0.4.2"
 description = "An MCP server providing finance tools: a yfinance wrapper, computed analytics, and financial calculators."
 readme = "README.md"
 requires-python = ">=3.13"
