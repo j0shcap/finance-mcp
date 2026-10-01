@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     #: Most bars returned by get_price_history before truncation (the summary still
     #: covers the whole window). Bounds the response size a single call can produce.
     max_history_bars: int = Field(default=260, gt=0, le=10_000)
+    #: Most Yahoo requests in flight at once, across all concurrent tool calls.
+    max_concurrent_requests: int = Field(default=8, ge=1, le=32)
+    #: Retries of a request Yahoo throttled or the network dropped (0 disables them).
+    request_retries: int = Field(default=2, ge=0, le=5)
 
 
 def get_settings() -> Settings:

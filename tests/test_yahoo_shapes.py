@@ -22,10 +22,10 @@ from yfinance.exceptions import YFRateLimitError
 
 def test_keys_read_follows_get_calls_and_getattr_by_receiver() -> None:
     source = (
-        "def f(info, fi, content):\n"
+        "_FAST_INFO_FIELDS = ('last_price',)\n"
+        "def f(info, content):\n"
         "    a = info.get('trailingPE')\n"
         "    b = info.get('currency')\n"
-        "    c = getattr(fi, 'last_price', None)\n"
         "    d = (content.get('provider') or {}).get('displayName')\n"
         "    e = info.get(dynamic_key)\n"
     )

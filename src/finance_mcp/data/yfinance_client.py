@@ -47,7 +47,11 @@ from finance_mcp.data.risk_free import (
     risk_free_over,
     table_risk_free,
 )
-from finance_mcp.data.yahoo import YahooSource
+from finance_mcp.data.yahoo import (
+    DEFAULT_MAX_CONCURRENT_REQUESTS,
+    DEFAULT_REQUEST_RETRIES,
+    YahooSource,
+)
 
 DEFAULT_MAX_BARS = 260
 DEFAULT_CACHE_MAX_ENTRIES = 256
@@ -55,10 +59,10 @@ DEFAULT_CACHE_MAX_ENTRIES = 256
 # history is ~11.5k bars (~9 MB). Longer bar lists are returned in full but not kept;
 # ~2000 daily bars is about eight years, so every ordinary window stays cached.
 MAX_CACHEABLE_BARS = 2000
-# Keeps a large quote batch from opening a connection per ticker at once.
+# Threads per batch. The Yahoo requests they make are bounded separately, across all
+# concurrent tool calls, by YahooSource's request gate (max_concurrent_requests).
 QUOTE_MAX_WORKERS = 8
-# Each comparison row costs two Yahoo calls (history + info), hence a lower bound than
-# quotes for the same ceiling on concurrent connections.
+# Each comparison row makes two Yahoo calls (history + info), so fewer rows run at once.
 COMPARE_MAX_WORKERS = 5
 
 
@@ -75,8 +79,15 @@ class YFinanceClient:
         fundamentals_ttl: float = 3600.0,
         max_bars: int = DEFAULT_MAX_BARS,
         cache_max_entries: int = DEFAULT_CACHE_MAX_ENTRIES,
+        max_concurrent_requests: int = DEFAULT_MAX_CONCURRENT_REQUESTS,
+        request_retries: int = DEFAULT_REQUEST_RETRIES,
     ) -> None:
-        self._source = YahooSource(ticker_factory, search_factory)
+        self._source = YahooSource(
+            ticker_factory,
+            search_factory,
+            max_concurrent_requests=max_concurrent_requests,
+            request_retries=request_retries,
+        )
         self._quote_ttl = quote_ttl
         self._history_ttl = history_ttl
         self._fundamentals_ttl = fundamentals_ttl

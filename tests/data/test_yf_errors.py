@@ -10,7 +10,7 @@ from yfinance.exceptions import (
 )
 
 from finance_mcp.data.errors import DataUnavailable, SymbolNotFound
-from finance_mcp.data.yahoo import YahooSource
+from finance_mcp.data.yahoo import YahooSource, is_transient
 from tests.fakes import (
     fake_ticker_factory,
     make_client,
@@ -41,10 +41,14 @@ TRANSPORT_ERRORS = [
 
 
 @pytest.mark.parametrize("exc", TRANSPORT_ERRORS, ids=lambda e: type(e).__name__ + str(e)[:12])
-def test_quote_transport_failure_is_data_unavailable_not_symbol_not_found(exc: Exception) -> None:
+def test_quote_transport_failure_is_data_unavailable_not_symbol_not_found(
+    exc: Exception, instant_backoff: list[float]
+) -> None:
     source = YahooSource(fake_ticker_factory(fast_info_error=exc))
     with pytest.raises(DataUnavailable) as raised:
         source.quote("AAPL")
+    # Dropped connections and 5xx are retried before failing; the rest fail at once.
+    assert instant_backoff == ([2.0, 6.0] if is_transient(exc) else [])
     assert not isinstance(raised.value, SymbolNotFound)
     assert str(exc) in str(raised.value)  # underlying message preserved
     assert "may be invalid or delisted" not in str(raised.value)
