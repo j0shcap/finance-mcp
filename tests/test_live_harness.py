@@ -86,7 +86,6 @@ async def test_call_retries_a_throttled_request_and_succeeds() -> None:
 
 
 async def test_call_skips_after_exhausting_its_attempts() -> None:
-    """A persistently throttled call is a skip, not a failure."""
     client = FakeClient(failures=99, exc=DataUnavailable(f"Failed to fetch quote: {THROTTLED}"))
 
     with pytest.raises(pytest.skip.Exception, match="rate-limited"):
@@ -96,7 +95,6 @@ async def test_call_skips_after_exhausting_its_attempts() -> None:
 
 
 async def test_call_reraises_a_genuine_failure_without_retrying() -> None:
-    """A real error surfaces at once rather than being retried and then skipped."""
     client = FakeClient(failures=99, exc=DataUnavailable("Failed to parse profile for 'AAPL': x"))
 
     with pytest.raises(DataUnavailable, match="Failed to parse profile"):

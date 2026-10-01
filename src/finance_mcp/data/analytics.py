@@ -76,16 +76,13 @@ def annualized_volatility(closes: list[float], periods_per_year: float) -> float
 
 def max_drawdown(closes: list[float]) -> float:
     """Largest peak-to-trough decline, as a non-positive percent (e.g. -23.4 = -23.4%)."""
-    if len(closes) < 1:
+    if not closes:
         raise InvalidInput("need at least one close")
     peak = closes[0]
     worst = 0.0
     for close in closes:
-        if close > peak:
-            peak = close
-        drawdown = (close / peak - 1) * 100
-        if drawdown < worst:
-            worst = drawdown
+        peak = max(peak, close)
+        worst = min(worst, (close / peak - 1) * 100)
     return worst
 
 
@@ -121,12 +118,46 @@ def periodic_risk_free(annual_rate: float, periods_per_year: float) -> float:
     return growth - 1.0
 
 
+TREASURY_BILL_DAYS = 91
+"""Term of a 13-week Treasury bill, the instrument ^IRX quotes."""
+
+
+def treasury_bill_effective_rate(discount_yield_percent: float) -> float:
+    """Convert a 13-week T-bill's quoted discount yield to an effective annual rate.
+
+    Bills are quoted on a bank-discount basis: the percent of FACE a buyer is discounted,
+    scaled to a 360-day year, so a 4.03% quote means paying 1 - 0.0403 * 91/360 per 1 of
+    face. The analytics de-annualize the risk-free rate geometrically
+    (:func:`periodic_risk_free`), so this returns the rate that compounds to the bill's
+    91-day return over a DAYS_PER_YEAR year -- the same year the returns are annualized
+    on. 4.03% quoted is 4.195% effective (Treasury's simple-interest "investment rate"
+    for the same bill is 4.128%).
+    """
+    price = 1.0 - discount_yield_percent / 100.0 * TREASURY_BILL_DAYS / 360.0
+    if price <= 0.0:
+        raise InvalidInput(
+            f"A {discount_yield_percent}% discount yield implies a non-positive bill price."
+        )
+    # float ** float is typed Any, since it can produce a complex.
+    growth: float = price ** (-DAYS_PER_YEAR / TREASURY_BILL_DAYS)
+    return growth - 1.0
+
+
 def _excess_returns(
     closes: list[float], periods_per_year: float, risk_free_rate: float
 ) -> list[float]:
     """Per-observation returns net of the de-annualized risk-free rate."""
     per_period = periodic_risk_free(risk_free_rate, periods_per_year)
     return [r - per_period for r in simple_returns(closes)]
+
+
+def _annualized_ratio(
+    values: list[float], dispersion: float, periods_per_year: float
+) -> float | None:
+    """Mean of ``values`` per unit of ``dispersion``, annualized; None for zero dispersion."""
+    if dispersion == 0.0:
+        return None
+    return statistics.fmean(values) / dispersion * math.sqrt(periods_per_year)
 
 
 def sharpe_ratio(
@@ -141,10 +172,7 @@ def sharpe_ratio(
     excess = _excess_returns(closes, periods_per_year, risk_free_rate)
     if len(excess) < 2:
         return None
-    dispersion = statistics.stdev(excess)
-    if dispersion == 0.0:
-        return None
-    return statistics.fmean(excess) / dispersion * math.sqrt(periods_per_year)
+    return _annualized_ratio(excess, statistics.stdev(excess), periods_per_year)
 
 
 def _downside_dispersion(excess: list[float]) -> float:
@@ -181,10 +209,7 @@ def sortino_ratio(
     excess = _excess_returns(closes, periods_per_year, risk_free_rate)
     if len(excess) < 2:
         return None
-    dispersion = _downside_dispersion(excess)
-    if dispersion == 0.0:
-        return None
-    return statistics.fmean(excess) / dispersion * math.sqrt(periods_per_year)
+    return _annualized_ratio(excess, _downside_dispersion(excess), periods_per_year)
 
 
 def calmar_ratio(annualized_return_percent: float, max_drawdown_percent: float) -> float | None:
@@ -311,7 +336,4 @@ def information_ratio(
     active = _active_returns(asset_closes, benchmark_closes)
     if len(active) < 2:
         return None
-    dispersion = statistics.stdev(active)
-    if dispersion == 0.0:
-        return None
-    return statistics.fmean(active) / dispersion * math.sqrt(periods_per_year)
+    return _annualized_ratio(active, statistics.stdev(active), periods_per_year)

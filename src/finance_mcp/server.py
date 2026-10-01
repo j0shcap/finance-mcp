@@ -7,6 +7,7 @@ from finance_mcp.data.yfinance_client import YFinanceClient
 from finance_mcp.prompts import analysis, calculations
 from finance_mcp.settings import get_settings
 from finance_mcp.tools import analytics, calculators, equities
+from finance_mcp.tools._argument_errors import ArgumentErrorMiddleware
 
 
 def build_default_client() -> YFinanceClient:
@@ -32,6 +33,7 @@ def create_server(yf_client: YFinanceClient | None = None) -> FastMCP:
         # credentials in front of the model.
         mask_error_details=True,
     )
+    mcp.add_middleware(ArgumentErrorMiddleware())
     client = yf_client if yf_client is not None else build_default_client()
     conventions.register(mcp)
     calculators.register(mcp)

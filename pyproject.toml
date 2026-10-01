@@ -1,6 +1,6 @@
 [project]
 name = "mcp-finance"
-version = "0.4.1"
+version = "0.4.2"
 description = "An MCP server providing finance tools: a yfinance wrapper, computed analytics, and financial calculators."
 readme = "README.md"
 requires-python = ">=3.13"
@@ -103,8 +103,8 @@ markers = [
 ]
 # `-m 'not live and not e2e'` keeps the default run (and therefore `make check`) offline,
 # in-process and deterministic; `make test-live` and `make e2e` pass their own -m, which
-# wins because -m takes a single value. --strict-markers turns a misspelled marker into an error rather than a
-# test that silently never runs. tests/test_live_marker.py pins both.
+# wins because -m takes a single value. --strict-markers turns a misspelled marker into an
+# error rather than a test that silently never runs. tests/test_live_marker.py pins both.
 addopts = "-m 'not live and not e2e' --strict-markers --cov=finance_mcp --cov-report=term-missing --cov-report=xml --cov-fail-under=90"
 
 [tool.coverage.run]

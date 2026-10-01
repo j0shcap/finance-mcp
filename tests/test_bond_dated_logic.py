@@ -54,14 +54,11 @@ def d(iso: str) -> datetime.date:
         ("2008-02-15", -120, "1998-02-15"),
         ("2007-11-15", 3, "2008-02-15"),
         ("2007-11-15", 14, "2009-01-15"),
+        ("2024-03-15", 0, "2024-03-15"),
     ],
 )
 def test_add_months_preserves_month_end(start: str, months: int, expected: str) -> None:
     assert _add_months(d(start), months) == d(expected)
-
-
-def test_add_months_zero_is_identity() -> None:
-    assert _add_months(d("2024-03-15"), 0) == d("2024-03-15")
 
 
 # --------------------------------------------------------------------------------------
@@ -468,6 +465,7 @@ DERIVATIVE_CASES = [
 ]
 
 
+@pytest.mark.parametrize("first_period_discount", ["compound", "simple"])
 @pytest.mark.parametrize(
     ("settlement", "maturity", "coupon_rate", "ytm", "frequency", "day_count"),
     DERIVATIVE_CASES,
@@ -479,11 +477,14 @@ def test_duration_and_convexity_are_the_derivatives_of_the_dirty_price(
     ytm: float,
     frequency: int,
     day_count: BondDayCount,
+    first_period_discount: FirstPeriodDiscount,
 ) -> None:
     """modified duration = -(1/P) dP/dY and convexity = (1/P) d2P/dY2, on the DIRTY price
-    P and the ANNUAL yield Y. Macaulay is modified times (1 + Y/frequency)."""
+    P and the ANNUAL yield Y. Macaulay is modified times (1 + Y/frequency). The simple stub
+    has its own analytic derivatives (its stub factor depends on the yield), so both
+    conventions are checked."""
 
-    def dirty(rate: float) -> float:
+    def analytics(rate: float) -> BondDatedAnalytics:
         return bond_price_dated(
             settlement=d(settlement),
             maturity=d(maturity),
@@ -492,18 +493,14 @@ def test_duration_and_convexity_are_the_derivatives_of_the_dirty_price(
             face=100.0,
             frequency=frequency,
             day_count=day_count,
-        ).dirty_price
+            first_period_discount=first_period_discount,
+        )
 
-    result = bond_price_dated(
-        settlement=d(settlement),
-        maturity=d(maturity),
-        coupon_rate=coupon_rate,
-        ytm=ytm,
-        face=100.0,
-        frequency=frequency,
-        day_count=day_count,
-    )
-    # A part period really is in play for every case here except the on-coupon ones.
+    def dirty(rate: float) -> float:
+        return analytics(rate).dirty_price
+
+    result = analytics(ytm)
+    # A part period is in play, so the fractional-period formulas are exercised.
     assert 0.0 < result.accrued_fraction < 1.0
 
     h = 1e-5
@@ -676,7 +673,6 @@ def test_invalid_dated_inputs_are_rejected(kwargs: dict[str, object], message: s
 
 
 def test_a_span_exactly_at_the_bound_is_accepted() -> None:
-    """100 years is allowed; the bound rejects only spans longer than it."""
     result = bond_price_dated(
         settlement=d("1917-11-15"),
         maturity=d("2017-11-15"),
@@ -715,20 +711,20 @@ def test_a_deeply_negative_yield_above_minus_frequency_still_prices() -> None:
     assert result.dirty_price > 0.0
 
 
-def test_a_yield_that_would_leave_a_non_positive_clean_price_is_rejected() -> None:
+@pytest.mark.parametrize("ytm", [12.0, 20.0])
+def test_a_yield_that_would_leave_a_non_positive_clean_price_is_rejected(ytm: float) -> None:
     """Accrued interest is a fixed cash amount, but the discounted cashflows shrink with the
     yield, so a high enough yield drives clean = dirty - accrued to zero and then negative.
     bond_ytm_dated rejects such a quote, so bond_price_dated must not emit one: otherwise the
     two tools stop being inverses and current_yield comes back negative (or divides by zero).
     """
-    for ytm in (12.0, 20.0):
-        with pytest.raises(InvalidInput, match="non-positive clean price"):
-            bond_price_dated(
-                settlement=d("2024-04-01"),
-                maturity=d("2044-01-15"),
-                coupon_rate=0.05,
-                ytm=ytm,
-            )
+    with pytest.raises(InvalidInput, match="non-positive clean price"):
+        bond_price_dated(
+            settlement=d("2024-04-01"),
+            maturity=d("2044-01-15"),
+            coupon_rate=0.05,
+            ytm=ytm,
+        )
 
 
 @pytest.mark.parametrize("clean_price", [0.0, -1.0])
@@ -810,8 +806,7 @@ def test_an_odd_short_first_coupon_period_is_out_of_scope() -> None:
 
 
 def test_the_two_first_period_conventions_disagree_by_a_material_amount() -> None:
-    """The reason this is an explicit choice and not an implementation detail: on the
-    appendix's own example the conventions differ in the third decimal of the price."""
+    """On the appendix's own example the conventions differ in the third decimal."""
 
     def price(discount: FirstPeriodDiscount) -> float:
         return bond_price_dated(
@@ -829,7 +824,13 @@ def test_the_two_first_period_conventions_disagree_by_a_material_amount() -> Non
     assert price("compound") - price("simple") == pytest.approx(0.007655, abs=1e-6)
 
 
-def test_in_the_final_coupon_period_simple_is_what_matches_excel() -> None:
+@pytest.mark.parametrize(
+    ("ytm", "excel_price", "compound_price"),
+    [(0.065, 99.834871, 99.847465), (0.20, 96.107283, 96.214664)],
+)
+def test_in_the_final_coupon_period_simple_is_what_matches_excel(
+    ytm: float, excel_price: float, compound_price: float
+) -> None:
     """Excel's PRICE/YIELD documentation gives a SEPARATE formula for "one coupon period or
     less to redemption" that discounts the stub with simple interest:
 
@@ -842,7 +843,7 @@ def test_in_the_final_coupon_period_simple_is_what_matches_excel() -> None:
     file has n >= 18, leaving the n == 1 boundary otherwise untested.
     """
 
-    def price(ytm: float, discount: FirstPeriodDiscount) -> BondDatedAnalytics:
+    def price(discount: FirstPeriodDiscount) -> BondDatedAnalytics:
         # A 6% semiannual bond maturing 2024-07-15, settling 2024-04-01: one coupon left.
         return bond_price_dated(
             settlement=d("2024-04-01"),
@@ -854,28 +855,22 @@ def test_in_the_final_coupon_period_simple_is_what_matches_excel() -> None:
             first_period_discount=discount,
         )
 
-    for ytm, excel_price, compound_price in (
-        (0.065, 99.834871, 99.847465),
-        (0.20, 96.107283, 96.214664),
-    ):
-        simple = price(ytm, "simple")
-        compound = price(ytm, "compound")
-        assert simple.periods_remaining == 1
-        # The Excel closed form, evaluated from the schedule this module resolved.
-        coupon, a, e = 100 * 0.06 / 2, simple.accrued_days, simple.period_days
-        closed_form = (100 + coupon) / (1 + (e - a) / e * ytm / 2) - a / e * coupon
-        assert closed_form == pytest.approx(excel_price, abs=1e-6)
-        assert simple.clean_price_per_100 == pytest.approx(excel_price, abs=1e-6)
-        # The default compounds throughout instead, and is measurably higher. Documented, not
-        # a defect: 'compound' is one uniform formula for every n, which is what the street
-        # and LibreOffice do -- but it is why the Excel-equivalence claims name this exception.
-        assert compound.clean_price_per_100 == pytest.approx(compound_price, abs=1e-6)
-        assert compound.clean_price_per_100 > simple.clean_price_per_100
+    simple = price("simple")
+    compound = price("compound")
+    assert simple.periods_remaining == 1
+    # The Excel closed form, evaluated from the schedule this module resolved.
+    coupon, a, e = 100 * 0.06 / 2, simple.accrued_days, simple.period_days
+    closed_form = (100 + coupon) / (1 + (e - a) / e * ytm / 2) - a / e * coupon
+    assert closed_form == pytest.approx(excel_price, abs=1e-6)
+    assert simple.clean_price_per_100 == pytest.approx(excel_price, abs=1e-6)
+    # The default compounds throughout and is measurably higher: 'compound' is one uniform
+    # formula for every n, as the street and LibreOffice use, which is why the
+    # Excel-equivalence claims name this exception.
+    assert compound.clean_price_per_100 == pytest.approx(compound_price, abs=1e-6)
+    assert compound.clean_price_per_100 > simple.clean_price_per_100
 
 
 def test_compound_is_the_default() -> None:
-    """The task's 'standard street convention', and what Excel's PRICE implements while more
-    than one coupon period remains."""
     explicit = bond_price_dated(
         settlement=d("1985-11-29"),
         maturity=d("1995-11-15"),
@@ -915,52 +910,6 @@ def test_the_conventions_agree_on_a_coupon_date(
     assert result.macaulay_duration == pytest.approx(expected.macaulay_duration, rel=1e-12)
     assert result.modified_duration == pytest.approx(expected.modified_duration, rel=1e-12)
     assert result.convexity == pytest.approx(expected.convexity, rel=1e-12)
-
-
-@pytest.mark.parametrize(
-    ("settlement", "maturity", "coupon_rate", "ytm", "frequency", "day_count"),
-    DERIVATIVE_CASES,
-)
-def test_simple_stub_duration_and_convexity_are_also_derivatives(
-    settlement: str,
-    maturity: str,
-    coupon_rate: float,
-    ytm: float,
-    frequency: int,
-    day_count: BondDayCount,
-) -> None:
-    """The simple-stub branch has its own analytic derivatives (the stub factor depends on
-    the yield too), so they need the same finite-difference check as the compound ones."""
-
-    def dirty(rate: float) -> float:
-        return bond_price_dated(
-            settlement=d(settlement),
-            maturity=d(maturity),
-            coupon_rate=coupon_rate,
-            ytm=rate,
-            face=100.0,
-            frequency=frequency,
-            day_count=day_count,
-            first_period_discount="simple",
-        ).dirty_price
-
-    result = bond_price_dated(
-        settlement=d(settlement),
-        maturity=d(maturity),
-        coupon_rate=coupon_rate,
-        ytm=ytm,
-        face=100.0,
-        frequency=frequency,
-        day_count=day_count,
-        first_period_discount="simple",
-    )
-    h = 1e-5
-    price, up, down = dirty(ytm), dirty(ytm + h), dirty(ytm - h)
-    assert result.modified_duration == pytest.approx(-(up - down) / (2.0 * h * price), rel=1e-6)
-    assert result.convexity == pytest.approx((up - 2.0 * price + down) / (h * h * price), rel=1e-5)
-    assert result.macaulay_duration == pytest.approx(
-        result.modified_duration * (1.0 + ytm / frequency), rel=1e-12
-    )
 
 
 @pytest.mark.parametrize("ytm", [0.0, 0.0425, 0.11])

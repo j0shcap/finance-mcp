@@ -85,13 +85,8 @@ def test_compare_to_benchmark_defaults_the_risk_free_rate_to_zero() -> None:
 
 
 def test_compare_to_benchmark_aligns_a_seven_day_asset_to_a_weekday_benchmark() -> None:
-    """BTC-USD vs SPY: the overlap is the benchmark's weekdays, so periods_per_year is read
-    off a 5-day calendar -- not the 365 the crypto leg alone implies.
-
-    The expected figure is ~261, not the ~252 real market data gives: pandas' "B" frequency
-    is every Mon-Fri, and it is the ~9 annual market holidays that take a real exchange from
-    261 down to 252. The point of the assertion is the calendar the factor came from.
-    """
+    # BTC-USD vs SPY. ~261 rather than the real ~252 because pandas' "B" frequency has no
+    # market holidays; the point is the calendar the factor came from, not 365.
     asset = _walk(100.0, 0.30, 2.0)  # freq="D": every calendar day
     bench = _walk(400.0, 0.80, 4.0)  # freq="B": weekdays only
     result = _compare(asset, bench, bench_freq="B")
@@ -104,8 +99,6 @@ def test_compare_to_benchmark_aligns_a_seven_day_asset_to_a_weekday_benchmark() 
 
 
 def test_compare_to_benchmark_needs_two_overlapping_dates() -> None:
-    """A one-day overlap has no return to compare, so it must report the overlap count
-    rather than indexing into an empty return list."""
     factory = fake_multi_ticker_factory(
         {
             "AAPL": {"history_df": make_history_df([100.0, 101.0, 102.0], start="2024-01-01")},
@@ -145,7 +138,6 @@ def test_compare_to_benchmark_nulls_annualized_figures_on_a_short_overlap() -> N
 
 
 def test_compare_to_benchmark_flat_benchmark_gives_no_beta_or_alpha() -> None:
-    """A benchmark that never moves has zero variance."""
     result = _compare(_walk(100.0, 0.30, 2.0), [400.0] * DAYS)
     assert result.beta is None
     assert result.correlation is None
@@ -223,11 +215,11 @@ def test_compare_tickers_returns_one_row_per_ticker_in_request_order() -> None:
     assert [row.symbol for row in table.rows] == ["MSFT", "AAPL"]
     assert table.errors == []
     assert table.period == "1y"
-    assert table.risk_free_rate == 0.0
+    assert table.risk_free_rate is None  # none passed: the rows carry the T-bill default
 
 
 def test_compare_tickers_rows_carry_performance_and_valuation() -> None:
-    table = make_client(_rows_factory()).compare_tickers(["AAPL", "MSFT"], "1y")
+    table = make_client(_rows_factory()).compare_tickers(["AAPL", "MSFT"], "1y", 0.0)
     row = table.rows[0]
     assert row.total_return_percent is not None
     assert row.annualized_volatility_percent is not None
@@ -240,11 +232,8 @@ def test_compare_tickers_rows_carry_performance_and_valuation() -> None:
 
 
 def test_compare_tickers_rows_report_the_calendar_each_was_annualized_on() -> None:
-    """A 24/7 row and a weekday row in one table are scaled differently; the row says which.
-
-    Without periods_per_year on the row there is nothing in the table to warn that its
-    volatility and sharpe_ratio columns are not on a common footing.
-    """
+    # Without it nothing warns that the volatility and Sharpe columns are not on a common
+    # footing.
     factory = _rows_factory(
         MSFT={
             "history_df": make_history_df(_walk(200.0, 0.50, 3.0), freq="B"),
@@ -258,7 +247,6 @@ def test_compare_tickers_rows_report_the_calendar_each_was_annualized_on() -> No
 
 
 def test_compare_tickers_short_window_row_has_no_periods_per_year() -> None:
-    """Under the annualization floor the row reports no calendar, matching its null ratios."""
     factory = _rows_factory(AAPL={"history_df": make_history_df(_walk(100.0, 0.3, 2.0, n=30))})
     table = make_client(factory).compare_tickers(["AAPL"], "1mo")
     row = table.rows[0]
@@ -267,7 +255,7 @@ def test_compare_tickers_short_window_row_has_no_periods_per_year() -> None:
 
 
 def test_compare_tickers_applies_the_risk_free_rate_to_every_row() -> None:
-    raw = make_client(_rows_factory()).compare_tickers(["AAPL", "MSFT"], "1y")
+    raw = make_client(_rows_factory()).compare_tickers(["AAPL", "MSFT"], "1y", 0.0)
     excess = make_client(_rows_factory()).compare_tickers(
         ["AAPL", "MSFT"], "1y", risk_free_rate=0.05
     )
@@ -282,7 +270,6 @@ def test_compare_tickers_deduplicates_equivalent_spellings() -> None:
 
 
 def test_compare_tickers_reports_a_failed_history_as_an_error_not_a_row() -> None:
-    """The row's backbone is gone, so there is no row."""
     factory = _rows_factory(NOPE={"history_error": KeyError("exchangeTimezoneName")})
     table = make_client(factory).compare_tickers(["AAPL", "NOPE"], "1y")
     assert [row.symbol for row in table.rows] == ["AAPL"]
@@ -291,8 +278,6 @@ def test_compare_tickers_reports_a_failed_history_as_an_error_not_a_row() -> Non
 
 
 def test_compare_tickers_keeps_the_row_when_only_the_valuation_metrics_fail() -> None:
-    """Performance still stands, so the row survives with null valuation fields and a
-    per-row reason - not silently blank, and not a dropped row."""
     factory = _rows_factory(
         BADINFO={
             "history_df": make_history_df(_walk(300.0, 0.20, 1.0)),
@@ -378,5 +363,6 @@ def test_compare_tickers_fetches_rows_concurrently() -> None:
         },
         gate=gate,
     )
-    table = make_client(factory).compare_tickers(symbols, "1y")
+    # An explicit rate, so no T-bill fetch takes a turn at the barrier.
+    table = make_client(factory).compare_tickers(symbols, "1y", 0.0)
     assert [row.symbol for row in table.rows] == symbols

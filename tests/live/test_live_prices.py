@@ -55,10 +55,15 @@ async def test_quote_aapl_shape_and_units(layer: Layer) -> None:
     assert quote.volume is not None and quote.volume > 0
 
     # change/change_percent are ours, not Yahoo's: this checks our arithmetic on live
-    # inputs, and that the result is a percent rather than a fraction.
-    assert quote.change == pytest.approx(quote.price - quote.previous_close)
+    # inputs, and that the result is a percent rather than a fraction. Over MCP every float
+    # is rounded to 7 significant digits, which moves a value by at most 0.5e-6 of itself,
+    # so differencing the rounded price and previous close can miss the rounded change by
+    # up to 0.5e-6 * (price + previous_close) - more than pytest.approx's default allows.
+    drift = 0.5e-6 * (quote.price + quote.previous_close + abs(quote.change or 0.0))
+    assert quote.change == pytest.approx(quote.price - quote.previous_close, abs=drift)
     assert quote.change_percent == pytest.approx(
-        (quote.price - quote.previous_close) / quote.previous_close * 100.0
+        (quote.price - quote.previous_close) / quote.previous_close * 100.0,
+        abs=drift / quote.previous_close * 100.0 + 0.5e-6 * abs(quote.change_percent or 0.0),
     )
     assert -50 < quote.change_percent < 50
 

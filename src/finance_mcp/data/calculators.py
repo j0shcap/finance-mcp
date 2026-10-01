@@ -12,7 +12,7 @@ import calendar
 import datetime
 import math
 from collections.abc import Callable, Iterable
-from typing import Literal
+from typing import Literal, NamedTuple
 
 from finance_mcp.data.errors import InvalidInput
 from finance_mcp.data.models import (
@@ -55,12 +55,10 @@ def _bisect_bracket(f: Callable[[float], float], low: float, high: float) -> flo
 
 
 def _bisect(f: Callable[[float], float], low: float = -0.999999, high: float = 10.0) -> float:
-    """Find a single root of ``f``, expanding ``high`` to bracket a sign change.
+    """Find the single root of a monotonic ``f``, doubling ``high`` until it is bracketed.
 
-    For monotonic functions (TVM rate, bond yield). Raises InvalidInput if no sign
-    change can be bracketed within the search range — including when ``f`` overflows
-    for large arguments (e.g. ``(1+r)**nper`` with very large ``nper``) before a
-    bracket is found, rather than letting a raw OverflowError escape.
+    Raises InvalidInput when no sign change can be bracketed, including when ``f``
+    overflows (e.g. ``(1+r)**nper`` for a large ``nper``) before one is found.
     """
     f_low = f(low)
     try:
@@ -118,27 +116,24 @@ def _find_all_roots(
 ) -> list[float]:
     """Find every real root of ``f`` on (low, log_high] by scanning a fixed grid.
 
-    Deterministic: fixed abscissae, iteration counts, and tolerances. The abscissae are
-    ``grid_points`` uniform samples on (low, high] followed by ``log_points`` geometric
-    samples on (high, log_high] — log spacing keeps the very large rates affordable, so
-    an IRR of several hundred times the principal is still found.
+    Used for IRR/XIRR, where non-conventional cashflows can have several roots.
+    Deterministic: fixed abscissae, iteration counts and tolerances. The abscissae are
+    ``grid_points`` uniform samples on (low, high] then ``log_points`` geometric samples
+    on (high, log_high]; log spacing keeps very large rates affordable, so an IRR of
+    several hundred times the principal is still found.
 
     Three kinds of root are recorded:
 
     * an exact zero landing on an abscissa;
     * a sign change between adjacent abscissae, refined by bisection;
-    * a turning point of the sampled sequence, refined by golden-section search. This is
-      what catches a tangent (double) root, where ``f`` touches zero without changing
-      sign, and a pair of roots closer together than one grid step, where both lie
-      inside a single interval and the endpoints share a sign. A refined turning point
-      counts as a root when ``|f|`` there has collapsed to the floating-point
-      cancellation floor, measured relative to the SMALLER bracket endpoint
-      (``tangent_tol``) - next to the rate == -1 pole the other one can be ~1e15, which
-      would pass a plain local minimum off as a double root;
-      if instead it has crossed zero, the two halves each hold a root and are bisected
-      separately.
-
-    Used for IRR/XIRR, where non-conventional cashflows can have several roots.
+    * a turning point of the sampled sequence, refined by golden-section search. This
+      catches a tangent (double) root, where ``f`` touches zero without changing sign,
+      and two roots inside one grid step, whose endpoints share a sign. The turning
+      point is a double root when ``|f|`` there has collapsed to the cancellation floor:
+      at most ``tangent_tol`` times the SMALLER bracket endpoint's ``|f|`` (next to the
+      rate == -1 pole the larger one can be ~1e15, which would pass a plain local
+      minimum off as a double root). If it has instead crossed zero, each half that
+      straddles zero is bisected.
     """
     step = (high - low) / (grid_points - 1)
     abscissae = [low + i * step for i in range(grid_points)]
@@ -183,13 +178,6 @@ def _find_all_roots(
         if not deduped or abs(root - deduped[-1]) > dedup_tol:
             deduped.append(root)
     return deduped
-
-
-def _irr_result(roots: list[float]) -> IRRResult:
-    """Build an IRRResult, choosing a deterministic representative scalar root."""
-    non_negative = [r for r in roots if r >= 0.0]
-    primary = min(non_negative) if non_negative else max(roots)
-    return IRRResult(irr=primary, all_irrs=roots, is_unique=len(roots) == 1)
 
 
 def _require(name: str, value: float | None) -> float:
@@ -335,11 +323,9 @@ def time_value_of_money(
         "nper": nper,
     }
     del given[solve_for]
-    known: dict[str, float] = {}
-    for name, value in given.items():
-        known[name] = _require(name, value)
-        if name == "rate":
-            _require_rate(known[name])
+    known = {name: _require(name, value) for name, value in given.items()}
+    if "rate" in known:
+        _require_rate(known["rate"])
     try:
         solved = _TVM_SOLVERS[solve_for](**known, due=when == "begin")
     except InvalidInput as exc:
@@ -361,19 +347,16 @@ def loan_schedule(
     """Build an amortization summary for a fixed-rate loan or mortgage.
 
     ``annual_rate`` is a nominal APR compounded monthly: the periodic rate is
-    ``annual_rate / 12`` (not derived from an effective annual rate), and payments
-    are monthly. To use an effective annual rate, convert it first with
-    ``convert_rate(rate, 12, "effective_to_nominal")``. ``extra_payment`` is an
-    additional amount applied to principal each month; it shortens the term.
-    The summary (payment, totals, payoff count) is always computed; the full
+    ``annual_rate / 12``, with monthly payments. Convert an effective annual rate first
+    with ``convert_rate(rate, 12, "effective_to_nominal")``. ``extra_payment`` goes to
+    principal each month and shortens the term; ``interest_saved`` and
+    ``payments_saved`` compare against the same loan without it (0 when it is 0). The
     per-period rows are returned only when ``include_schedule`` is True.
 
-    Rounding: ``monthly_payment`` and the per-row ``payment``/``principal``/``interest``/
-    ``balance`` amounts are rounded to cents for presentation, while ``total_paid`` and
-    ``total_interest`` accumulate the unrounded values and are rounded only at the end.
-    Summing the rounded rows can therefore differ from the reported totals by a few
-    cents. The last period's payment is adjusted to clear the remaining balance exactly,
-    so the schedule always ends at a zero balance and the principal is fully amortized.
+    Rounding: ``monthly_payment`` and every row amount are rounded to cents, while
+    ``total_paid``, ``total_interest`` and ``interest_saved`` are computed unrounded and
+    rounded once at the end, so summing the rows can differ from the totals by a few
+    cents. The last payment is adjusted to clear the remaining balance exactly.
     """
     if principal <= 0.0:
         raise InvalidInput("principal must be positive.")
@@ -403,6 +386,45 @@ def loan_schedule(
         else:
             payment = principal * monthly_rate * growth / (growth - 1.0)
 
+    actual = _amortize(
+        principal, monthly_rate, payment, term_months, extra_payment, include_schedule
+    )
+    # The savings compare against the same loan run through the same loop without the
+    # extra payment, so the two totals share every rounding and final-payment rule.
+    baseline = (
+        _amortize(principal, monthly_rate, payment, term_months, 0.0, include_schedule=False)
+        if extra_payment > 0.0
+        else actual
+    )
+    return LoanSchedule(
+        monthly_payment=round(payment, 2),
+        n_payments=actual.n_payments,
+        total_paid=round(actual.total_paid, 2),
+        total_interest=round(actual.total_interest, 2),
+        interest_saved=round(baseline.total_interest - actual.total_interest, 2),
+        payments_saved=baseline.n_payments - actual.n_payments,
+        schedule=actual.rows,
+    )
+
+
+class _Amortization(NamedTuple):
+    """One run of the amortization loop; totals are unrounded."""
+
+    n_payments: int
+    total_paid: float
+    total_interest: float
+    rows: list[AmortizationRow]
+
+
+def _amortize(
+    principal: float,
+    monthly_rate: float,
+    payment: float,
+    term_months: int,
+    extra_payment: float,
+    include_schedule: bool,
+) -> _Amortization:
+    """Pay ``payment + extra_payment`` each month until the balance or the term runs out."""
     rows: list[AmortizationRow] = []
     balance = principal
     total_paid = 0.0
@@ -431,14 +453,7 @@ def loan_schedule(
                     balance=round(balance, 2),
                 )
             )
-
-    return LoanSchedule(
-        monthly_payment=round(payment, 2),
-        n_payments=period,
-        total_paid=round(total_paid, 2),
-        total_interest=round(total_interest, 2),
-        schedule=rows,
-    )
+    return _Amortization(period, total_paid, total_interest, rows)
 
 
 def _discount_sum(rate: float, terms: Iterable[tuple[float, float]]) -> float:
@@ -488,8 +503,24 @@ def npv(rate: float, cashflows: list[float]) -> NPVResult:
 
 
 def _has_sign_change(values: list[float]) -> bool:
+    """Whether ``values`` holds at least one positive and one negative entry."""
     signs = {value > 0.0 for value in values if value != 0.0}
     return len(signs) > 1
+
+
+def _solve_irr(terms: list[tuple[float, float]]) -> IRRResult:
+    """Find every root of the discounted sum of ``terms`` and pick a deterministic headline.
+
+    The headline is the smallest non-negative root, else the largest negative one.
+    """
+    roots = _find_all_roots(lambda r: _discount_sum(r, terms))
+    if not roots:
+        raise InvalidInput(
+            "No internal rate of return exists in (-100%, 1,000,000%]; consider mirr()."
+        )
+    non_negative = [r for r in roots if r >= 0.0]
+    primary = min(non_negative) if non_negative else max(roots)
+    return IRRResult(irr=primary, all_irrs=roots, is_unique=len(roots) == 1)
 
 
 def irr(cashflows: list[float]) -> IRRResult:
@@ -503,13 +534,7 @@ def irr(cashflows: list[float]) -> IRRResult:
         raise InvalidInput("irr needs at least two cashflows.")
     if not _has_sign_change(cashflows):
         raise InvalidInput("irr needs at least one sign change in the cashflows.")
-    terms = _npv_terms(cashflows)
-    roots = _find_all_roots(lambda r: _discount_sum(r, terms))
-    if not roots:
-        raise InvalidInput(
-            "No internal rate of return exists in (-100%, 1,000,000%]; consider mirr()."
-        )
-    return _irr_result(roots)
+    return _solve_irr(_npv_terms(cashflows))
 
 
 def mirr(cashflows: list[float], finance_rate: float, reinvest_rate: float) -> MIRRResult:
@@ -527,7 +552,7 @@ def mirr(cashflows: list[float], finance_rate: float, reinvest_rate: float) -> M
         raise InvalidInput("mirr needs at least two cashflows.")
     if finance_rate <= -1.0 or reinvest_rate <= -1.0:
         raise InvalidInput("finance_rate and reinvest_rate must be greater than -1 (-100%).")
-    if not any(c > 0.0 for c in cashflows) or not any(c < 0.0 for c in cashflows):
+    if not _has_sign_change(cashflows):
         raise InvalidInput("mirr needs at least one negative and one positive cashflow.")
     n = len(cashflows) - 1
     fv_pos = 0.0
@@ -575,13 +600,7 @@ def xirr(cashflows: list[DatedCashflow]) -> IRRResult:
         raise InvalidInput("xirr needs at least two cashflows.")
     if not _has_sign_change([cf.amount for cf in cashflows]):
         raise InvalidInput("xirr needs at least one sign change in the cashflows.")
-    terms = _xnpv_terms(cashflows)
-    roots = _find_all_roots(lambda r: _discount_sum(r, terms))
-    if not roots:
-        raise InvalidInput(
-            "No internal rate of return exists in (-100%, 1,000,000%]; consider mirr()."
-        )
-    return _irr_result(roots)
+    return _solve_irr(_xnpv_terms(cashflows))
 
 
 def convert_rate(
@@ -601,6 +620,8 @@ def convert_rate(
     """
     if periods_per_year < 1:
         raise InvalidInput("periods_per_year must be at least 1.")
+    if direction == "effective_to_nominal" and 1.0 + rate <= 0.0:
+        raise InvalidInput("Effective rate must be greater than -1 (-100%).")
     if compounding == "continuous":
         if direction == "nominal_to_effective":
             try:
@@ -608,8 +629,6 @@ def convert_rate(
             except OverflowError as exc:
                 raise InvalidInput("rate is too large to convert: exp(rate) overflowed.") from exc
         else:
-            if 1.0 + rate <= 0.0:
-                raise InvalidInput("Effective rate must be greater than -1 (-100%).")
             converted = math.log(1.0 + rate)
     elif direction == "nominal_to_effective":
         if 1.0 + rate / periods_per_year <= 0.0:
@@ -622,8 +641,6 @@ def convert_rate(
                 "(1 + rate/periods_per_year)**periods_per_year overflowed."
             ) from exc
     else:
-        if 1.0 + rate <= 0.0:
-            raise InvalidInput("Effective rate must be greater than -1 (-100%).")
         converted = periods_per_year * ((1.0 + rate) ** (1.0 / periods_per_year) - 1.0)
     return RateConversionResult(
         input_rate=rate,
@@ -725,8 +742,10 @@ def _coupon_schedule(
 def _metrics_compound(
     face: float, coupon: float, y: float, n: int, f: float
 ) -> tuple[float, float, float]:
-    """Street convention: the part period is COMPOUNDED, so cashflow k is discounted over
-    ``w_k = (k - 1) + f`` periods. Returns ``(dirty, macaulay_periods, convexity_periods)``.
+    """Street convention: the part period is COMPOUNDED.
+
+    Cashflow k is discounted over ``w_k = (k - 1) + f`` periods. Returns
+    ``(dirty, macaulay_periods, convexity_periods)``.
     """
     base = 1.0 + y
     price = 0.0
@@ -947,25 +966,22 @@ def bond_price_dated(
 ) -> BondDatedAnalytics:
     """Price a fixed-coupon bond for a settlement date, which may fall between coupons.
 
-    The dated counterpart to ``bond_price``, which prices on a coupon date only. Coupon
-    dates are generated backward from ``maturity`` every ``12 / frequency`` months, so the
-    schedule is anchored on the maturity day-of-month and month-ends are preserved (a 31
-    March maturity pays on 30 September).
+    The dated counterpart to ``bond_price``, which prices on a coupon date only. The
+    coupon schedule is built backward from ``maturity`` (see ``_coupon_schedule``).
 
     ``coupon_rate`` and ``ytm`` are annual decimals. ``day_count`` measures the elapsed
-    part of the current coupon period and defaults to Actual/Actual ICMA -- the convention
-    for US Treasuries and most sovereigns. Pass ``"30/360"`` for the US corporate/municipal
-    convention, which is also Excel's default (``basis=0``) and reproduces its PRICE -- except
-    in the final coupon period, where Excel discounts the stub with SIMPLE interest, which is
+    part of the current coupon period and defaults to Actual/Actual ICMA (US Treasuries
+    and most sovereigns). ``"30/360"`` is the US corporate/municipal convention and
+    Excel's default (``basis=0``), and reproduces Excel's PRICE except in the final coupon
+    period, where Excel discounts the stub with simple interest:
     ``first_period_discount="simple"`` here.
 
     Returns the clean and dirty prices (per ``face`` and per 100), the accrued interest,
-    and duration/convexity computed with the fractional first period discounted per
-    ``first_period_discount``: compounded, ``(1+y)**(DSC/E)``, by default.
+    and duration/convexity with the fractional first period discounted per
+    ``first_period_discount`` (compounded, ``(1+y)**(DSC/E)``, by default).
 
-    Assumes a regular schedule: every coupon period is a whole ``12 / frequency`` months.
-    Bonds with an odd (long or short) first or last coupon period are out of scope, and
-    pricing one here would silently use the wrong first period.
+    Assumes a regular schedule: a bond with an odd (long or short) first or last coupon
+    period would silently be priced with the wrong first period.
     """
     previous, next_coupon, periods, accrued_days, period_days = _dated_terms(
         settlement, maturity, face, frequency, day_count
@@ -985,10 +1001,9 @@ def bond_price_dated(
     accrued = face * coupon_rate / frequency * fraction
     clean = dirty - accrued
     if clean <= 0.0:
-        # At a high enough yield the discounted cashflows are worth less than the accrued
-        # interest already earned. Such a quote has no market interpretation, it makes
-        # current_yield negative (or a division by zero at clean == 0), and bond_ytm_dated
-        # rejects it -- so refuse it here rather than return a price that cannot round-trip.
+        # At a high enough yield the remaining cashflows are worth less than the interest
+        # already accrued. Such a price has no market meaning, makes current_yield negative
+        # (or divides by zero), and bond_ytm_dated rejects it, so it could not round-trip.
         raise InvalidInput(
             f"ytm={ytm} leaves a non-positive clean price ({clean}) for this bond: the "
             f"present value of the remaining cashflows ({dirty}) does not cover the accrued "
@@ -1072,7 +1087,7 @@ def bond_ytm_dated(
     accrued = face * coupon_rate / frequency * fraction
     first_fraction = 1.0 - fraction
 
-    def clean_at(ytm: float) -> float:
+    def clean_price_error(ytm: float) -> float:
         dirty, _, _, _ = _bond_metrics(
             face=face,
             coupon_rate=coupon_rate,
@@ -1082,9 +1097,9 @@ def bond_ytm_dated(
             first_fraction=first_fraction,
             first_period_discount=first_period_discount,
         )
-        return dirty - accrued
+        return dirty - accrued - clean_price
 
-    rate = _bisect(lambda ytm: clean_at(ytm) - clean_price)
+    rate = _bisect(clean_price_error)
     return BondDatedYTM(
         yield_to_maturity=rate,
         clean_price=clean_price,

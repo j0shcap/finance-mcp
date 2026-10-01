@@ -1,5 +1,7 @@
 import datetime
 import math
+from collections.abc import Callable
+from typing import Any
 
 import pytest
 
@@ -19,7 +21,7 @@ from finance_mcp.data.calculators import (
     xnpv,
 )
 from finance_mcp.data.errors import InvalidInput
-from finance_mcp.data.models import DatedCashflow
+from finance_mcp.data.models import Compounding, DatedCashflow, RateDirection
 
 
 def test_future_value_compound_interest() -> None:
@@ -59,10 +61,116 @@ def test_zero_rate_payment() -> None:
     assert result.solved_value == pytest.approx(100.0, rel=1e-9)
 
 
-def test_missing_required_input_raises() -> None:
-    # Solving for fv requires pv, pmt, rate, nper; omit rate.
-    with pytest.raises(InvalidInput):
-        time_value_of_money(solve_for="fv", pv=-1000.0, pmt=0.0, nper=10.0)
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        # Solving for fv requires pv, pmt, rate and nper; rate is omitted.
+        pytest.param(
+            {"solve_for": "fv", "pv": -1000.0, "pmt": 0.0, "nper": 10.0}, "rate", id="missing"
+        ),
+        pytest.param(
+            {"solve_for": "nper", "pv": -1000.0, "fv": 2000.0, "pmt": 0.0, "rate": 0.0},
+            "rate and pmt are zero",
+            id="nper-zero-rate-and-pmt",
+        ),
+        # With no payments the equation reduces to (1+r)^n = -fv/pv; pv == 0 divides by zero.
+        pytest.param(
+            {"solve_for": "nper", "pv": 0.0, "fv": 100.0, "pmt": 0.0, "rate": 0.05},
+            "pv",
+            id="nper-zero-pv-and-pmt",
+        ),
+        # pmt=0 with pv and fv the same sign -> ratio <= 0 -> no real solution.
+        pytest.param(
+            {"solve_for": "nper", "pv": -1000.0, "fv": -2000.0, "pmt": 0.0, "rate": 0.05},
+            "pv/fv signs",
+            id="nper-pmt-zero-bad-signs",
+        ),
+        # pmt != 0 with inputs making (k-fv)/(k+pv) <= 0 -> no real solution.
+        pytest.param(
+            {"solve_for": "nper", "pv": 3000.0, "fv": 1000.0, "pmt": -100.0, "rate": 0.05},
+            "No real solution",
+            id="nper-general-no-solution",
+        ),
+        # log(1 + rate) is log(0) -> math domain error without the guard.
+        pytest.param(
+            {"solve_for": "nper", "pv": -1000.0, "fv": 2000.0, "pmt": 0.0, "rate": -1.0},
+            "rate",
+            id="nper-rate-at-minus-one",
+        ),
+        pytest.param(
+            {"solve_for": "rate", "pv": 0.0, "fv": 100.0, "pmt": 0.0, "nper": 10.0},
+            "pv and pmt are both zero",
+            id="rate-zero-pv-and-pmt",
+        ),
+        # pv and fv the same sign with no payments -> no real positive growth factor.
+        pytest.param(
+            {"solve_for": "rate", "pv": -1000.0, "fv": -500.0, "pmt": 0.0, "nper": 10.0},
+            "pv/fv signs",
+            id="rate-no-real-solution",
+        ),
+        pytest.param(
+            {"solve_for": "rate", "pv": -100.0, "fv": 200.0, "pmt": 0.0, "nper": 0.0},
+            "nper",
+            id="rate-zero-nper",
+        ),
+        # All outflows with fv=0: f(r) never crosses zero, so the bracket expansion runs out.
+        pytest.param(
+            {"solve_for": "rate", "pv": -100.0, "fv": 0.0, "pmt": -100.0, "nper": 2.0},
+            "bracket",
+            id="rate-no-root",
+        ),
+        # No root and a large nper: the expansion overflows mid-loop -> treated as no bracket.
+        pytest.param(
+            {"solve_for": "rate", "pv": -100.0, "fv": 0.0, "pmt": -100.0, "nper": 200.0},
+            "bracket",
+            id="rate-no-root-overflow-in-expansion",
+        ),
+        # nper so large that f(high) overflows on the first evaluation.
+        pytest.param(
+            {"solve_for": "rate", "pv": -100.0, "fv": 0.0, "pmt": -100.0, "nper": 5000.0},
+            "bracket",
+            id="rate-initial-overflow",
+        ),
+        # nper == 0 divides by zero in both the r == 0 and the annuity branch.
+        pytest.param(
+            {"solve_for": "pmt", "pv": 1000.0, "fv": 0.0, "rate": 0.05, "nper": 0.0},
+            "nper",
+            id="pmt-zero-nper",
+        ),
+        pytest.param(
+            {"solve_for": "pmt", "pv": 1000.0, "fv": 0.0, "rate": 0.0, "nper": 0.0},
+            "nper",
+            id="pmt-zero-nper-zero-rate",
+        ),
+        # A negative base with fractional nper is a complex number, which the result model
+        # cannot hold; the rate is rejected instead of leaking a ValidationError.
+        pytest.param(
+            {"solve_for": "pmt", "pv": 1000.0, "fv": 0.0, "rate": -1.5, "nper": 10.0},
+            "rate",
+            id="pmt-rate-below-minus-one",
+        ),
+        pytest.param(
+            {"solve_for": "fv", "pv": -1000.0, "pmt": 0.0, "rate": -1.5, "nper": 2.5},
+            "rate",
+            id="fv-rate-below-minus-one",
+        ),
+        # rate == -1 makes the growth factor 0, which _pv divides by.
+        pytest.param(
+            {"solve_for": "pv", "fv": 100.0, "pmt": 0.0, "rate": -1.0, "nper": 5.0},
+            "rate",
+            id="pv-rate-at-minus-one",
+        ),
+        # (1 + -0.9999)**1e5 underflows to exactly 0.0, which _pv divides by.
+        pytest.param(
+            {"solve_for": "pv", "fv": 100.0, "pmt": 0.0, "rate": -0.9999, "nper": 1e5},
+            "underflow",
+            id="pv-growth-factor-underflow",
+        ),
+    ],
+)
+def test_tvm_rejects_unsolvable_inputs(kwargs: dict[str, Any], match: str) -> None:
+    with pytest.raises(InvalidInput, match=match):
+        time_value_of_money(**kwargs)
 
 
 def test_omitted_fv_defaults_to_zero() -> None:
@@ -91,17 +199,6 @@ def test_result_echoes_all_fields() -> None:
     assert math.isclose(result.fv, result.solved_value)
 
 
-def test_loan_payment_30yr() -> None:
-    # 200k at 6% annual, 360 months -> payment ~ 1199.10.
-    result = loan_schedule(
-        principal=200000.0, annual_rate=0.06, term_months=360, include_schedule=True
-    )
-    assert result.monthly_payment == pytest.approx(1199.101, rel=1e-5)
-    assert result.n_payments == 360
-    assert result.total_interest == pytest.approx(result.total_paid - 200000.0, rel=1e-9)
-    assert result.schedule[-1].balance == pytest.approx(0.0, abs=1e-2)
-
-
 def test_loan_zero_interest() -> None:
     # 12000 at 0% over 12 months -> 1000/mo, no interest.
     result = loan_schedule(principal=12000.0, annual_rate=0.0, term_months=12)
@@ -119,9 +216,80 @@ def test_loan_extra_payment_shortens_term() -> None:
     assert faster.total_interest < base.total_interest
 
 
-def test_loan_invalid_term_raises() -> None:
-    with pytest.raises(InvalidInput):
-        loan_schedule(principal=1000.0, annual_rate=0.05, term_months=0)
+def test_loan_extra_payment_reports_what_it_saves() -> None:
+    # 400k at 6.5% over 30 years: 360 payments and 510,177.95 of interest without the
+    # extra 500/month, 233 payments and 304,620.81 with it.
+    faster = loan_schedule(
+        principal=400000.0, annual_rate=0.065, term_months=360, extra_payment=500.0
+    )
+    assert faster.n_payments == 233
+    assert faster.payments_saved == 127
+    assert faster.interest_saved == 205557.14
+
+
+def test_loan_savings_are_measured_against_the_same_loan_without_the_extra() -> None:
+    base = loan_schedule(principal=250000.0, annual_rate=0.0725, term_months=300)
+    faster = loan_schedule(
+        principal=250000.0, annual_rate=0.0725, term_months=300, extra_payment=137.5
+    )
+    assert faster.payments_saved == base.n_payments - faster.n_payments
+    # Saved interest is rounded once from the unrounded totals, so it can differ by a cent
+    # from subtracting the two rounded totals.
+    assert faster.interest_saved == pytest.approx(
+        base.total_interest - faster.total_interest, abs=0.01
+    )
+
+
+def test_loan_without_extra_payment_saves_nothing() -> None:
+    result = loan_schedule(principal=200000.0, annual_rate=0.06, term_months=360)
+    assert result.payments_saved == 0
+    assert result.interest_saved == 0.0
+
+
+def test_loan_savings_at_zero_rate_are_payments_only() -> None:
+    result = loan_schedule(principal=1200.0, annual_rate=0.0, term_months=12, extra_payment=100.0)
+    assert result.n_payments == 6
+    assert result.payments_saved == 6
+    assert result.interest_saved == 0.0
+
+
+def test_loan_extra_payment_clearing_the_loan_at_once() -> None:
+    # One payment retires the loan: the saving is every later payment and all the interest
+    # after the first month.
+    base = loan_schedule(principal=10000.0, annual_rate=0.12, term_months=24)
+    result = loan_schedule(
+        principal=10000.0, annual_rate=0.12, term_months=24, extra_payment=20000.0
+    )
+    assert result.n_payments == 1
+    assert result.payments_saved == 23
+    assert result.total_interest == 100.0
+    assert result.interest_saved == pytest.approx(base.total_interest - 100.0, abs=0.01)
+
+
+def test_loan_savings_do_not_depend_on_returning_the_rows() -> None:
+    summary = loan_schedule(300000.0, 0.055, 360, extra_payment=250.0)
+    with_rows = loan_schedule(300000.0, 0.055, 360, extra_payment=250.0, include_schedule=True)
+    assert (summary.interest_saved, summary.payments_saved) == (
+        with_rows.interest_saved,
+        with_rows.payments_saved,
+    )
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"principal": 0.0}, "principal"),
+        ({"term_months": 0}, "term_months"),
+        ({"annual_rate": -0.01}, "annual_rate"),
+        ({"extra_payment": -10.0}, "extra_payment"),
+        # (1 + 1e4/12)**360 overflows; that must surface as InvalidInput, not OverflowError.
+        ({"annual_rate": 1e4, "term_months": 360}, "annual_rate"),
+    ],
+)
+def test_loan_rejects_invalid_inputs(kwargs: dict[str, Any], match: str) -> None:
+    loan = {"principal": 1000.0, "annual_rate": 0.05, "term_months": 12, **kwargs}
+    with pytest.raises(InvalidInput, match=match):
+        loan_schedule(**loan)
 
 
 def test_fv_zero_rate_with_payments() -> None:
@@ -153,38 +321,13 @@ def test_rate_general_with_payments() -> None:
     assert result.solved_value == pytest.approx(0.01, rel=1e-4)
 
 
-def test_nper_zero_rate_and_zero_pmt_raises() -> None:
-    with pytest.raises(InvalidInput):
-        time_value_of_money(solve_for="nper", pv=-1000.0, fv=2000.0, pmt=0.0, rate=0.0)
-
-
-def test_rate_zero_pv_and_pmt_raises() -> None:
-    with pytest.raises(InvalidInput):
-        time_value_of_money(solve_for="rate", pv=0.0, fv=100.0, pmt=0.0, nper=10.0)
-
-
-def test_rate_no_real_solution_raises() -> None:
-    # pv and fv same sign with no payments -> no real positive growth factor.
-    with pytest.raises(InvalidInput):
-        time_value_of_money(solve_for="rate", pv=-1000.0, fv=-500.0, pmt=0.0, nper=10.0)
-
-
-def test_loan_invalid_principal_raises() -> None:
-    with pytest.raises(InvalidInput):
-        loan_schedule(principal=0.0, annual_rate=0.05, term_months=12)
-
-
-def test_loan_negative_rate_raises() -> None:
-    with pytest.raises(InvalidInput):
-        loan_schedule(principal=1000.0, annual_rate=-0.01, term_months=12)
-
-
 def test_loan_schedule_summary_only_by_default() -> None:
+    # 200k at 6% annual, 360 months -> payment ~ 1199.10.
     result = loan_schedule(principal=200000.0, annual_rate=0.06, term_months=360)
     assert result.monthly_payment == pytest.approx(1199.101, rel=1e-5)
     assert result.n_payments == 360
     assert result.total_interest == pytest.approx(result.total_paid - 200000.0, rel=1e-9)
-    assert result.schedule == []  # full rows omitted by default
+    assert result.schedule == []
 
 
 def test_loan_schedule_includes_rows_when_requested() -> None:
@@ -195,11 +338,6 @@ def test_loan_schedule_includes_rows_when_requested() -> None:
     assert result.schedule[-1].balance == pytest.approx(0.0, abs=1e-2)
 
 
-def test_loan_negative_extra_payment_raises() -> None:
-    with pytest.raises(InvalidInput):
-        loan_schedule(principal=1000.0, annual_rate=0.05, term_months=12, extra_payment=-10.0)
-
-
 def test_npv_basic() -> None:
     assert npv(0.10, [-1000.0, 500.0, 500.0, 500.0]).npv == pytest.approx(243.426, rel=1e-4)
 
@@ -208,18 +346,60 @@ def test_npv_zero_rate_is_sum() -> None:
     assert npv(0.0, [-1000.0, 600.0, 600.0]).npv == pytest.approx(200.0, rel=1e-9)
 
 
-def test_npv_empty_raises() -> None:
-    with pytest.raises(InvalidInput):
-        npv(0.1, [])
+def _cf(year: int, amount: float) -> DatedCashflow:
+    return DatedCashflow(date=datetime.date(year, 1, 1), amount=amount)
 
 
-def test_npv_invalid_rate_raises() -> None:
-    with pytest.raises(InvalidInput):
-        npv(-1.0, [-100.0, 110.0])
-
-
-def test_irr_simple_exact() -> None:
-    assert irr([-100.0, 110.0]).irr == pytest.approx(0.10, rel=1e-9)
+@pytest.mark.parametrize(
+    ("call", "match"),
+    [
+        pytest.param(lambda: npv(0.1, []), "empty", id="npv-empty"),
+        pytest.param(lambda: npv(-1.0, [-100.0, 110.0]), "rate", id="npv-rate"),
+        pytest.param(lambda: irr([-100.0]), "two cashflows", id="irr-single"),
+        pytest.param(lambda: irr([100.0, 200.0, 300.0]), "sign change", id="irr-no-sign-change"),
+        # IRR = 99,999/period (~1e7%) is past the 1,000,000% upper bound: a sign change but
+        # no root in the searched range.
+        pytest.param(lambda: irr([-1.0, 100000.0]), "No internal rate", id="irr-out-of-range"),
+        pytest.param(lambda: xnpv(0.1, []), "empty", id="xnpv-empty"),
+        pytest.param(
+            lambda: xnpv(-1.0, [_cf(2021, -100.0), _cf(2022, 110.0)]), "rate", id="xnpv-rate"
+        ),
+        pytest.param(lambda: xirr([_cf(2021, -100.0)]), "two cashflows", id="xirr-single"),
+        pytest.param(
+            lambda: xirr([_cf(2021, 100.0), _cf(2022, 200.0)]),
+            "sign change",
+            id="xirr-no-sign-change",
+        ),
+        pytest.param(
+            lambda: xirr([_cf(2021, -1.0), _cf(2022, 100000.0)]),
+            "No internal rate",
+            id="xirr-out-of-range",
+        ),
+        pytest.param(
+            lambda: mirr([-100.0], finance_rate=0.1, reinvest_rate=0.1),
+            "two cashflows",
+            id="mirr-single",
+        ),
+        pytest.param(
+            lambda: mirr([-100.0, -50.0], finance_rate=0.1, reinvest_rate=0.1),
+            "one negative and one positive",
+            id="mirr-no-positive",
+        ),
+        pytest.param(
+            lambda: mirr([100.0, 50.0], finance_rate=0.1, reinvest_rate=0.1),
+            "one negative and one positive",
+            id="mirr-no-negative",
+        ),
+        pytest.param(
+            lambda: mirr([-100.0, 200.0], finance_rate=-1.0, reinvest_rate=0.1),
+            "greater than -1",
+            id="mirr-rate",
+        ),
+    ],
+)
+def test_cashflow_calculators_reject_invalid_inputs(call: Callable[[], object], match: str) -> None:
+    with pytest.raises(InvalidInput, match=match):
+        call()
 
 
 def test_irr_roundtrips_through_npv() -> None:
@@ -228,28 +408,9 @@ def test_irr_roundtrips_through_npv() -> None:
     assert npv(r, cashflows).npv == pytest.approx(0.0, abs=1e-6)
 
 
-def test_irr_no_sign_change_raises() -> None:
-    with pytest.raises(InvalidInput):
-        irr([100.0, 200.0, 300.0])
-
-
-def test_irr_single_cashflow_raises() -> None:
-    with pytest.raises(InvalidInput):
-        irr([-100.0])
-
-
-def _cf(year: int, amount: float) -> DatedCashflow:
-    return DatedCashflow(date=datetime.date(year, 1, 1), amount=amount)
-
-
 def test_xnpv_zero_at_irr_rate() -> None:
     flows = [_cf(2021, -1000.0), _cf(2022, 1100.0)]  # 365-day span (non-leap)
     assert xnpv(0.10, flows).npv == pytest.approx(0.0, abs=1e-6)
-
-
-def test_xirr_simple_annual() -> None:
-    flows = [_cf(2021, -1000.0), _cf(2022, 1100.0)]
-    assert xirr(flows).irr == pytest.approx(0.10, rel=1e-6)
 
 
 def test_xirr_order_independent() -> None:
@@ -257,57 +418,62 @@ def test_xirr_order_independent() -> None:
     assert xirr(flows).irr == pytest.approx(0.10, rel=1e-6)
 
 
-def test_xnpv_empty_raises() -> None:
-    with pytest.raises(InvalidInput):
-        xnpv(0.1, [])
+@pytest.mark.parametrize(
+    ("rate", "periods_per_year", "direction", "compounding", "expected"),
+    [
+        (0.12, 12, "nominal_to_effective", "discrete", 0.12682503),
+        (0.12, 4, "nominal_to_effective", "discrete", 0.12550881),
+        (0.12, 1, "nominal_to_effective", "continuous", 0.12749685),
+        (0.12, 1, "effective_to_nominal", "continuous", 0.11332869),
+    ],
+)
+def test_convert_rate_known_values(
+    rate: float,
+    periods_per_year: int,
+    direction: RateDirection,
+    compounding: Compounding,
+    expected: float,
+) -> None:
+    r = convert_rate(rate, periods_per_year, direction, compounding)
+    assert r.converted_rate == pytest.approx(expected, rel=1e-7)
+    assert r.compounding == compounding
 
 
-def test_xnpv_invalid_rate_raises() -> None:
-    with pytest.raises(InvalidInput):
-        xnpv(-1.0, [_cf(2021, -100.0), _cf(2022, 110.0)])
+@pytest.mark.parametrize(("periods_per_year", "compounding"), [(12, "discrete"), (1, "continuous")])
+def test_convert_rate_round_trips(periods_per_year: int, compounding: Compounding) -> None:
+    ear = convert_rate(0.12, periods_per_year, "nominal_to_effective", compounding)
+    back = convert_rate(ear.converted_rate, periods_per_year, "effective_to_nominal", compounding)
+    assert back.converted_rate == pytest.approx(0.12, rel=1e-9)
 
 
-def test_xirr_no_sign_change_raises() -> None:
-    with pytest.raises(InvalidInput):
-        xirr([_cf(2021, 100.0), _cf(2022, 200.0)])
-
-
-def test_xirr_single_cashflow_raises() -> None:
-    with pytest.raises(InvalidInput):
-        xirr([_cf(2021, -100.0)])
-
-
-def test_nominal_to_effective_monthly() -> None:
+def test_convert_rate_default_is_discrete() -> None:
     r = convert_rate(0.12, periods_per_year=12, direction="nominal_to_effective")
-    assert r.converted_rate == pytest.approx(0.12682503, rel=1e-7)
+    assert r.compounding == "discrete"
 
 
-def test_nominal_to_effective_quarterly() -> None:
-    r = convert_rate(0.12, periods_per_year=4, direction="nominal_to_effective")
-    assert r.converted_rate == pytest.approx(0.12550881, rel=1e-7)
-
-
-def test_effective_to_nominal_roundtrip() -> None:
-    ear = convert_rate(0.12, periods_per_year=12, direction="nominal_to_effective").converted_rate
-    back = convert_rate(ear, periods_per_year=12, direction="effective_to_nominal").converted_rate
-    assert back == pytest.approx(0.12, rel=1e-9)
-
-
-def test_convert_rate_invalid_periods_raises() -> None:
-    with pytest.raises(InvalidInput):
-        convert_rate(0.12, periods_per_year=0, direction="nominal_to_effective")
-
-
-def test_convert_rate_invalid_nominal_raises() -> None:
-    # 1 + nominal/m <= 0
-    with pytest.raises(InvalidInput):
-        convert_rate(-20.0, periods_per_year=12, direction="nominal_to_effective")
-
-
-def test_convert_rate_invalid_effective_raises() -> None:
-    # 1 + effective <= 0
-    with pytest.raises(InvalidInput):
-        convert_rate(-2.0, periods_per_year=12, direction="effective_to_nominal")
+@pytest.mark.parametrize(
+    ("rate", "periods_per_year", "direction", "compounding", "match"),
+    [
+        (0.12, 0, "nominal_to_effective", "discrete", "periods_per_year"),
+        # 1 + nominal/m <= 0
+        (-20.0, 12, "nominal_to_effective", "discrete", "nominal rate"),
+        # 1 + effective <= 0
+        (-2.0, 12, "effective_to_nominal", "discrete", "Effective rate"),
+        (-2.0, 1, "effective_to_nominal", "continuous", "Effective rate"),
+        # exp(1000) and (1 + 1e300/12)**12 overflow; the tool must see InvalidInput.
+        (1000.0, 1, "nominal_to_effective", "continuous", "too large"),
+        (1e300, 12, "nominal_to_effective", "discrete", "too large"),
+    ],
+)
+def test_convert_rate_rejects_invalid_inputs(
+    rate: float,
+    periods_per_year: int,
+    direction: RateDirection,
+    compounding: Compounding,
+    match: str,
+) -> None:
+    with pytest.raises(InvalidInput, match=match):
+        convert_rate(rate, periods_per_year, direction, compounding)
 
 
 def test_fv_annuity_due_is_ordinary_times_one_plus_r() -> None:
@@ -387,14 +553,53 @@ def test_bond_current_yield() -> None:
     assert r.current_yield == pytest.approx(0.054016, rel=1e-4)
 
 
-def test_bond_price_invalid_frequency_raises() -> None:
-    with pytest.raises(InvalidInput):
-        bond_price(face=1000.0, coupon_rate=0.05, years_to_maturity=10.0, ytm=0.06, frequency=0)
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"frequency": 0}, "frequency"),
+        ({"face": 0.0}, "face"),
+        ({"years_to_maturity": 0.0}, "years_to_maturity must be positive"),
+        # 2.5 years annual -> 2.5 periods, not a whole coupon count.
+        ({"years_to_maturity": 2.5, "frequency": 1}, "whole number"),
+        ({"years_to_maturity": 9.99}, "whole number"),
+        # A tiny maturity rounds to 0 whole periods (within tolerance) -> n < 1.
+        ({"years_to_maturity": 1e-10, "frequency": 1}, "at least one period"),
+        # ytm == -frequency makes 1 + ytm/frequency exactly 0.
+        ({"years_to_maturity": 1.0, "ytm": -2.0}, "ytm"),
+        ({"years_to_maturity": 1.0, "ytm": -1.0, "frequency": 1}, "ytm"),
+    ],
+)
+def test_bond_price_rejects_invalid_inputs(kwargs: dict[str, Any], match: str) -> None:
+    bond = {
+        "face": 1000.0,
+        "coupon_rate": 0.05,
+        "years_to_maturity": 10.0,
+        "ytm": 0.06,
+        "frequency": 2,
+        **kwargs,
+    }
+    with pytest.raises(InvalidInput, match=match):
+        bond_price(**bond)
 
 
-def test_bond_price_invalid_face_raises() -> None:
-    with pytest.raises(InvalidInput):
-        bond_price(face=0.0, coupon_rate=0.05, years_to_maturity=10.0, ytm=0.06, frequency=2)
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"price": 0.0}, "price must be positive"),
+        ({"years_to_maturity": 2.5, "frequency": 1}, "whole number"),
+    ],
+)
+def test_bond_ytm_rejects_invalid_inputs(kwargs: dict[str, Any], match: str) -> None:
+    bond = {
+        "face": 1000.0,
+        "coupon_rate": 0.05,
+        "years_to_maturity": 10.0,
+        "price": 950.0,
+        "frequency": 2,
+        **kwargs,
+    }
+    with pytest.raises(InvalidInput, match=match):
+        bond_ytm(**bond)
 
 
 def test_bond_ytm_roundtrip() -> None:
@@ -410,69 +615,10 @@ def test_bond_ytm_par_equals_coupon() -> None:
     assert r.yield_to_maturity == pytest.approx(0.06, rel=1e-6)
 
 
-def test_bond_ytm_invalid_price_raises() -> None:
-    with pytest.raises(InvalidInput):
-        bond_ytm(face=1000.0, coupon_rate=0.05, years_to_maturity=10.0, price=0.0, frequency=2)
-
-
-def test_nominal_to_effective_continuous() -> None:
-    r = convert_rate(
-        0.12, periods_per_year=1, direction="nominal_to_effective", compounding="continuous"
-    )
-    assert r.converted_rate == pytest.approx(0.12749685, rel=1e-7)
-    assert r.compounding == "continuous"
-
-
-def test_effective_to_nominal_continuous() -> None:
-    r = convert_rate(
-        0.12, periods_per_year=1, direction="effective_to_nominal", compounding="continuous"
-    )
-    assert r.converted_rate == pytest.approx(0.11332869, rel=1e-7)
-
-
-def test_continuous_roundtrip() -> None:
-    ear = convert_rate(
-        0.12, periods_per_year=1, direction="nominal_to_effective", compounding="continuous"
-    ).converted_rate
-    back = convert_rate(
-        ear, periods_per_year=1, direction="effective_to_nominal", compounding="continuous"
-    ).converted_rate
-    assert back == pytest.approx(0.12, rel=1e-9)
-
-
-def test_continuous_effective_invalid_raises() -> None:
-    with pytest.raises(InvalidInput):
-        convert_rate(
-            -2.0, periods_per_year=1, direction="effective_to_nominal", compounding="continuous"
-        )
-
-
-def test_convert_rate_default_is_discrete() -> None:
-    r = convert_rate(0.12, periods_per_year=12, direction="nominal_to_effective")
-    assert r.converted_rate == pytest.approx(0.12682503, rel=1e-7)
-    assert r.compounding == "discrete"
-
-
-def test_bond_price_non_integer_periods_raises() -> None:
-    # 2.5 years annual -> 2.5 periods, not a whole coupon count.
-    with pytest.raises(InvalidInput):
-        bond_price(face=1000.0, coupon_rate=0.05, years_to_maturity=2.5, ytm=0.06, frequency=1)
-
-
-def test_bond_price_fractional_periods_raises() -> None:
-    with pytest.raises(InvalidInput):
-        bond_price(face=1000.0, coupon_rate=0.05, years_to_maturity=9.99, ytm=0.06, frequency=2)
-
-
 def test_bond_price_half_year_semiannual_ok() -> None:
     # 2.5 years semiannual -> 5 whole periods, prices fine.
     r = bond_price(face=1000.0, coupon_rate=0.06, years_to_maturity=2.5, ytm=0.06, frequency=2)
     assert r.price == pytest.approx(1000.0, rel=1e-9)
-
-
-def test_bond_ytm_non_integer_periods_raises() -> None:
-    with pytest.raises(InvalidInput):
-        bond_ytm(face=1000.0, coupon_rate=0.05, years_to_maturity=2.5, price=950.0, frequency=1)
 
 
 def test_irr_multi_root_reports_both() -> None:
@@ -528,21 +674,6 @@ def test_mirr_single_value_for_multi_irr_flow() -> None:
     assert result.mirr == pytest.approx(expected, rel=1e-9)
 
 
-def test_mirr_no_positive_raises() -> None:
-    with pytest.raises(InvalidInput):
-        mirr([-100.0, -50.0], finance_rate=0.1, reinvest_rate=0.1)
-
-
-def test_mirr_no_negative_raises() -> None:
-    with pytest.raises(InvalidInput):
-        mirr([100.0, 50.0], finance_rate=0.1, reinvest_rate=0.1)
-
-
-def test_mirr_invalid_rate_raises() -> None:
-    with pytest.raises(InvalidInput):
-        mirr([-100.0, 200.0], finance_rate=-1.0, reinvest_rate=0.1)
-
-
 # --- guards and edge cases ---
 
 
@@ -552,56 +683,19 @@ def test_rate_solve_large_nper_no_overflow() -> None:
     assert result.solved_value == pytest.approx(0.005, rel=1e-3)
 
 
-def test_rate_no_root_small_nper_raises() -> None:
-    # All-outflow, fv=0: f(r) never crosses zero; expansion exhausts -> InvalidInput.
-    with pytest.raises(InvalidInput):
-        time_value_of_money(solve_for="rate", pv=-100.0, fv=0.0, pmt=-100.0, nper=2.0)
-
-
-def test_rate_no_root_overflow_in_expansion_raises() -> None:
-    # No root, large nper: expansion overflows mid-loop -> treated as no bracket.
-    with pytest.raises(InvalidInput):
-        time_value_of_money(solve_for="rate", pv=-100.0, fv=0.0, pmt=-100.0, nper=200.0)
-
-
-def test_rate_initial_overflow_raises() -> None:
-    # nper so large that f(high) overflows on the first evaluation -> InvalidInput, not raw.
-    with pytest.raises(InvalidInput):
-        time_value_of_money(solve_for="rate", pv=-100.0, fv=0.0, pmt=-100.0, nper=5000.0)
-
-
-def test_nper_pmt_zero_bad_signs_raises() -> None:
-    # pmt=0, pv and fv same sign -> ratio <= 0 -> no real solution.
-    with pytest.raises(InvalidInput):
-        time_value_of_money(solve_for="nper", pv=-1000.0, fv=-2000.0, pmt=0.0, rate=0.05)
-
-
-def test_nper_general_no_solution_raises() -> None:
-    # pmt!=0 with inputs making (k-fv)/(k+pv) <= 0 -> no real solution.
-    with pytest.raises(InvalidInput):
-        time_value_of_money(solve_for="nper", pv=3000.0, fv=1000.0, pmt=-100.0, rate=0.05)
-
-
-def test_irr_within_extended_range() -> None:
-    # IRR = 999/period (99,900%) lies in the log-spaced tail of the search grid.
-    assert irr([-1.0, 1000.0]).irr == pytest.approx(999.0, rel=1e-9)
-
-
-def test_irr_no_root_in_range_raises() -> None:
-    # IRR = 99,999/period (~1e7%) is past the 1,000,000% upper bound -> sign change but
-    # no root in the searched range.
-    with pytest.raises(InvalidInput):
-        irr([-1.0, 100000.0])
-
-
-def test_xirr_no_root_in_range_raises() -> None:
-    with pytest.raises(InvalidInput):
-        xirr([_cf(2021, -1.0), _cf(2022, 100000.0)])
-
-
-def test_mirr_too_few_cashflows_raises() -> None:
-    with pytest.raises(InvalidInput):
-        mirr([-100.0], finance_rate=0.1, reinvest_rate=0.1)
+@pytest.mark.parametrize(
+    ("cashflows", "expected"),
+    [
+        # 1 -> 12 in one period is an IRR of 1100%.
+        ([-1.0, 12.0], 11.0),
+        # IRR = 999/period (99,900%) lies in the log-spaced tail of the search grid.
+        ([-1.0, 1000.0], 999.0),
+    ],
+)
+def test_irr_finds_very_large_rates(cashflows: list[float], expected: float) -> None:
+    result = irr(cashflows)
+    assert result.irr == pytest.approx(expected, rel=1e-9)
+    assert result.is_unique is True
 
 
 def test_mirr_ignores_zero_cashflow() -> None:
@@ -610,17 +704,6 @@ def test_mirr_ignores_zero_cashflow() -> None:
     # mishandled zero flow that still happened to be positive would be caught).
     result = mirr([-1000.0, 0.0, 500.0, 700.0], finance_rate=0.10, reinvest_rate=0.12)
     assert result.mirr == pytest.approx(0.080083, rel=1e-4)
-
-
-def test_bond_price_nonpositive_maturity_raises() -> None:
-    with pytest.raises(InvalidInput):
-        bond_price(face=1000.0, coupon_rate=0.05, years_to_maturity=0.0, ytm=0.06, frequency=2)
-
-
-def test_bond_price_zero_periods_raises() -> None:
-    # Tiny maturity rounds to 0 whole periods (within tolerance) -> n < 1.
-    with pytest.raises(InvalidInput):
-        bond_price(face=1000.0, coupon_rate=0.05, years_to_maturity=1e-10, ytm=0.06, frequency=1)
 
 
 def test_bisect_bracket_returns_after_iteration_cap() -> None:
@@ -676,82 +759,22 @@ def test_xirr_long_calendar_span_matches_closed_form() -> None:
     assert xirr(flows).irr == pytest.approx(0.02544868, rel=1e-5)
 
 
-def test_rate_zero_nper_raises() -> None:
-    with pytest.raises(InvalidInput):
-        time_value_of_money(solve_for="rate", pv=-100.0, fv=200.0, pmt=0.0, nper=0.0)
-
-
-def test_pmt_zero_nper_raises() -> None:
-    # nper == 0 divides by zero in both the r == 0 and the annuity branch.
-    with pytest.raises(InvalidInput, match="nper"):
-        time_value_of_money(solve_for="pmt", pv=1000.0, fv=0.0, rate=0.05, nper=0.0)
-
-
-def test_pmt_zero_nper_zero_rate_raises() -> None:
-    with pytest.raises(InvalidInput, match="nper"):
-        time_value_of_money(solve_for="pmt", pv=1000.0, fv=0.0, rate=0.0, nper=0.0)
-
-
-def test_pv_rate_at_minus_one_raises() -> None:
-    # rate == -1 makes the growth factor 0, which _pv divides by.
-    with pytest.raises(InvalidInput, match="rate"):
-        time_value_of_money(solve_for="pv", fv=100.0, pmt=0.0, rate=-1.0, nper=5.0)
-
-
-def test_fv_rate_below_minus_one_raises() -> None:
-    # A negative base with fractional nper is a complex number, which the result
-    # model cannot hold; reject the rate instead of leaking a ValidationError.
-    with pytest.raises(InvalidInput, match="rate"):
-        time_value_of_money(solve_for="fv", pv=-1000.0, pmt=0.0, rate=-1.5, nper=2.5)
-
-
-def test_pmt_rate_below_minus_one_raises() -> None:
-    with pytest.raises(InvalidInput, match="rate"):
-        time_value_of_money(solve_for="pmt", pv=1000.0, fv=0.0, rate=-1.5, nper=10.0)
-
-
-def test_nper_rate_at_minus_one_raises() -> None:
-    # log(1 + rate) is log(0) -> math domain error without the guard.
-    with pytest.raises(InvalidInput, match="rate"):
-        time_value_of_money(solve_for="nper", pv=-1000.0, fv=2000.0, pmt=0.0, rate=-1.0)
-
-
-def test_nper_zero_pv_and_zero_pmt_raises() -> None:
-    # With no payments the equation reduces to (1+r)^n = -fv/pv; pv == 0 divides by zero.
-    with pytest.raises(InvalidInput, match="pv"):
-        time_value_of_money(solve_for="nper", pv=0.0, fv=100.0, pmt=0.0, rate=0.05)
-
-
-def test_pv_growth_factor_underflow_raises() -> None:
-    # (1 + -0.9999)**1e5 underflows to exactly 0.0; _pv divides by it.
-    with pytest.raises(InvalidInput, match="underflow"):
-        time_value_of_money(solve_for="pv", fv=100.0, pmt=0.0, rate=-0.9999, nper=1e5)
-
-
 def test_loan_final_payment_clears_balance_large_principal() -> None:
-    # Float drift accumulated over 360 periods left principal unpaid at the end of the
-    # term, so the last schedule row reported a balance still outstanding (0.14 at this
-    # size). The final payment must absorb the residual and end at a zero balance. The
-    # principal has to be this large for the drift to survive rounding to cents.
+    # Float drift over 360 periods would leave principal unpaid at the end of the term (0.14
+    # at this size, which survives rounding to cents); the final payment absorbs it.
     result = loan_schedule(principal=1e13, annual_rate=0.07, term_months=360, include_schedule=True)
     assert result.n_payments == 360
     assert result.schedule[-1].balance == 0.0
 
 
 def test_loan_final_payment_clears_balance_zero_rate() -> None:
-    # At 0% the payment is principal/term exactly and the drift is far larger: the loan
-    # ended 6.88 short of paying off, so total_paid understated the principal.
+    # At 0% the payment is principal/term exactly and the drift is far larger: without the
+    # final-payment adjustment the loan ends 6.88 short and total_paid understates principal.
     principal = 1e15
     result = loan_schedule(principal=principal, annual_rate=0.0, term_months=360)
     assert result.n_payments == 360
     assert result.total_interest == pytest.approx(0.0, abs=1e-6)
     assert result.total_paid == pytest.approx(principal, abs=0.01)
-
-
-def test_loan_rate_too_large_raises() -> None:
-    # (1 + 1e4/12)**360 overflows; that must surface as InvalidInput, not OverflowError.
-    with pytest.raises(InvalidInput, match="annual_rate"):
-        loan_schedule(principal=1000.0, annual_rate=1e4, term_months=360)
 
 
 def test_loan_negligible_rate_behaves_as_zero_rate() -> None:
@@ -763,18 +786,6 @@ def test_loan_negligible_rate_behaves_as_zero_rate() -> None:
     assert result.total_interest == pytest.approx(0.0, abs=1e-6)
 
 
-def test_convert_rate_continuous_overflow_raises() -> None:
-    # exp(1000) overflows; the tool must see InvalidInput, not OverflowError.
-    with pytest.raises(InvalidInput, match="too large"):
-        convert_rate(1000.0, 1, "nominal_to_effective", "continuous")
-
-
-def test_convert_rate_discrete_overflow_raises() -> None:
-    # (1 + 1e300/12)**12 overflows too, so the discrete path needs the same guard.
-    with pytest.raises(InvalidInput, match="too large"):
-        convert_rate(1e300, 12, "nominal_to_effective")
-
-
 def test_bond_price_accepts_yield_below_minus_one_when_base_positive() -> None:
     # frequency=2 makes the periodic yield -0.75, so the discount base is 0.25 > 0:
     # price = 25/0.25 + 1025/0.25**2 = 100 + 16400 = 16500.
@@ -782,52 +793,24 @@ def test_bond_price_accepts_yield_below_minus_one_when_base_positive() -> None:
     assert result.price == pytest.approx(16500.0, rel=1e-12)
 
 
-def test_bond_price_yield_at_negative_frequency_raises() -> None:
-    # ytm == -frequency makes 1 + ytm/frequency exactly 0 -> still invalid.
-    with pytest.raises(InvalidInput, match="ytm"):
-        bond_price(face=1000.0, coupon_rate=0.05, years_to_maturity=1.0, ytm=-2.0, frequency=2)
-
-
-def test_bond_price_annual_frequency_still_rejects_minus_one() -> None:
-    # With frequency=1 the old and new constraints coincide.
-    with pytest.raises(InvalidInput, match="ytm"):
-        bond_price(face=1000.0, coupon_rate=0.05, years_to_maturity=1.0, ytm=-1.0, frequency=1)
-
-
-def test_irr_tangent_root_local_maximum() -> None:
-    # npv(r) = -(1 - 1/(1+r))**2 touches zero at r = 0 from below: a double root with
-    # no sign change, so the grid scan alone reports "no IRR".
-    result = irr([-1.0, 2.0, -1.0])
-    assert result.irr == pytest.approx(0.0, abs=1e-6)
-    assert result.is_unique is True
-    assert len(result.all_irrs) == 1
-
-
-def test_irr_tangent_root_local_minimum() -> None:
-    # The same flow negated: npv touches zero at r = 0 from above.
-    result = irr([1.0, -2.0, 1.0])
-    assert result.irr == pytest.approx(0.0, abs=1e-6)
-    assert result.is_unique is True
-
-
-def test_irr_tangent_root_away_from_zero() -> None:
-    # A double root at 15%: (1 - 1.15/(1+r))**2 scaled.
-    result = irr([-1.0, 2.3, -1.3225])
-    assert result.irr == pytest.approx(0.15, rel=1e-6)
-    assert result.is_unique is True
-
-
-def test_irr_tangent_root_scales_with_cashflow_magnitude() -> None:
-    # The tangent tolerance is relative to the local |f|, so a 1e9-sized flow with the
-    # same shape must also be recognised.
-    result = irr([-1e9, 2e9, -1e9])
-    assert result.irr == pytest.approx(0.0, abs=1e-6)
-
-
-def test_irr_above_one_thousand_percent() -> None:
-    # 1 -> 12 in one period is an IRR of 1100%, past the old uniform grid's upper bound.
-    result = irr([-1.0, 12.0])
-    assert result.irr == pytest.approx(11.0, rel=1e-9)
+@pytest.mark.parametrize(
+    ("cashflows", "expected"),
+    [
+        # npv(r) = -(1 - 1/(1+r))**2 touches zero at r = 0 from below: a double root with no
+        # sign change, which the grid scan alone would report as "no IRR".
+        ([-1.0, 2.0, -1.0], 0.0),
+        # The same flow negated: npv touches zero at r = 0 from above.
+        ([1.0, -2.0, 1.0], 0.0),
+        # A double root at 15%: (1 - 1.15/(1+r))**2 scaled.
+        ([-1.0, 2.3, -1.3225], 0.15),
+        # The tangent tolerance is relative to the local |f|, so the same shape at 1e9 is
+        # also recognised.
+        ([-1e9, 2e9, -1e9], 0.0),
+    ],
+)
+def test_irr_finds_tangent_roots(cashflows: list[float], expected: float) -> None:
+    result = irr(cashflows)
+    assert result.irr == pytest.approx(expected, abs=1e-6)
     assert result.is_unique is True
 
 
@@ -867,9 +850,8 @@ def test_minimize_finds_interior_minimum() -> None:
     assert _minimize(lambda x: (x - 0.25) ** 2, -1.0, 1.0) == pytest.approx(0.25, abs=1e-9)
 
 
-# Found by the property cross-checks (tests/test_calculators_crosscheck.py): below ~1e-16,
-# (1 + rate)**nper - 1 cancels to exactly 0, so the annuity term vanished (fv) or was
-# divided by (pmt raised ZeroDivisionError, which the server masks as an internal error).
+# Below ~1e-16, (1 + rate)**nper - 1 cancels to exactly 0, so a naive annuity factor makes
+# the annuity term vanish (fv) or divides by zero (pmt). Found by the property cross-checks.
 @pytest.mark.parametrize("rate", [1e-18, 6e-132, 2.2e-309])
 def test_tvm_with_a_vanishingly_small_rate_matches_the_zero_rate_answer(rate: float) -> None:
     fv = time_value_of_money(solve_for="fv", pv=-100, pmt=-10, rate=rate, nper=12)
@@ -883,17 +865,17 @@ def test_tvm_with_a_vanishingly_small_rate_matches_the_zero_rate_answer(rate: fl
 
 
 def test_irr_does_not_report_a_turning_point_next_to_a_sign_change_as_a_root() -> None:
-    """[0, -150, 1] has one IRR, -99.33% (1/(1+r) = 150). Near r = -1 the first grid step
-    both changes sign and turns, and the turning-point branch bisected a half that never
-    straddled zero, reporting its endpoint (-98%, NPV -4997) as the headline IRR."""
+    # [0, -150, 1] has one IRR, -99.33% (1/(1+r) = 150). Near r = -1 the first grid step
+    # both changes sign and turns; bisecting the half that does not straddle zero would
+    # report its endpoint (-98%, NPV -4997) as the headline IRR.
     result = irr([0, -150, 1])
     assert result.all_irrs == [pytest.approx(-149 / 150)]
     assert result.is_unique
 
 
 def test_irr_does_not_report_a_minimum_next_to_the_pole_as_a_tangent_root() -> None:
-    """[0, 0, -117, 1] has one IRR, 1/117 - 1. The local minimum of its NPV near -98.7%
-    (NPV -237276) passed the tangent test, whose tolerance scaled with a neighbouring
-    sample next to the rate == -1 pole, where the NPV is ~1e15."""
+    # [0, 0, -117, 1] has one IRR, 1/117 - 1. Its NPV has a local minimum near -98.7% (NPV
+    # -237276) that a tangent tolerance scaled by the neighbouring sample next to the
+    # rate == -1 pole (NPV ~1e15) would accept as a double root.
     result = irr([0, 0, -117, 1])
     assert result.all_irrs == [pytest.approx(1 / 117 - 1)]

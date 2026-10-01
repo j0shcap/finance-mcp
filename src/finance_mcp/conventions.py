@@ -2,10 +2,10 @@
 
 Yahoo's units are inconsistent (some ratios are fractions, others are already percents)
 and the cashflow tools follow Excel's sign convention, so a model that guesses gets the
-magnitudes wrong by 100x or the sign backwards. That guidance therefore has to reach the
-model three ways: in the server ``instructions`` (always in context), as the
-``finance://conventions`` resource (readable on demand), and inside the analyze_stock
-prompt. All three render from the constants here so they can never drift apart.
+magnitudes wrong by 100x or the sign backwards. The guidance reaches the model three ways:
+the server ``instructions`` (always in context), the ``finance://conventions`` resource
+(read on demand), and the analyze_stock prompt. All three render from these constants so
+they cannot drift apart.
 """
 
 from fastmcp import FastMCP
@@ -72,19 +72,22 @@ names these are the same; for ADRs and other cross-listings they are not.
 - analyze_performance runs on auto-adjusted prices, so its returns already include reinvested \
 dividends (~ total return) - do not add the dividend yield on top.
 - analyze_performance annualizes over calendar time, so annualized_return_percent equals \
-total_return_percent on a one-year window. For windows under ~3 months it returns null for \
-annualized_return_percent, annualized_volatility_percent and periods_per_year - quote the total \
-return for that window and never annualize it yourself.
+total_return_percent on a one-year window. For windows under 85 days (~3 months) it returns null \
+for annualized_return_percent, annualized_volatility_percent and periods_per_year - quote the \
+total return for that window and never annualize it yourself.
 - get_quote returns one entry per ticker in quotes plus a per-ticker errors list. Use its price as \
 the single headline price if sources disagree, and read it from the entry whose symbol matches the \
 ticker you are pricing, never by position: any ticker that failed is in errors instead, so \
 positions shift. A ticker in errors was not fetched at all - say so rather than substituting \
 another source's price.
 - risk_free_rate (analyze_performance, compare_to_benchmark, compare_tickers) is an ANNUAL \
-DECIMAL: 0.045 = 4.5%. It defaults to 0, which makes sharpe_ratio and sortino_ratio RAW return \
-per unit of risk rather than excess-over-cash figures - the rate used is echoed in every result, \
-so read it before calling a Sharpe "excess". Pass a current T-bill yield when the comparison is \
-against cash.
+DECIMAL: 0.045 = 4.5%. Left out, it is the 13-week US T-bill yield (Yahoo ^IRX) averaged over \
+the dates measured and converted to an effective annual rate, so sharpe_ratio, sortino_ratio, \
+downside_deviation_percent and alpha_percent are excess-over-cash figures. Every result echoes \
+the rate with risk_free_rate_source: "caller", "treasury_bill", or "unavailable" - the T-bill \
+average could not be formed (see risk_free_rate_note), so those figures are null; pass a rate \
+explicitly to get them, and never read a null as a 0 rate. Pass 0 only to get RAW return per \
+unit of risk.
 - sharpe_ratio, sortino_ratio, calmar_ratio, beta, correlation and information_ratio are \
 DIMENSIONLESS ratios - never percents. downside_deviation_percent, tracking_error_percent, \
 alpha_percent and excess_return_percent are PERCENTS; the last two are percentage POINTS of \
@@ -93,10 +96,10 @@ multiples. On a POSITIVE sharpe_ratio, a sortino_ratio above it means the disper
 upside; when the Sharpe is negative that comparison inverts, so do not read the gap as a quality \
 signal there.
 - Every annualized figure, and every ratio that depends on one, is null when the window spans \
-under ~3 months: sharpe_ratio, sortino_ratio, downside_deviation_percent and calmar_ratio on \
-analyze_performance, and alpha_percent, tracking_error_percent and information_ratio on \
-compare_to_benchmark. beta, correlation and excess_return_percent need no annualization, so they \
-survive a short window. A null ratio means "not computable", never "zero".
+under 85 days (~3 months): sharpe_ratio, sortino_ratio, downside_deviation_percent and \
+calmar_ratio on analyze_performance, and alpha_percent, tracking_error_percent and \
+information_ratio on compare_to_benchmark. beta, correlation and excess_return_percent need no \
+annualization, so they survive a short window. A null ratio means "not computable", never "zero".
 - compare_to_benchmark INNER-JOINS the two daily close series on date, so a 24/7 instrument \
 compared with an equity benchmark contributes only its weekday closes and its weekend move lands \
 in the next session's return. overlapping_observations is how many dates were actually used - read \
@@ -118,9 +121,9 @@ principal you pay out is negative pv; the balance you get back is positive fv. G
 the sign of the answer flips (or a rate solve has no solution).
 - Rates are decimals, never percents: 0.05 means 5%.
 - npv, irr, mirr and time_value_of_money take a PER-PERIOD rate matching the cashflow spacing \
-(monthly flows -> monthly rate). xnpv, xirr, bond_price, bond_ytm, loan_schedule and convert_rate \
-take ANNUAL rates; loan_schedule's annual_rate is a nominal APR compounded monthly. So do \
-bond_price_dated and bond_ytm_dated.
+(monthly flows -> monthly rate). xnpv, xirr, bond_price, bond_ytm, bond_price_dated, \
+bond_ytm_dated, loan_schedule and convert_rate take ANNUAL rates; loan_schedule's annual_rate is \
+a nominal APR compounded monthly.
 - irr and xirr return a per-period and an annualized rate respectively; both can have several \
 roots for non-conventional flows (see all_irrs/is_unique) - prefer mirr then.
 - convert_rate moves between a nominal annual rate (APR) and an effective annual rate (APY/EAR).

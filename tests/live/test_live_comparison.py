@@ -26,7 +26,11 @@ async def test_compare_to_benchmark_equity_shape_and_units(layer: Layer) -> None
     assert result.symbol == AAPL
     assert result.benchmark == SPY
     assert result.period == "1y"
-    assert result.risk_free_rate == 0.0, "the default rate must be echoed, not omitted"
+    # alpha_percent is required below, so the T-bill default must resolve on live data.
+    assert result.risk_free_rate_source == "treasury_bill", result.risk_free_rate_note
+    assert result.risk_free_rate is not None and 0 <= result.risk_free_rate < 0.2, (
+        f"the T-bill default should be a plausible annual decimal, got {result.risk_free_rate}"
+    )
     datetime.date.fromisoformat(result.start_date)
     datetime.date.fromisoformat(result.end_date)
 
@@ -87,8 +91,11 @@ async def test_compare_tickers_returns_a_row_per_ticker_with_performance_and_val
     result = await layer.call("compare_tickers", tickers=[AAPL, SPY], period="1y")
 
     assert result.period == "1y"
-    assert result.risk_free_rate == 0.0
+    assert result.risk_free_rate is None  # none passed: each row carries the T-bill default
+    assert result.risk_free_rate_source == "treasury_bill"
     assert result.errors == [], f"both symbols are real, got errors {result.errors}"
+    for row in result.rows:
+        assert row.risk_free_rate_source == "treasury_bill", row.risk_free_rate_note
     assert [row.symbol for row in result.rows] == [AAPL, SPY], (
         "rows must come back in request order, since the model reads them positionally"
     )
@@ -155,7 +162,7 @@ async def test_compare_tickers_flags_a_cross_listing_reporting_in_another_curren
 
 async def test_compare_tickers_applies_the_risk_free_rate_to_every_row(layer: Layer) -> None:
     """A non-zero rate lowers every Sharpe, and the rate used is echoed on the table."""
-    raw = await layer.call("compare_tickers", tickers=[AAPL, SPY], period="1y")
+    raw = await layer.call("compare_tickers", tickers=[AAPL, SPY], period="1y", risk_free_rate=0.0)
     excess = await layer.call(
         "compare_tickers", tickers=[AAPL, SPY], period="1y", risk_free_rate=0.05
     )

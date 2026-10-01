@@ -37,8 +37,8 @@ def fill(template: str, **values: str) -> str:
 def render(template: str, **values: str) -> str:
     """``fill`` with the two values every prompt shares: the conventions resource URI and
     the closing disclaimer. Since ``fill`` rejects unused values, a template that omits
-    ``{conventions_uri}`` or ``{disclaimer}`` fails to render - every prompt points at the
-    conventions (rather than restating them) and ends with the disclaimer by construction.
+    ``{conventions_uri}`` or ``{disclaimer}`` fails to render, so every prompt points at the
+    conventions resource and ends with the disclaimer by construction.
     """
     return fill(template, conventions_uri=CONVENTIONS_URI, disclaimer=DISCLAIMER, **values)
 

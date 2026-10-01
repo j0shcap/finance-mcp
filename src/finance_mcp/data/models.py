@@ -9,6 +9,8 @@ from pydantic import BaseModel, Field, SerializerFunctionWrapHandler, field_seri
 TVMVariable = Literal["pv", "fv", "pmt", "rate", "nper"]
 Statement = Literal["income", "balance", "cashflow"]
 NewsSource = Literal["ticker", "search"]
+RelevanceCheck = Literal["applied", "not_an_equity", "no_company_name", "unavailable"]
+RiskFreeSource = Literal["caller", "treasury_bill", "unavailable"]
 StatementPeriod = Literal["annual", "quarterly"]
 HistoryPeriod = Literal["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "max"]
 HistoryInterval = Literal["1m", "5m", "15m", "30m", "1h", "1d", "1wk", "1mo"]
@@ -62,14 +64,28 @@ class MarketData(BaseModel):
         return _round_floats(handler(value))
 
 
+#: Shared by every result that echoes a risk-free rate, so the three stay word-for-word alike.
+_RISK_FREE_SOURCE_DESCRIPTION = (
+    "Where risk_free_rate came from. 'caller': the rate passed in. 'treasury_bill': none was "
+    "passed, so it is the 13-week US T-bill yield (Yahoo ^IRX) averaged over the measured dates "
+    "and converted from its discount quote to an effective annual rate. 'unavailable': none was "
+    "passed and that average could not be formed - see risk_free_rate_note; the figures that "
+    "need a rate are null."
+)
+_RISK_FREE_NOTE_DESCRIPTION = (
+    "Why the rate is unavailable and how to proceed (pass risk_free_rate explicitly); null "
+    "otherwise."
+)
+
+
 class TVMResult(BaseModel):
     """Result of a time-value-of-money computation."""
 
     solved_for: TVMVariable = Field(description="Which variable was solved for.")
-    solved_value: float = Field(description="The computed value of the solved-for variable.")
-    pv: float = Field(description="Present value (cash convention: inflow positive).")
-    fv: float = Field(description="Future value.")
-    pmt: float = Field(description="Payment per period.")
+    solved_value: float = Field(description="The computed value of the solved_for variable.")
+    pv: float = Field(description="Present value (cash received positive, cash paid negative).")
+    fv: float = Field(description="Future value (same sign convention as pv).")
+    pmt: float = Field(description="Payment per period (same sign convention as pv).")
     rate: float = Field(description="Interest rate per period (decimal, e.g. 0.05).")
     nper: float = Field(description="Number of periods.")
 
@@ -91,6 +107,14 @@ class LoanSchedule(BaseModel):
     n_payments: int = Field(description="Number of payments until payoff.")
     total_paid: float = Field(description="Sum of all payments made.")
     total_interest: float = Field(description="Total interest paid over the loan.")
+    interest_saved: float = Field(
+        description="Interest the extra payment saves versus the same loan without it; "
+        "0 when extra_payment is 0."
+    )
+    payments_saved: int = Field(
+        description="Monthly payments the extra payment saves (months off the term) versus "
+        "the same loan without it; 0 when extra_payment is 0."
+    )
     schedule: list[AmortizationRow] = Field(description="Per-period amortization rows.")
 
 
@@ -216,7 +240,7 @@ class BondDatedAnalytics(BaseModel):
         "buyer pays this to the seller on top of the quoted (clean) price."
     )
     accrued_interest_per_100: float = Field(
-        description="Accrued interest per 100 of face -- the market convention, and what Excel's "
+        description="Accrued interest per 100 of face: the market convention, and what Excel's "
         "ACCRINT reports."
     )
     clean_price: float = Field(
@@ -246,7 +270,7 @@ class BondDatedAnalytics(BaseModel):
     )
     modified_duration: float = Field(
         description="Modified duration in years: the approximate percentage fall in the DIRTY "
-        "price per 1.00 (100 percentage points) rise in annual yield -- so a 1 basis point move "
+        "price per 1.00 (100 percentage points) rise in annual yield, so a 1 basis point move "
         "is this figure times 0.0001."
     )
     convexity: float = Field(
@@ -290,7 +314,7 @@ class Quote(MarketData):
         default=None, description="Price change vs previous close, in quote currency."
     )
     change_percent: float | None = Field(
-        default=None, description="Percent change vs previous close (e.g. 1.5 means 1.5%)."
+        default=None, description="Change vs previous close, as a PERCENT (1.5 = 1.5%)."
     )
     day_high: float | None = Field(default=None, description="Intraday high, in quote currency.")
     day_low: float | None = Field(default=None, description="Intraday low, in quote currency.")
@@ -299,7 +323,9 @@ class Quote(MarketData):
     market_cap: float | None = Field(
         default=None, description="Market capitalization in quote currency (absolute units)."
     )
-    volume: float | None = Field(default=None, description="Last trade volume, in shares.")
+    volume: float | None = Field(
+        default=None, description="Volume of the latest session, in shares."
+    )
 
 
 class QuoteError(MarketData):
@@ -351,7 +377,7 @@ class PriceSummary(MarketData):
     start_close: float = Field(description="Adjusted close of the first bar, in quote currency.")
     end_close: float = Field(description="Adjusted close of the last bar, in quote currency.")
     total_return_percent: float = Field(
-        description="Percent change from first to last adjusted close (e.g. 5.0 means 5%)."
+        description="Change from first to last adjusted close, as a PERCENT (5.0 = 5%)."
     )
     period_high: float = Field(description="Highest high over the window, in quote currency.")
     period_low: float = Field(description="Lowest low over the window, in quote currency.")
@@ -413,7 +439,7 @@ class DividendEvent(MarketData):
     """A single cash dividend."""
 
     date: str = Field(description="Ex-dividend date (ISO 8601).")
-    amount: float = Field(description="Cash dividend per share, in the trading currency.")
+    amount: float = Field(description="Cash dividend per share, in quote currency.")
 
 
 class SplitEvent(MarketData):
@@ -452,8 +478,7 @@ class CompanyProfile(MarketData):
     )
     dividend_yield: float | None = Field(
         default=None,
-        description="Trailing dividend yield as a PERCENT, as reported by Yahoo "
-        "(e.g. 5.92 means 5.92%, not 0.0592).",
+        description="Trailing dividend yield as a PERCENT (5.92 = 5.92%, not 0.0592).",
     )
     beta: float | None = Field(
         default=None, description="Beta vs the market over ~5 years (1.0 = moves with the market)."
@@ -470,8 +495,8 @@ class KeyMetrics(MarketData):
     Absolute amounts are NOT all in one currency: the financialData figures (total debt/cash,
     free cash flow, EBITDA) are in ``financial_currency``, the EPS fields in ``currency``. When
     the two differ (ADRs and other cross-listings) Yahoo computes the price multiples and
-    enterprise value across both currencies, so those are unreliable; see
-    ``conventions.CROSS_LISTING_RULE`` for what such a company can be compared on.
+    enterprise value across both currencies, so those are unreliable; the cross-listing rule in
+    the finance://conventions resource says what such a company can be compared on.
     """
 
     symbol: str = Field(description="Ticker symbol.")
@@ -516,21 +541,25 @@ class KeyMetrics(MarketData):
         description="Enterprise value / revenue ratio. Unreliable wherever enterprise_value is.",
     )
     return_on_equity: float | None = Field(
-        default=None, description="Return on equity, as a fraction (0.27 = 27%)."
+        default=None, description="Return on equity as a FRACTION (0.27 = 27%)."
     )
     return_on_assets: float | None = Field(
-        default=None, description="Return on assets, as a fraction (0.27 = 27%)."
+        default=None, description="Return on assets as a FRACTION (0.27 = 27%)."
     )
-    gross_margins: float | None = Field(default=None, description="Gross margin, as a fraction.")
+    gross_margins: float | None = Field(
+        default=None, description="Gross margin as a FRACTION (0.27 = 27%)."
+    )
     operating_margins: float | None = Field(
-        default=None, description="Operating margin, as a fraction."
+        default=None, description="Operating margin as a FRACTION (0.27 = 27%)."
     )
     profit_margins: float | None = Field(
-        default=None, description="Net profit margin, as a fraction."
+        default=None, description="Net profit margin as a FRACTION (0.27 = 27%)."
     )
-    ebitda_margins: float | None = Field(default=None, description="EBITDA margin, as a fraction.")
+    ebitda_margins: float | None = Field(
+        default=None, description="EBITDA margin as a FRACTION (0.27 = 27%)."
+    )
     debt_to_equity: float | None = Field(
-        default=None, description="Debt-to-equity, as a PERCENT (79.5 = 79.5%)."
+        default=None, description="Debt-to-equity as a PERCENT (79.5 = 79.5%), not a multiple."
     )
     current_ratio: float | None = Field(default=None, description="Current ratio.")
     quick_ratio: float | None = Field(default=None, description="Quick ratio.")
@@ -623,18 +652,28 @@ class NewsArticle(MarketData):
 
     title: str = Field(description="Headline text.")
     publisher: str | None = Field(
-        default=None, description="Publisher display name, e.g. 'Yahoo Finance'; may be None."
+        default=None, description="Publisher display name, e.g. 'Yahoo Finance'; may be null."
     )
     link: str | None = Field(
-        default=None, description="Canonical article URL (else a click-through URL); may be None."
+        default=None, description="Canonical article URL (else a click-through URL); may be null."
     )
     published: str | None = Field(
         default=None,
-        description="Publish time as an ISO8601 UTC timestamp, e.g. '2026-05-31T11:44:34Z'; "
-        "may be None.",
+        description="Publish time as an ISO 8601 UTC timestamp, e.g. '2026-05-31T11:44:34Z'; "
+        "may be null.",
     )
     summary: str | None = Field(
-        default=None, description="Short blurb summarizing the article; may be empty or None."
+        default=None, description="Short blurb summarizing the article; may be empty or null."
+    )
+    mentions_company: bool | None = Field(
+        default=None,
+        description="True if the title or summary names the company or its ticker; False if "
+        "neither does, which usually means a market-wide story Yahoo filed under the ticker. "
+        "It is a whole-word text match that leans toward False: brand and executive names "
+        "('Google' for Alphabet, 'Musk' for Tesla) and bare one- or two-letter tickers ('HD' "
+        "without '$' or parentheses) do not count, so read a False article's title before "
+        "discarding it. A company named by a common word can still match a Title-Case "
+        "headline ('Price Target'). Null when not assessed - see the result's relevance_check.",
     )
 
 
@@ -654,6 +693,21 @@ class NewsResult(MarketData):
             "publish time, but NO summary, so every summary is null for a reason unrelated to "
             "the articles themselves - do not read that as the stories being contentless."
         ),
+    )
+    relevance_check: RelevanceCheck = Field(
+        default="unavailable",
+        description=(
+            "Whether each article's mentions_company was assessed. 'applied': it was. "
+            "'not_an_equity': the symbol is an ETF, index, fund, coin or currency pair, where "
+            "market-wide news is relevant, so every flag is null. 'no_company_name': Yahoo has "
+            "no name for this symbol (often an unknown symbol), so every flag is null. "
+            "'unavailable': fetching the name failed (see relevance_note) - every flag is null "
+            "and a retry may succeed. The articles themselves are unaffected in every case."
+        ),
+    )
+    relevance_note: str | None = Field(
+        default=None,
+        description="Why relevance_check is 'no_company_name' or 'unavailable'; null otherwise.",
     )
 
 
@@ -699,7 +753,7 @@ class PerformanceStats(MarketData):
     start_date: str = Field(description="First close date (ISO 8601).")
     end_date: str = Field(description="Last close date (ISO 8601).")
     total_return_percent: float = Field(
-        description="Total return over the window (e.g. 12.3 = 12.3%)."
+        description="Total return over the window, as a PERCENT (12.3 = 12.3%)."
     )
     annualized_return_percent: float | None = Field(
         default=None,
@@ -707,9 +761,9 @@ class PerformanceStats(MarketData):
             "Annualized return (CAGR) over the actual calendar span between start_date and "
             "end_date, percent. Over a one-year window this equals total_return_percent. "
             "Null when the span is under 85 days (just under three months), because "
-            "annualizing a sub-quarter move "
-            "extrapolates short-run noise into a yearly figure - use total_return_percent "
-            "for such windows and do not annualize it yourself."
+            "annualizing a sub-quarter move extrapolates short-run noise into a yearly "
+            "figure - use total_return_percent for such windows and do not annualize it "
+            "yourself."
         ),
     )
     annualized_volatility_percent: float | None = Field(
@@ -730,24 +784,28 @@ class PerformanceStats(MarketData):
         ),
     )
     max_drawdown_percent: float = Field(
-        description="Largest peak-to-trough decline, as a negative percent (e.g. -23.4 = -23.4%)."
+        description="Largest peak-to-trough decline, as a negative percent (-23.4 = -23.4%)."
     )
-    risk_free_rate: float = Field(
-        default=0.0,
+    risk_free_rate: float | None = Field(
         description=(
-            "Annual risk-free rate used for the risk-adjusted figures, as a decimal "
-            "(0.045 = 4.5%). Defaults to 0, which makes sharpe_ratio and sortino_ratio RAW "
-            "return per unit of risk rather than excess-return figures - pass a T-bill yield "
-            "to compare against cash. Echoed even when the window is too short to use it."
+            "Annual risk-free rate the Sharpe, Sortino and downside figures are measured "
+            "against, as an effective annual DECIMAL (0.042 = 4.2%). By default the 13-week "
+            "T-bill yield over the window, so those figures are excess-over-cash; a caller's "
+            "rate of 0 makes them RAW return per unit of risk. Null when no rate was passed "
+            "and the T-bill average could not be formed. Echoed even when the window is too "
+            "short to use it."
         ),
     )
+    risk_free_rate_source: RiskFreeSource = Field(description=_RISK_FREE_SOURCE_DESCRIPTION)
+    risk_free_rate_note: str | None = Field(default=None, description=_RISK_FREE_NOTE_DESCRIPTION)
     sharpe_ratio: float | None = Field(
         default=None,
         description=(
             "Annualized Sharpe ratio: mean return in excess of risk_free_rate divided by the "
             "standard deviation of those excess returns, scaled by periods_per_year. "
             "Dimensionless, so it is comparable across instruments. Null when the window is "
-            "under 85 days (no periods_per_year to scale by) or the returns never varied."
+            "under 85 days (no periods_per_year to scale by), the returns never varied, or "
+            "risk_free_rate is null."
         ),
     )
     sortino_ratio: float | None = Field(
@@ -758,8 +816,8 @@ class PerformanceStats(MarketData):
             "penalized. When the numerator is POSITIVE it sits above the Sharpe if the "
             "dispersion was mostly upside; when the numerator is negative the comparison "
             "inverts, so only read the gap between the two on a positive Sharpe. Null "
-            "when the window is under 85 days or nothing fell below the risk-free target - "
-            "null there means 'no downside observed', not 'bad'."
+            "when the window is under 85 days, risk_free_rate is null, or nothing fell below "
+            "the risk-free target - null there means 'no downside observed', not 'bad'."
         ),
     )
     downside_deviation_percent: float | None = Field(
@@ -769,7 +827,8 @@ class PerformanceStats(MarketData):
             "denominator of sortino_ratio. Measured as a root-mean-square shortfall below "
             "the target rather than a spread around the mean, so it can EXCEED "
             "annualized_volatility_percent when most returns fell short. Null when the "
-            "window is under 85 days; 0.0 means no return fell below the target."
+            "window is under 85 days or risk_free_rate is null; 0.0 means no return fell "
+            "below the target."
         ),
     )
     calmar_ratio: float | None = Field(
@@ -818,16 +877,19 @@ class BenchmarkComparison(MarketData):
         "252 when either leg trades weekdays only, even if the other trades every day. "
         "Null when the overlap spans under 85 days.",
     )
-    risk_free_rate: float = Field(
-        default=0.0,
-        description="Annual risk-free rate used for alpha, as a decimal (0.045 = 4.5%). "
-        "Defaults to 0; with a beta of exactly 1 it cancels out of alpha entirely.",
+    risk_free_rate: float | None = Field(
+        description="Annual risk-free rate used for alpha, as an effective annual decimal "
+        "(0.042 = 4.2%). By default the 13-week T-bill yield averaged over the overlapping "
+        "dates; with a beta of exactly 1 it cancels out of alpha entirely. Null when no rate "
+        "was passed and the T-bill average could not be formed, and alpha is then null too.",
     )
+    risk_free_rate_source: RiskFreeSource = Field(description=_RISK_FREE_SOURCE_DESCRIPTION)
+    risk_free_rate_note: str | None = Field(default=None, description=_RISK_FREE_NOTE_DESCRIPTION)
     total_return_percent: float = Field(
-        description="The asset's total return over the shared dates (e.g. 12.3 = 12.3%)."
+        description="The asset's total return over the shared dates, as a PERCENT (12.3 = 12.3%)."
     )
     benchmark_total_return_percent: float = Field(
-        description="The benchmark's total return over the same shared dates."
+        description="The benchmark's total return over the same shared dates, as a PERCENT."
     )
     excess_return_percent: float = Field(
         description="total_return_percent minus benchmark_total_return_percent, in "
@@ -860,7 +922,7 @@ class BenchmarkComparison(MarketData):
         default=None,
         description="Annualized Jensen's alpha in percentage POINTS: (Ra - Rf) - beta * "
         "(Rb - Rf), the return earned beyond what the beta exposure predicted. Null when "
-        "beta or either annualized return is null.",
+        "beta, either annualized return, or risk_free_rate is null.",
     )
     tracking_error_percent: float | None = Field(
         default=None,
@@ -921,7 +983,7 @@ class TickerComparisonRow(MarketData):
     start_date: str = Field(description="First close date (ISO 8601).")
     end_date: str = Field(description="Last close date (ISO 8601).")
     total_return_percent: float = Field(
-        description="Total return over the window (e.g. 12.3 = 12.3%)."
+        description="Total return over the window, as a PERCENT (12.3 = 12.3%)."
     )
     annualized_return_percent: float | None = Field(
         default=None, description="CAGR over the window, percent; null under 85 days."
@@ -932,14 +994,23 @@ class TickerComparisonRow(MarketData):
     max_drawdown_percent: float = Field(
         description="Largest peak-to-trough decline, as a negative percent."
     )
+    risk_free_rate: float | None = Field(
+        description="Annual risk-free rate this row's Sharpe and Sortino are measured against, "
+        "as an effective annual decimal: the caller's rate, or by default the 13-week T-bill "
+        "average over THIS row's dates (a younger listing covers fewer of them). Null when "
+        "the T-bill average could not be formed."
+    )
+    risk_free_rate_source: RiskFreeSource = Field(description=_RISK_FREE_SOURCE_DESCRIPTION)
+    risk_free_rate_note: str | None = Field(default=None, description=_RISK_FREE_NOTE_DESCRIPTION)
     sharpe_ratio: float | None = Field(
         default=None,
-        description="Annualized Sharpe against the table's risk_free_rate; null under 85 days "
-        "or when returns never varied.",
+        description="Annualized Sharpe against this row's risk_free_rate; null under 85 days, "
+        "when returns never varied, or when the row has no rate.",
     )
     sortino_ratio: float | None = Field(
         default=None,
-        description="Annualized Sortino; null under 85 days or with no downside.",
+        description="Annualized Sortino against this row's risk_free_rate; null under 85 "
+        "days, with no downside, or when the row has no rate.",
     )
     calmar_ratio: float | None = Field(
         default=None,
@@ -999,10 +1070,21 @@ class TickerComparison(MarketData):
     """
 
     period: str = Field(description="Look-back window used for every row, e.g. '1y'.")
-    risk_free_rate: float = Field(
-        default=0.0,
-        description="Annual risk-free rate applied to every row's Sharpe and Sortino, as a "
-        "decimal (0.045 = 4.5%). Defaults to 0, making those raw rather than excess figures.",
+    risk_free_rate: float | None = Field(
+        description="The annual risk-free rate the caller passed, applied to every row, as a "
+        "decimal (0.045 = 4.5%). Null when none was passed: each row then carries its own "
+        "13-week T-bill average over its own dates - read the rows' risk_free_rate.",
+    )
+    risk_free_rate_source: RiskFreeSource = Field(
+        description="'caller': every row uses risk_free_rate. 'treasury_bill': each row uses "
+        "the T-bill yield over its own dates (a row's own risk_free_rate_source is "
+        "'unavailable' where its window is not covered). 'unavailable': the T-bill history "
+        "could not be fetched, so no row has a rate - see risk_free_rate_note."
+    )
+    risk_free_rate_note: str | None = Field(
+        default=None,
+        description="Why the table-level source is 'unavailable', and how to proceed; null "
+        "otherwise.",
     )
     base_currency: str | None = Field(
         default=None,

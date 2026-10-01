@@ -21,7 +21,7 @@ from finance_mcp.data.models import (
 from finance_mcp.data.yfinance_client import YFinanceClient
 from finance_mcp.tools._annotations import market_data
 from finance_mcp.tools._dispatch import run_data
-from finance_mcp.tools._inputs import MAX_LINE_ITEMS, Ticker
+from finance_mcp.tools._inputs import MAX_LINE_ITEMS, MAX_QUOTE_TICKERS, Ticker
 
 
 def register(mcp: FastMCP, client: YFinanceClient) -> None:
@@ -33,8 +33,8 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
             list[Ticker],
             Field(
                 min_length=1,
-                max_length=25,
-                description="1-25 ticker symbols, e.g. ['AAPL', 'MSFT'].",
+                max_length=MAX_QUOTE_TICKERS,
+                description=f"1-{MAX_QUOTE_TICKERS} ticker symbols, e.g. ['AAPL', 'MSFT'].",
             ),
         ],
     ) -> QuoteResult:
@@ -132,6 +132,13 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
         nothing and this fell back to Yahoo's search endpoint, which carries no summary, so every
         summary is null for a reason unrelated to the stories. Works for stocks, ETFs, and crypto.
         A symbol with no news (or an unknown symbol) returns an empty article list, not an error.
+
+        Yahoo files market-wide stories under a ticker too, so for a stock each article's
+        mentions_company says whether its title or summary names the company or its ticker.
+        It is a text match (brand and executive names are not), so it flags rather than
+        filters: every article is returned, in order. relevance_check says when the flags are
+        null (not a stock, Yahoo has no company name for it, or fetching the name failed, with
+        relevance_note saying why).
         """
         return await run_data(lambda: client.get_news(ticker, count))
 

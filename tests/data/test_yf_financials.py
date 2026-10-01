@@ -14,7 +14,7 @@ from finance_mcp.data.yfinance_client import (
     YFinanceClient,
 )
 from tests.fakes import (
-    INCOME,
+    INCOME_WITH_NAN,
     SAP_INFO,
     FakeClock,
     counting,
@@ -25,7 +25,7 @@ from tests.fakes import (
 
 
 def test_get_financials_parses_periods_and_line_items() -> None:
-    df = make_financials_df(INCOME, ["2024-09-30", "2023-09-30"])
+    df = make_financials_df(INCOME_WITH_NAN, ["2024-09-30", "2023-09-30"])
     client = make_client(factory=fake_ticker_factory(financials={"income_stmt": df}))
     fs = client.get_financials("AAPL", "income", "annual")
     assert fs.symbol == "AAPL" and fs.statement == "income" and fs.period == "annual"
@@ -35,7 +35,7 @@ def test_get_financials_parses_periods_and_line_items() -> None:
 
 
 def test_get_financials_line_items_filter() -> None:
-    df = make_financials_df(INCOME, ["2024-09-30", "2023-09-30"])
+    df = make_financials_df(INCOME_WITH_NAN, ["2024-09-30", "2023-09-30"])
     client = make_client(factory=fake_ticker_factory(financials={"income_stmt": df}))
     fs = client.get_financials("AAPL", "income", "annual", line_items=["Total Revenue", "Nope"])
     assert list(fs.line_items.keys()) == ["Total Revenue"]  # only matching labels, "Nope" dropped
@@ -64,7 +64,7 @@ def test_get_financials_parse_error_is_data_unavailable() -> None:
 
 
 def _counting_income() -> tuple[Callable[[str], Any], list[str]]:
-    df = make_financials_df(INCOME, ["2024-09-30", "2023-09-30"])
+    df = make_financials_df(INCOME_WITH_NAN, ["2024-09-30", "2023-09-30"])
     return counting(fake_ticker_factory(financials={"income_stmt": df}))
 
 
@@ -116,7 +116,7 @@ def test_get_financials_all_statement_period_combos(
 
 
 def test_get_financials_line_items_preserve_order() -> None:
-    df = make_financials_df(INCOME, ["2024-09-30", "2023-09-30"])
+    df = make_financials_df(INCOME_WITH_NAN, ["2024-09-30", "2023-09-30"])
     client = make_client(factory=fake_ticker_factory(financials={"income_stmt": df}))
     fs = client.get_financials(
         "AAPL", "income", "annual", line_items=["Net Income", "Total Revenue"]
@@ -125,20 +125,20 @@ def test_get_financials_line_items_preserve_order() -> None:
 
 
 def test_get_financials_line_items_all_miss_empty() -> None:
-    df = make_financials_df(INCOME, ["2024-09-30", "2023-09-30"])
+    df = make_financials_df(INCOME_WITH_NAN, ["2024-09-30", "2023-09-30"])
     client = make_client(factory=fake_ticker_factory(financials={"income_stmt": df}))
     fs = client.get_financials("AAPL", "income", "annual", line_items=["Nonexistent"])
     assert fs.line_items == {}
 
 
 def test_financial_statement_is_labelled_with_the_reporting_currency() -> None:
-    df = make_financials_df(INCOME, ["2024-12-31", "2023-12-31"])
+    df = make_financials_df(INCOME_WITH_NAN, ["2024-12-31", "2023-12-31"])
     client = make_client(factory=fake_ticker_factory(financials={"income_stmt": df}, info=SAP_INFO))
     assert client.get_financials("SAP", "income", "annual").currency == "EUR"
 
 
 def test_financial_statement_currency_falls_back_to_quote_currency() -> None:
-    df = make_financials_df(INCOME, ["2024-12-31", "2023-12-31"])
+    df = make_financials_df(INCOME_WITH_NAN, ["2024-12-31", "2023-12-31"])
     client = make_client(
         factory=fake_ticker_factory(
             financials={"income_stmt": df}, info={"longName": "Apple Inc.", "currency": "USD"}
@@ -153,7 +153,7 @@ def test_financial_statement_currency_falls_back_to_quote_currency() -> None:
 def test_financial_statement_currency_is_none_when_info_is_unusable(
     info_kwargs: dict[str, Any],
 ) -> None:
-    df = make_financials_df(INCOME, ["2024-12-31", "2023-12-31"])
+    df = make_financials_df(INCOME_WITH_NAN, ["2024-12-31", "2023-12-31"])
     client = make_client(fake_ticker_factory(financials={"income_stmt": df}, **info_kwargs))
     # An unlabelled statement beats a failed one: the values are still correct.
     fs = client.get_financials("AAPL", "income", "annual")
@@ -165,7 +165,7 @@ def test_financial_statement_currency_is_none_when_info_is_unusable(
 
 
 def _income_client() -> YFinanceClient:
-    df = make_financials_df(INCOME, ["2024-09-30", "2023-09-30"])
+    df = make_financials_df(INCOME_WITH_NAN, ["2024-09-30", "2023-09-30"])
     return make_client(factory=fake_ticker_factory(financials={"income_stmt": df}))
 
 
@@ -225,7 +225,7 @@ def _statement_currency_factory(
     info_reads: list[str], info: dict[str, Any], fail_first: int = 0
 ) -> Callable[[str], Any]:
     """A ticker factory that records every ``.info`` read and can fail the first N of them."""
-    df = make_financials_df(INCOME, ["2024-09-30", "2023-09-30"])
+    df = make_financials_df(INCOME_WITH_NAN, ["2024-09-30", "2023-09-30"])
     state = {"failures_left": fail_first}
 
     class _Ticker:

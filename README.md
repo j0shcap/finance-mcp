@@ -21,19 +21,21 @@ and deterministic financial calculators.
 - `get_company_profile` — sector, industry, market cap, P/E, beta, business summary, plus recent dividends and stock splits.
 - `get_analyst_data` — sell-side analyst consensus: price targets, consensus recommendation, and the recent rating trend (analyst counts over the last four months).
 - `search_symbols` — resolve a company or instrument name to ticker symbol(s), best match first, across all instrument types (equity, ETF, crypto, …).
-- `get_news` — recent news headlines for a ticker, newest first: title, publisher, link, publish time, and a short summary (no news returns an empty list, not an error).
+- `get_news` — recent news headlines for a ticker, newest first: title, publisher, link, publish time, and a short summary (no news returns an empty list, not an error). For a stock, each article is flagged with whether it names the company or its ticker, since Yahoo files market-wide stories under tickers too.
 
 **Analytics**
 
 - `get_key_metrics` — valuation/profitability/leverage ratios (P/E, EV/EBITDA, margins, ROE, debt/equity, FCF, EPS, …) as reported by Yahoo; units noted per field, and absolute amounts labelled with the quote vs. reporting currency they're in.
-- `analyze_performance` — total & annualized return, annualized volatility, max drawdown, 50/200-day SMAs, and risk-adjusted statistics (Sharpe, Sortino, downside deviation, Calmar) computed from the daily price series. `risk_free_rate` is an annual decimal and defaults to 0, so the Sharpe and Sortino are raw return per unit of risk unless you pass one; the rate used is echoed in the result.
-- `compare_to_benchmark` — beta, correlation, Jensen's alpha, tracking error, information ratio and excess return versus a benchmark ticker (default `SPY`). The two daily series are inner-joined on date, so a 24/7 instrument compared with an equity benchmark contributes only its weekday closes; the number of overlapping observations is reported so you can judge how much weight the figures carry.
+- `analyze_performance` — total & annualized return, annualized volatility, max drawdown, 50/200-day SMAs, and risk-adjusted statistics (Sharpe, Sortino, downside deviation, Calmar) from the daily price series. Annualized figures are null for windows under 85 days.
+
+  `risk_free_rate` (an annual decimal, also taken by `compare_to_benchmark` and `compare_tickers`) defaults to the 13-week US T-bill yield (Yahoo `^IRX`) averaged over the dates measured and converted to an effective annual rate, so the ratios are excess over cash; pass `0` for raw return per unit of risk. Each result echoes the rate and its source: `caller`, `treasury_bill`, or `unavailable` (with a note), in which case the rate-dependent figures are null rather than computed at 0.
+- `compare_to_benchmark` — beta, correlation, Jensen's alpha, tracking error, information ratio and excess return versus a benchmark ticker (default `SPY`). The two daily series are inner-joined on date, so a 24/7 instrument compared with an equity benchmark contributes only its weekday closes; the overlapping observation count is reported.
 - `compare_tickers` — side-by-side performance plus key valuation metrics for 2–10 tickers, fetched in parallel. Partial like `get_quote`: a ticker with no usable history lands in `errors`, and a row whose valuation metrics failed keeps its performance figures with `metrics_error` set. Rows not denominated in the table's base currency are flagged.
 
 **Time value & loans**
 
 - `time_value_of_money` — solve any one of present/future value, payment, rate, or periods (compound interest, annuities, CAGR); supports begin-of-period (annuity-due).
-- `loan_schedule` — monthly payment, total interest, and optional amortization schedule for a fixed-rate loan/mortgage (nominal APR compounded monthly).
+- `loan_schedule` — monthly payment, total interest, and optional amortization schedule for a fixed-rate loan/mortgage (nominal APR compounded monthly); with an extra monthly payment, also the interest and payments it saves.
 
 **Cashflow valuation**
 
@@ -50,36 +52,32 @@ and deterministic financial calculators.
 - `bond_price_dated` — price a bond for a settlement date that may fall **between** coupon dates: clean and dirty price, accrued interest, duration and convexity, per face and per 100 (Actual/Actual ICMA or 30/360 US). Defaults to the street convention for the part period; `first_period_discount="simple"` matches the US Treasury's own formulas, and also matches Excel inside the final coupon period.
 - `bond_ytm_dated` — yield to maturity from a clean price for a given settlement date.
 
-The calculators are pure and deterministic; the market-data and analytics tools fetch
-live data (briefly cached) and surface source errors clearly. All tools return typed,
-structured results and report invalid inputs as clear errors. Market-data results are
-rounded to 7 significant digits (whole numbers such as volumes keep every digit), the
-precision Yahoo actually provides; calculator results are returned at full precision.
+The calculators are pure and deterministic; the market-data and analytics tools fetch live
+data (briefly cached). Every tool returns a typed, structured result. Market-data floats are
+rounded to 7 significant digits, the precision Yahoo actually provides (whole numbers such as
+volumes keep every digit); calculator results are returned at full precision.
 
 ## Prompts
 
-MCP prompts — reusable analysis templates the client exposes for you to invoke (Claude Code shows
-them as slash commands; other clients surface them their own way).
+Reusable analysis templates the client exposes for you to invoke (Claude Code shows them as
+slash commands).
 
 - `analyze_stock` (arguments: `ticker`, optional `horizon`, default `12mo`) — single-stock deep-dive: fundamentals, growth-adjusted peer valuation, risk-adjusted and benchmark-relative risk posture, analyst view, and news catalysts → bull/bear cases and a fair-value range with a horizon-framed verdict, citing the data behind each claim.
 - `compare_stocks` (arguments: `tickers` — 2-10 symbols separated by commas or spaces, optional `horizon`, default `12mo`) — ranks a peer group: a comparability screen, a rubric fixed before the results are read, growth-adjusted valuation derived from the data rather than Yahoo's PEG, risk-adjusted performance checked for stability across a 1y and a 5y window, and currency caveats → a ranked verdict that keeps ties and data gaps apart from real differences.
-- `loan_planner` (arguments: `principal`, `annual_rate`, `term_months`, optional `extra_payment`) — fixed-rate loan or mortgage: payment and total interest verified two ways, note rate vs. a fee-loaded APR vs. the effective annual rate, non-monthly compounding, what extra payments are really worth, and a refinance break-even that a reset term cannot fool.
+- `loan_planner` (arguments: `principal`, `annual_rate`, `term_months`, optional `extra_payment`) — fixed-rate loan or mortgage: payment and total interest cross-checked through a second tool, note rate vs. a fee-loaded APR vs. the effective annual rate, non-monthly compounding, what extra payments are worth, and a refinance break-even that accounts for a reset term.
 - `bond_analysis` (arguments: `bond` — a plain-words description, optional `shock_bp`, default `100`) — price, yield, accrued interest, duration, convexity and DV01 with the day count and clean/dirty basis made explicit, then a ± rate shock estimated from duration and convexity and cross-checked by exact repricing, and where option-free analytics break.
 - `investment_cashflows` (arguments: `cashflows`, optional `discount_rate`, `reinvest_rate`) — NPV/IRR/MIRR/XIRR: timing and rate-period conventions, sign-pattern diagnosis (multiple IRRs, borrowing-type flows), NPV as the decision rule with an NPV profile, and when MIRR is the better single figure.
 
-Every prompt points at the `finance://conventions` resource for unit rules (`compare_stocks`, `loan_planner`, `bond_analysis` and `investment_cashflows`
-reference it rather than restating it; `analyze_stock` also embeds the market-data units
-glossary), and names only tools, parameters and result fields the server actually has — a test
-renders each prompt and checks every tool call, each tool's keyword arguments, and every
-snake_case field name against the tool registry.
+Every prompt points at the `finance://conventions` resource for unit rules (`analyze_stock`
+also embeds the market-data glossary). A test renders each prompt and checks every tool call,
+keyword argument and snake_case field name it mentions against the tool registry.
 
 ## Resources
 
-- `finance://conventions` — the units, sign, and rate conventions every result follows, in one
-  document: which Yahoo fields are fractions vs. already percents, which currency each absolute
-  amount is in, and the Excel sign convention (cash received positive, cash paid negative) the
-  cashflow and TVM tools use. The server also ships a condensed version as its MCP
-  `instructions`, so a client sees the essentials without reading the resource.
+- `finance://conventions` — the units, sign, and rate conventions every result follows: which
+  Yahoo fields are fractions vs. already percents, which currency each absolute amount is in,
+  and the Excel sign convention (cash received positive, cash paid negative) the cashflow and
+  TVM tools use. A condensed version ships as the server's MCP `instructions`.
 
 Every tool is annotated read-only; the calculators are additionally marked idempotent and
 closed-world, the market-data tools open-world.
@@ -127,14 +125,12 @@ uv sync
 make check   # ruff, mypy --strict, bandit, pytest (enforces the coverage gate)
 ```
 
-`make check` is fully offline: every test in it mocks yfinance, so it works on a plane and
-never depends on Yahoo being up.
+`make check` is fully offline: every test in it mocks yfinance.
 
 ### Live contract tests
 
-`tests/live/` calls real Yahoo endpoints to catch what mocks cannot — a renamed `info` key, a
-restructured news payload, a field switching between a fraction and a percent — since a
-mocked suite only pins our parsing of a shape recorded once.
+`tests/live/` calls real Yahoo endpoints to catch what mocks cannot: a renamed `info` key, a
+restructured news payload, a field switching between a fraction and a percent.
 
 ```bash
 make test-live   # opt-in: hits the network, excluded from the coverage gate

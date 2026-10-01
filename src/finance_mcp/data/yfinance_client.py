@@ -9,19 +9,20 @@ else, transport failures included, stays a plain DataUnavailable.
 
 import difflib
 import math
+import statistics
 import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable, Iterator
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
-from datetime import UTC, datetime
-from typing import Any, cast
+from datetime import UTC, date, datetime
+from typing import Any, NamedTuple, cast
 
 import yfinance as yf
 from yfinance.exceptions import YFTickerMissingError
 
-from finance_mcp.data import analytics
+from finance_mcp.data import analytics, relevance
 from finance_mcp.data.errors import DataUnavailable, InvalidInput, SymbolNotFound
 from finance_mcp.data.models import (
     AnalystData,
@@ -33,6 +34,7 @@ from finance_mcp.data.models import (
     KeyMetrics,
     NewsArticle,
     NewsResult,
+    NewsSource,
     PerformanceStats,
     PriceBar,
     PriceHistory,
@@ -41,6 +43,8 @@ from finance_mcp.data.models import (
     QuoteError,
     QuoteResult,
     RecommendationPeriod,
+    RelevanceCheck,
+    RiskFreeSource,
     SplitEvent,
     Statement,
     StatementPeriod,
@@ -52,30 +56,33 @@ from finance_mcp.data.models import (
 
 DEFAULT_MAX_BARS = 260
 DEFAULT_CACHE_MAX_ENTRIES = 256
-# The LRU bounds how many entries are held, not how large they are. A period="max" daily
-# history is ~11.5k PriceBar models (~9 MB), so 256 of those would retain gigabytes. Bar
-# lists longer than this are still returned in full; they are just not kept. ~2000 daily
-# bars is about eight years, so every ordinary window stays cached.
+# The LRU bounds how many entries are held, not how large they are: a period="max" daily
+# history is ~11.5k bars (~9 MB). Longer bar lists are returned in full but not kept;
+# ~2000 daily bars is about eight years, so every ordinary window stays cached.
 MAX_CACHEABLE_BARS = 2000
-# Quotes in a batch are independent single requests, so they are fetched in parallel; the
-# bound keeps a large batch from opening a connection per ticker at once.
+# Keeps a large quote batch from opening a connection per ticker at once.
 QUOTE_MAX_WORKERS = 8
-BENCHMARK_MAX_WORKERS = 2  # the asset and the benchmark
 # The fewest shared closes that yield a single return to compare.
 MIN_OVERLAP_OBSERVATIONS = 2
-# Each comparison row costs two Yahoo calls (history + info), so the worker bound is lower
-# than the quote bound for the same ceiling on concurrent connections.
+# Each comparison row costs two Yahoo calls (history + info), hence a lower bound than
+# quotes for the same ceiling on concurrent connections.
 COMPARE_MAX_WORKERS = 5
 # Intervals whose bars are points in time rather than whole sessions. Kept in sync with
 # HistoryInterval (a test pins it): everything that is not a daily-or-longer interval.
 _INTRADAY_INTERVALS = frozenset({"1m", "5m", "15m", "30m", "1h"})
 SMA_SHORT_WINDOW = 50
 SMA_LONG_WINDOW = 200
-# Below roughly a quarter of calendar time, annualizing compounds short-run noise into a
-# yearly figure that reads as a forecast. Set just under three months because a
-# period="3mo" window spans 87-95 elapsed days depending on the call date, and the same
-# request should not gain and lose its annualized fields from one day to the next.
+# Below about a quarter, annualizing compounds short-run noise into a yearly figure that
+# reads as a forecast. Just under three months because a period="3mo" window spans 87-95
+# elapsed days depending on the call date, and the same request should not gain and lose
+# its annualized fields from one day to the next.
 MIN_ANNUALIZATION_DAYS = 85
+#: Yahoo's 13-week US Treasury bill yield, the default risk-free rate. Quoted in percent on
+#: a bank-discount basis; see analytics.treasury_bill_effective_rate.
+TREASURY_BILL_SYMBOL = "^IRX"
+#: How far inside a measured window the T-bill history may start or end and still count as
+#: covering it, so a bond-market holiday at either edge is not a gap.
+RISK_FREE_EDGE_TOLERANCE_DAYS = 7
 
 _FINANCIALS_ATTR = {
     ("income", "annual"): "income_stmt",
@@ -85,6 +92,37 @@ _FINANCIALS_ATTR = {
     ("cashflow", "annual"): "cashflow",
     ("cashflow", "quarterly"): "quarterly_cashflow",
 }
+
+
+class _RiskFree(NamedTuple):
+    """The risk-free rate one computation used, and how it was chosen."""
+
+    rate: float | None
+    source: RiskFreeSource
+    note: str | None = None
+    #: True only when the T-bill FETCH failed, so a retry could resolve the rate. A window
+    #: the history does not cover, or an implausible quote, gives the same answer each time.
+    retryable: bool = False
+
+
+#: The T-bill history a computation draws its default rate from: the bars, or why they
+#: could not be fetched. None when the caller passed a rate, so nothing was fetched.
+_Bills = list[PriceBar] | str | None
+
+
+class _Identity(NamedTuple):
+    """What the relevance flags need to know about a symbol, from Yahoo's ``info``."""
+
+    quote_type: str | None
+    long_name: str | None
+    short_name: str | None
+
+
+class _IdentityGap(NamedTuple):
+    """Why a symbol's identity is missing, and whether retrying could change that."""
+
+    reason: str
+    lasting: bool
 
 
 class YFinanceClient:
@@ -102,8 +140,7 @@ class YFinanceClient:
         cache_max_entries: int = DEFAULT_CACHE_MAX_ENTRIES,
     ) -> None:
         self._ticker = ticker_factory
-        # yf.Search is called with keyword args (max_results/news_count/lists_count);
-        # widen to Callable[..., Any] so those kwargs typecheck.
+        # Widened so the keyword arguments yf.Search is called with typecheck.
         self._search: Callable[..., Any] = search_factory
         self._now = time_fn
         self._quote_ttl = quote_ttl
@@ -111,17 +148,16 @@ class YFinanceClient:
         self._fundamentals_ttl = fundamentals_ttl
         self._max_bars = max_bars
         self._cache_max_entries = cache_max_entries
-        # key -> (stored_at, ttl, value). Insertion order is LRU order (oldest use first);
-        # the per-entry ttl is stored so the purge pass can judge expiry without knowing
-        # which caller wrote the entry.
+        # key -> (stored_at, ttl, value), in LRU order (oldest use first). The ttl is kept
+        # per entry so the purge pass can judge expiry without knowing who wrote it.
         self._cache: OrderedDict[tuple[str, ...], tuple[float, float, Any]] = OrderedDict()
         # get_quote fetches concurrently, so cache bookkeeping is guarded. Fetches run
         # OUTSIDE the lock: two threads racing on one uncached key just fetch it twice.
         self._cache_lock = threading.Lock()
         # By default yfinance's price and statement fetches swallow a transport failure and
-        # return an empty frame -- which reads exactly like an unknown symbol. Every
-        # classification below assumes failures arrive as exceptions, so turn that off.
-        # Process-wide, but this server is the only yfinance user in its process.
+        # return an empty frame, which reads exactly like an unknown symbol; every
+        # classification below needs failures as exceptions. Process-wide, but this server
+        # is the only yfinance user in its process.
         yf.config.debug.hide_exceptions = False
 
     def _cached[T](
@@ -245,14 +281,11 @@ class YFinanceClient:
         )
 
     def _all_bars(self, symbol: str, period: str, interval: str) -> list[PriceBar]:
-        """Parsed bars for one (symbol, period, interval), cached once for every consumer.
-
-        get_price_history and analyze_performance are two views of the same fetch; keying the
-        raw bars separately from the derived models keeps them on a single network round-trip.
+        """Parsed bars for one (symbol, period, interval), shared by every view of them.
 
         Histories longer than MAX_CACHEABLE_BARS are not retained, so a very long window
-        costs one fetch per view instead of retaining megabytes of bars. Both views cache
-        their own small derived result, so repeat calls still avoid the network.
+        costs one fetch per view; each view caches its own small result, so repeat calls
+        still avoid the network.
         """
         return self._cached(
             ("bars", symbol, period, interval),
@@ -317,80 +350,55 @@ class YFinanceClient:
         )
 
     def analyze_performance(
-        self, symbol: str, period: str, risk_free_rate: float = 0.0
+        self, symbol: str, period: str, risk_free_rate: float | None = None
     ) -> PerformanceStats:
-        symbol = _norm(symbol)
-        # The bars this reads are usually cached by _all_bars, but a history past
-        # MAX_CACHEABLE_BARS is not retained -- without an entry here every call to a long
-        # window would go back to the network. PerformanceStats is a few hundred bytes.
-        # risk_free_rate is part of the key because the Sharpe, Sortino and downside figures
-        # are computed from it: keying on (symbol, period) alone would serve the first
-        # caller's rate to every later one.
-        return self._cached(
-            ("performance", symbol, period, str(risk_free_rate)),
-            self._history_ttl,
-            lambda: self._compute_performance(symbol, period, risk_free_rate),
-        )
+        """Return and risk statistics over ``period``.
 
-    def _compute_performance(
-        self, symbol: str, period: str, risk_free_rate: float
-    ) -> PerformanceStats:
-        bars = self._all_bars(symbol, period, "1d")
-        if len(bars) < 2:
-            raise DataUnavailable(
-                f"Not enough price history to compute performance for '{symbol}'."
-            )
-        closes = [b.close for b in bars]
-        # Annualize off wall-clock time, not the bar count: how many bars a year holds is a
-        # property of the instrument's trading calendar (~252 weekday, ~365 for crypto), so
-        # both the CAGR exponent and the volatility factor are read from the dates.
-        elapsed_days = _elapsed_days(bars[0].date, bars[-1].date)
-        annualized_return: float | None = None
-        annualized_volatility: float | None = None
-        periods_per_year: float | None = None
-        # Every risk-adjusted figure needs periods_per_year (Calmar needs the CAGR), so they
-        # share the annualization gate.
-        sharpe: float | None = None
-        sortino: float | None = None
-        downside: float | None = None
-        calmar: float | None = None
-        max_drawdown = analytics.max_drawdown(closes)
-        if elapsed_days >= MIN_ANNUALIZATION_DAYS:
-            years = elapsed_days / analytics.DAYS_PER_YEAR
-            periods_per_year = analytics.infer_periods_per_year(len(bars), years)
-            annualized_return = analytics.annualized_return(closes, years)
-            annualized_volatility = analytics.annualized_volatility(closes, periods_per_year)
-            sharpe = analytics.sharpe_ratio(closes, periods_per_year, risk_free_rate)
-            sortino = analytics.sortino_ratio(closes, periods_per_year, risk_free_rate)
-            downside = analytics.downside_deviation(closes, periods_per_year, risk_free_rate)
-            calmar = analytics.calmar_ratio(annualized_return, max_drawdown)
-        return PerformanceStats(
-            symbol=symbol,
-            period=period,
-            bars=len(bars),
-            start_date=bars[0].date,
-            end_date=bars[-1].date,
-            total_return_percent=analytics.total_return(closes),
-            annualized_return_percent=annualized_return,
-            annualized_volatility_percent=annualized_volatility,
-            periods_per_year=periods_per_year,
-            max_drawdown_percent=max_drawdown,
-            risk_free_rate=risk_free_rate,
-            sharpe_ratio=sharpe,
-            sortino_ratio=sortino,
-            downside_deviation_percent=downside,
-            calmar_ratio=calmar,
-            sma_50=analytics.sma(closes, SMA_SHORT_WINDOW),
-            sma_200=analytics.sma(closes, SMA_LONG_WINDOW),
+        With no ``risk_free_rate``, the Sharpe, Sortino and downside figures are measured
+        against the 13-week T-bill yield averaged over the same dates.
+        """
+        symbol = _norm(symbol)
+        # Cached in its own right because bars past MAX_CACHEABLE_BARS are not. The rate is
+        # in the key since the rate-dependent figures are computed from it. A result whose
+        # T-bill fetch failed is not kept, so the next call retries it; a lasting gap is.
+        stats, _ = self._cached(
+            ("performance", symbol, period, _rate_key(risk_free_rate)),
+            self._history_ttl,
+            lambda: self._fetch_performance(symbol, period, risk_free_rate),
+            cacheable=lambda fetched: not fetched[1].retryable,
         )
+        return stats
+
+    def _fetch_performance(
+        self, symbol: str, period: str, risk_free_rate: float | None
+    ) -> tuple[PerformanceStats, _RiskFree]:
+        bars, bills = _in_parallel(
+            lambda: self._all_bars(symbol, period, "1d"),
+            lambda: self._bills_for(period, risk_free_rate),
+        )
+        risk_free = _risk_free_over(risk_free_rate, bills, bars[0].date, bars[-1].date)
+        return _performance(symbol, period, bars, risk_free), risk_free
+
+    def _bills_for(self, period: str, risk_free_rate: float | None) -> _Bills:
+        """The T-bill history for a default rate; nothing when the caller gave a rate.
+
+        A failed fetch is returned as its message rather than raised: only the rate-
+        dependent figures need it, so it must not fail the whole computation.
+        """
+        if risk_free_rate is not None:
+            return None
+        try:
+            return self._all_bars(TREASURY_BILL_SYMBOL, period, "1d")
+        except DataUnavailable as exc:
+            return str(exc)
 
     def compare_to_benchmark(
-        self, symbol: str, benchmark: str, period: str, risk_free_rate: float = 0.0
+        self, symbol: str, benchmark: str, period: str, risk_free_rate: float | None = None
     ) -> BenchmarkComparison:
         """Benchmark-relative statistics over the dates the two instruments share.
 
-        The two histories are independent fetches, so they run in parallel; both are the
-        same cached ``_all_bars`` entries the other analytics tools use.
+        The two histories and, for a default rate, the T-bill history are fetched in
+        parallel.
         """
         symbol, bench = _norm(symbol), _norm(benchmark)
         if symbol == bench:
@@ -398,10 +406,12 @@ class YFinanceClient:
                 f"A benchmark comparison needs two different symbols; '{symbol}' was given "
                 "for both. Use analyze_performance for a single instrument."
             )
-        asset_bars, bench_bars = _fetch_concurrently(
-            [symbol, bench],
-            lambda s: self._all_bars(s, period, "1d"),
-            BENCHMARK_MAX_WORKERS,
+        (asset_bars, bench_bars), bills = _in_parallel(
+            lambda: _in_parallel(
+                lambda: self._all_bars(symbol, period, "1d"),
+                lambda: self._all_bars(bench, period, "1d"),
+            ),
+            lambda: self._bills_for(period, risk_free_rate),
         )
         dates, asset_closes, bench_closes = analytics.align_closes(
             [(b.date, b.close) for b in asset_bars], [(b.date, b.close) for b in bench_bars]
@@ -412,6 +422,8 @@ class YFinanceClient:
                 f"over '{period}', so there is nothing to compare. Try a longer period, or "
                 "check that both symbols traded over this window."
             )
+        # Alpha's risk-free leg spans the dates actually compared, not either full history.
+        risk_free = _risk_free_over(risk_free_rate, bills, dates[0], dates[-1])
         elapsed_days = _elapsed_days(dates[0], dates[-1])
         periods_per_year: float | None = None
         asset_cagr: float | None = None
@@ -429,8 +441,13 @@ class YFinanceClient:
             tracking = analytics.tracking_error(asset_closes, bench_closes, periods_per_year)
             info_ratio = analytics.information_ratio(asset_closes, bench_closes, periods_per_year)
         alpha: float | None = None
-        if asset_beta is not None and asset_cagr is not None and bench_cagr is not None:
-            alpha = analytics.jensen_alpha(asset_cagr, bench_cagr, asset_beta, risk_free_rate)
+        if (
+            asset_beta is not None
+            and asset_cagr is not None
+            and bench_cagr is not None
+            and risk_free.rate is not None
+        ):
+            alpha = analytics.jensen_alpha(asset_cagr, bench_cagr, asset_beta, risk_free.rate)
         asset_total = analytics.total_return(asset_closes)
         bench_total = analytics.total_return(bench_closes)
         return BenchmarkComparison(
@@ -441,7 +458,9 @@ class YFinanceClient:
             start_date=dates[0],
             end_date=dates[-1],
             periods_per_year=periods_per_year,
-            risk_free_rate=risk_free_rate,
+            risk_free_rate=risk_free.rate,
+            risk_free_rate_source=risk_free.source,
+            risk_free_rate_note=risk_free.note,
             total_return_percent=asset_total,
             benchmark_total_return_percent=bench_total,
             excess_return_percent=asset_total - bench_total,
@@ -455,29 +474,40 @@ class YFinanceClient:
         )
 
     def compare_tickers(
-        self, symbols: list[str], period: str, risk_free_rate: float = 0.0
+        self, symbols: list[str], period: str, risk_free_rate: float | None = None
     ) -> TickerComparison:
         """Side-by-side performance and valuation for a small batch, fetched concurrently.
 
-        Each row is two independent lookups over the cached fetchers the single-ticker tools
-        already use, so a batch costs no more than calling them one at a time -- and one
-        ticker's failure reports itself instead of discarding the rows that worked.
+        One ticker's failure reports itself in ``errors`` instead of discarding the rows
+        that worked. For a default rate the T-bill history is fetched once, alongside the
+        rows, and each row averages it over its own dates: a period="max" history is too
+        long to cache, so fetching it per row would cost a round trip per ticker.
         """
         pending, failures = _normalize_batch(symbols)
         errors = [ComparisonError(symbol=raw, error=reason) for raw, reason in failures]
-        built = _fetch_concurrently(
-            pending,
-            lambda s: self._comparison_row(s, period, risk_free_rate),
-            COMPARE_MAX_WORKERS,
-        )
+        bills: _Bills = None
+        built: list[TickerComparisonRow | ComparisonError] = []
+        if pending:
+            # Started alongside the rows; each row waits for it only after its own bars.
+            with ThreadPoolExecutor(max_workers=1) as bill_pool:
+                bills_future = bill_pool.submit(self._bills_for, period, risk_free_rate)
+                built = _fetch_concurrently(
+                    pending,
+                    lambda s: self._comparison_row(s, period, risk_free_rate, bills_future),
+                    COMPARE_MAX_WORKERS,
+                )
+                bills = bills_future.result()
         rows = [r for r in built if isinstance(r, TickerComparisonRow)]
         errors.extend(r for r in built if isinstance(r, ComparisonError))
         base_currency = next((row.currency for row in rows if row.currency), None)
         for row in rows:
             row.currency_differs = row.currency is not None and row.currency != base_currency
+        table_rate = _table_risk_free(risk_free_rate, bills)
         return TickerComparison(
             period=period,
             risk_free_rate=risk_free_rate,
+            risk_free_rate_source=table_rate.source,
+            risk_free_rate_note=table_rate.note,
             base_currency=base_currency,
             mixed_currencies=any(row.currency_differs for row in rows),
             rows=rows,
@@ -485,18 +515,22 @@ class YFinanceClient:
         )
 
     def _comparison_row(
-        self, symbol: str, period: str, risk_free_rate: float
+        self,
+        symbol: str,
+        period: str,
+        risk_free_rate: float | None,
+        bills: Future[_Bills],
     ) -> TickerComparisonRow | ComparisonError:
         """One ticker's row, or the reason it has none.
 
-        Performance is the row's backbone: without it there is nothing to compare, so a
-        history failure becomes a ComparisonError. Valuation metrics are supplementary, so a
-        metrics failure leaves the row in place with those fields null and the reason in
-        metrics_error -- dropping a whole row because Yahoo's ``info`` blipped would lose the
-        return figures that did arrive.
+        A history failure becomes a ComparisonError, since without performance there is
+        nothing to compare. Valuation metrics are supplementary: a metrics failure keeps
+        the row, with those fields null and the reason in metrics_error.
         """
         try:
-            perf = self._compute_performance(symbol, period, risk_free_rate)
+            bars = self._all_bars(symbol, period, "1d")
+            risk_free = _risk_free_over(risk_free_rate, bills.result(), bars[0].date, bars[-1].date)
+            perf = _performance(symbol, period, bars, risk_free)
         except DataUnavailable as exc:
             return ComparisonError(symbol=symbol, error=str(exc))
         metrics: KeyMetrics | None = None
@@ -520,6 +554,9 @@ class YFinanceClient:
             sortino_ratio=perf.sortino_ratio,
             calmar_ratio=perf.calmar_ratio,
             periods_per_year=perf.periods_per_year,
+            risk_free_rate=perf.risk_free_rate,
+            risk_free_rate_source=perf.risk_free_rate_source,
+            risk_free_rate_note=perf.risk_free_rate_note,
             trailing_pe=metrics.trailing_pe if metrics else None,
             forward_pe=metrics.forward_pe if metrics else None,
             price_to_book=metrics.price_to_book if metrics else None,
@@ -581,11 +618,9 @@ class YFinanceClient:
     def _statement_currency(self, symbol: str, ticker: Any) -> str | None:
         """The currency a statement is reported in, cached per symbol.
 
-        It comes from ``.info``, a different Yahoo endpoint than the statement itself, and
-        is the same for all six statement/period combinations — so it is cached under its
-        own key rather than re-requested per statement against a rate-limited source.
-        Best-effort: a failed read leaves the statement unlabelled instead of failing it,
-        and is NOT cached, because a rate limit says nothing about the reporting currency.
+        It comes from ``.info``, a separate Yahoo endpoint shared by all six statements, so
+        it has its own cache key. Best-effort: a failed read leaves the statement
+        unlabelled rather than failing it, and is not cached.
         """
         try:
             return self._cached(
@@ -711,30 +746,67 @@ class YFinanceClient:
             ("news", symbol, str(count)),
             self._history_ttl,
             lambda: self._fetch_news(symbol, count),
+            # Unflagged news from an identity OUTAGE is retried, not pinned; a symbol Yahoo
+            # simply has no name for is a lasting answer and is cached like any other.
+            cacheable=lambda result: result.relevance_check != "unavailable",
         )
 
     def _fetch_news(self, symbol: str, count: int) -> NewsResult:
+        # The identity behind the relevance flags is an independent request.
+        (articles, source), identity = _in_parallel(
+            lambda: self._news_articles(symbol, count),
+            lambda: self._identity_or_gap(symbol),
+        )
+        check, note = _flag_mentions(articles, symbol, identity)
+        return NewsResult(
+            symbol=symbol,
+            articles=articles,
+            source=source,
+            relevance_check=check,
+            relevance_note=note,
+        )
+
+    def _news_articles(self, symbol: str, count: int) -> tuple[list[NewsArticle], NewsSource]:
         with _unavailable_on_error(f"Failed to fetch news for '{symbol}'"):
             items = self._ticker(symbol).get_news(count=count, tab="news")
         if not items:
-            # An empty stream is ambiguous: yfinance turns a 500 from the news endpoint into
-            # an empty list, so an outage is indistinguishable from a symbol with no
-            # coverage. Cross-check against search rather than reporting "no recent news",
-            # which the model would read as "no catalysts" and put in a research note.
-            return NewsResult(
-                symbol=symbol, articles=self._search_news(symbol, count), source="search"
-            )
+            # Ambiguous: yfinance turns a 500 from the news endpoint into an empty list.
+            # Cross-check search rather than report "no recent news", which the model
+            # would read as "no catalysts".
+            return self._search_news(symbol, count), "search"
         with _unavailable_on_error(f"Failed to parse news for '{symbol}'"):
             articles = [a for a in (_news_article(it) for it in items) if a is not None][:count]
-            return NewsResult(symbol=symbol, articles=articles, source="ticker")
+        return articles, "ticker"
+
+    def _identity_or_gap(self, symbol: str) -> _Identity | _IdentityGap:
+        """The symbol's instrument type and names, or why Yahoo could not supply them.
+
+        Only the relevance flags depend on this, so a failure degrades them to null rather
+        than failing the news call. SymbolNotFound (no info, or no name in it) is a lasting
+        answer about the symbol; any other DataUnavailable is an outage worth retrying.
+        """
+        try:
+            return self._cached(
+                ("identity", symbol), self._fundamentals_ttl, lambda: self._fetch_identity(symbol)
+            )
+        except SymbolNotFound as exc:
+            return _IdentityGap(str(exc), lasting=True)
+        except DataUnavailable as exc:
+            return _IdentityGap(str(exc), lasting=False)
+
+    def _fetch_identity(self, symbol: str) -> _Identity:
+        _, info = self._ticker_with_info(symbol, "company identity", "identity")
+        return _Identity(
+            quote_type=info.get("quoteType"),
+            long_name=info.get("longName"),
+            short_name=info.get("shortName"),
+        )
 
     def _search_news(self, symbol: str, count: int) -> list[NewsArticle]:
-        """News for `symbol` from the search endpoint, or none if it cannot supply any.
+        """News for ``symbol`` from the search endpoint, or none if it cannot supply any.
 
-        Only reached when the ticker news stream came back empty. A failure here is
-        swallowed deliberately: the primary call already succeeded with "no news", so the
-        worst case is the empty result the caller would have returned anyway, and raising
-        would turn a symbol with genuinely no coverage into an error.
+        A failure is swallowed deliberately: the ticker stream already answered "no news",
+        so raising would turn a symbol with genuinely no coverage into an error.
         """
         try:
             found = self._search(symbol, max_results=1, news_count=count, lists_count=0).news
@@ -783,24 +855,190 @@ def _normalize_batch(symbols: list[str]) -> tuple[list[str], list[tuple[str, str
 def _fetch_concurrently[T](
     items: list[str], fetch: Callable[[str], T], max_workers: int
 ) -> list[T]:
-    """Run ``fetch`` over ``items`` in parallel, preserving input order.
-
-    Independent single-symbol lookups have no reason to serialize. ``pool.map`` keeps the
-    results in request order so callers can pair them back up positionally.
-    """
+    """Run ``fetch`` over ``items`` in parallel, returning results in input order."""
     if not items:
         return []
     with ThreadPoolExecutor(max_workers=min(max_workers, len(items))) as pool:
         return list(pool.map(fetch, items))
 
 
-def _elapsed_days(start: str, end: str) -> int:
-    """Calendar days between two PriceBar dates.
+def _performance(
+    symbol: str, period: str, bars: list[PriceBar], risk_free: _RiskFree
+) -> PerformanceStats:
+    """Return and risk statistics for ``bars``, with the rate-dependent set at ``risk_free``."""
+    if len(bars) < 2:
+        raise DataUnavailable(f"Not enough price history to compute performance for '{symbol}'.")
+    closes = [b.close for b in bars]
+    # Annualize off calendar time, not the bar count: bars per year depends on the
+    # trading calendar (~252 weekday, ~365 for crypto).
+    elapsed_days = _elapsed_days(bars[0].date, bars[-1].date)
+    annualized_return: float | None = None
+    annualized_volatility: float | None = None
+    periods_per_year: float | None = None
+    # The risk-adjusted figures need periods_per_year (Calmar the CAGR), so they share
+    # the annualization gate; Sharpe, Sortino and downside also need a rate.
+    sharpe: float | None = None
+    sortino: float | None = None
+    downside: float | None = None
+    calmar: float | None = None
+    max_drawdown = analytics.max_drawdown(closes)
+    if elapsed_days >= MIN_ANNUALIZATION_DAYS:
+        years = elapsed_days / analytics.DAYS_PER_YEAR
+        periods_per_year = analytics.infer_periods_per_year(len(bars), years)
+        annualized_return = analytics.annualized_return(closes, years)
+        annualized_volatility = analytics.annualized_volatility(closes, periods_per_year)
+        if risk_free.rate is not None:
+            sharpe = analytics.sharpe_ratio(closes, periods_per_year, risk_free.rate)
+            sortino = analytics.sortino_ratio(closes, periods_per_year, risk_free.rate)
+            downside = analytics.downside_deviation(closes, periods_per_year, risk_free.rate)
+        calmar = analytics.calmar_ratio(annualized_return, max_drawdown)
+    return PerformanceStats(
+        symbol=symbol,
+        period=period,
+        bars=len(bars),
+        start_date=bars[0].date,
+        end_date=bars[-1].date,
+        total_return_percent=analytics.total_return(closes),
+        annualized_return_percent=annualized_return,
+        annualized_volatility_percent=annualized_volatility,
+        periods_per_year=periods_per_year,
+        max_drawdown_percent=max_drawdown,
+        risk_free_rate=risk_free.rate,
+        risk_free_rate_source=risk_free.source,
+        risk_free_rate_note=risk_free.note,
+        sharpe_ratio=sharpe,
+        sortino_ratio=sortino,
+        downside_deviation_percent=downside,
+        calmar_ratio=calmar,
+        sma_50=analytics.sma(closes, SMA_SHORT_WINDOW),
+        sma_200=analytics.sma(closes, SMA_LONG_WINDOW),
+    )
 
-    Parses via ``datetime.fromisoformat`` rather than ``date.fromisoformat`` so it accepts
-    both a bare date ("2024-01-01") and a full intraday timestamp with offset.
+
+_HOW_TO_PROCEED = (
+    "Pass risk_free_rate explicitly to get the rate-dependent figures (0 gives raw "
+    "return per unit of risk)."
+)
+
+
+def _bills_fetch_failed(reason: str) -> _RiskFree:
+    """No default rate because the T-bill history could not be fetched: worth a retry."""
+    return _RiskFree(
+        None,
+        "unavailable",
+        f"The 13-week T-bill yield ({TREASURY_BILL_SYMBOL}) could not be fetched: {reason}. "
+        f"{_HOW_TO_PROCEED}",
+        retryable=True,
+    )
+
+
+def _table_risk_free(risk_free_rate: float | None, bills: _Bills) -> _RiskFree:
+    """compare_tickers' header: the caller's rate, or whether the one T-bill fetch worked.
+
+    Window coverage is judged per row, so a header over a successful fetch says
+    "treasury_bill" and leaves any row-level gap to that row's own source and note.
     """
-    return (datetime.fromisoformat(end).date() - datetime.fromisoformat(start).date()).days
+    if risk_free_rate is not None:
+        return _RiskFree(risk_free_rate, "caller")
+    if isinstance(bills, str):
+        return _bills_fetch_failed(bills)
+    return _RiskFree(None, "treasury_bill")
+
+
+def _rate_key(risk_free_rate: float | None) -> str:
+    """Cache-key component: the caller's rate, or a marker for the T-bill default."""
+    return "treasury_bill" if risk_free_rate is None else str(risk_free_rate)
+
+
+def _risk_free_over(risk_free_rate: float | None, bills: _Bills, start: str, end: str) -> _RiskFree:
+    """The caller's rate, else the mean effective T-bill rate over ``start``..``end``.
+
+    The window average, not today's yield: a Sharpe over 2021-2026 measured against a 4%
+    hurdle would charge the years when bills paid nothing as if they had paid 4%. The
+    history must reach both ends of the window (within a holiday's tolerance), since
+    averaging only part of it would misstate the cash return foregone.
+    """
+    if risk_free_rate is not None:
+        return _RiskFree(risk_free_rate, "caller")
+    # With no rate given, _bills_for always fetched: bills is the history or its error.
+    if not isinstance(bills, list):
+        return _bills_fetch_failed(str(bills))
+    first_day, last_day = _day(start), _day(end)
+    inside = [b for b in bills if first_day <= _day(b.date) <= last_day]
+    tolerance = RISK_FREE_EDGE_TOLERANCE_DAYS
+    if (
+        not inside
+        or (_day(inside[0].date) - first_day).days > tolerance
+        or (last_day - _day(inside[-1].date)).days > tolerance
+    ):
+        return _RiskFree(
+            None,
+            "unavailable",
+            f"The 13-week T-bill history ({TREASURY_BILL_SYMBOL}) covers {bills[0].date} to "
+            f"{bills[-1].date}, which does not span the measured window {start} to {end}. "
+            f"{_HOW_TO_PROCEED}",
+        )
+    try:
+        rates = [analytics.treasury_bill_effective_rate(b.close) for b in inside]
+    except InvalidInput as exc:
+        return _RiskFree(
+            None,
+            "unavailable",
+            f"The 13-week T-bill history ({TREASURY_BILL_SYMBOL}) has an implausible "
+            f"quote: {exc} {_HOW_TO_PROCEED}",
+        )
+    return _RiskFree(statistics.fmean(rates), "treasury_bill")
+
+
+def _day(timestamp: str) -> date:
+    """The calendar date of a PriceBar date or intraday timestamp.
+
+    ``datetime.fromisoformat`` rather than ``date.fromisoformat``: only it accepts both a
+    bare date ("2024-01-01") and a timestamp with an offset.
+    """
+    return datetime.fromisoformat(timestamp).date()
+
+
+def _in_parallel[A, B](first: Callable[[], A], second: Callable[[], B]) -> tuple[A, B]:
+    """Run two independent blocking fetches at once; either one's exception propagates.
+
+    If both fail, the first error is raised with the second attached as a note, so
+    neither is lost.
+    """
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first_future = pool.submit(first)
+        second_future = pool.submit(second)
+        try:
+            first_result = first_future.result()
+        except Exception as exc:
+            second_error = second_future.exception()
+            if second_error is not None:
+                exc.add_note(f"The fetch run alongside it also failed: {second_error!r}")
+            raise
+        return first_result, second_future.result()
+
+
+def _flag_mentions(
+    articles: list[NewsArticle], symbol: str, identity: _Identity | _IdentityGap
+) -> tuple[RelevanceCheck, str | None]:
+    """Set each article's mentions_company; say whether that could be assessed, and why not."""
+    if isinstance(identity, _IdentityGap):
+        return ("no_company_name" if identity.lasting else "unavailable"), identity.reason
+    # Only a company has a name a headline can omit; for an ETF, index, fund, coin or
+    # currency pair the market-wide stories are the relevant ones.
+    if identity.quote_type != "EQUITY":
+        return "not_an_equity", None
+    names = relevance.company_aliases(identity.long_name, identity.short_name)
+    symbols = relevance.symbol_aliases(symbol)
+    for article in articles:
+        text = f"{article.title} {article.summary or ''}"
+        article.mentions_company = relevance.mentions_company(text, names, symbols)
+    return "applied", None
+
+
+def _elapsed_days(start: str, end: str) -> int:
+    """Calendar days between two PriceBar dates."""
+    return (_day(end) - _day(start)).days
 
 
 def _label_key(label: str) -> str:
@@ -811,10 +1049,9 @@ def _label_key(label: str) -> str:
 def _filter_line_items(full: FinancialStatement, requested: list[str]) -> FinancialStatement:
     """Narrow a statement to the requested labels, reporting whatever did not match.
 
-    Labels are matched on _label_key, so 'total revenue' finds 'Total Revenue' (the exact
-    Yahoo spelling is easy to get almost right). Anything still unmatched is reported in
-    missing_line_items with close-match suggestions and the full label list, instead of
-    being dropped silently and leaving the caller to wonder why the statement is short.
+    Labels match case- and whitespace-insensitively ('total revenue' finds 'Total
+    Revenue'). Unmatched ones are reported in missing_line_items with close-match
+    suggestions and the full label list, rather than dropped silently.
     """
     available = list(full.line_items)
     by_key = {_label_key(label): label for label in available}
@@ -852,20 +1089,15 @@ def _read_statement_currency(ticker: Any) -> str | None:
 def _bar_date(idx: Any, intraday: bool) -> str:
     """Format a bar's index value.
 
-    Intraday bars are moments, so they keep the clock time and the exchange's UTC offset
-    (2026-09-25T09:35:00-04:00). Daily and longer bars are whole sessions indexed at
-    midnight in the exchange's timezone, so they stay date-only — emitting the timestamp
-    would imply a trade time, and normalizing it to UTC would shift the calendar date.
+    Intraday bars keep the clock time and the exchange's UTC offset. Daily and longer bars
+    are sessions indexed at exchange-local midnight, so they stay date-only: a timestamp
+    would imply a trade time, and converting it to UTC would shift the calendar date.
     """
     return str(idx.isoformat() if intraday else idx.date().isoformat())
 
 
 def _norm(symbol: str) -> str:
-    """Normalize a ticker so equivalent spellings share one cache entry and one fetch.
-
-    Yahoo symbols are upper-case; callers routinely pass 'aapl' or 'AAPL '. Normalizing
-    here (before the cache key is built) is also what makes the echoed symbol canonical.
-    """
+    """Upper-case and strip a ticker, so equivalent spellings share one cache entry."""
     normalized = symbol.strip().upper()
     if not normalized:
         raise SymbolNotFound("Empty ticker symbol.")
@@ -893,9 +1125,8 @@ def _is_no_data_error(exc: Exception) -> bool:
 def _data_error(exc: Exception, fetch_label: str, kind: str, symbol: str) -> DataUnavailable:
     """Classify a raw fetch failure as a missing symbol or an unavailable source.
 
-    A connection reset, DNS failure, timeout, HTTP 5xx, rate limit or malformed payload
-    says nothing about the symbol, so it stays a DataUnavailable carrying the underlying
-    message; only the no-data signals become SymbolNotFound.
+    Only the no-data signals become SymbolNotFound: a transport failure, rate limit or
+    malformed payload says nothing about the symbol.
     """
     if _is_no_data_error(exc):
         return SymbolNotFound(_no_data_msg(kind, symbol))
@@ -904,11 +1135,7 @@ def _data_error(exc: Exception, fetch_label: str, kind: str, symbol: str) -> Dat
 
 @contextmanager
 def _unavailable_on_error(message: str) -> Iterator[None]:
-    """Re-raise any failure in the block as DataUnavailable("<message>: <error>").
-
-    yfinance and the payloads it returns fail in more ways than can be enumerated, so the
-    underlying error text is passed on for the caller to read.
-    """
+    """Re-raise any failure in the block as DataUnavailable("<message>: <error>")."""
     try:
         yield
     except Exception as exc:
@@ -949,11 +1176,10 @@ def _symbol_match(q: dict[str, Any]) -> SymbolMatch:
 
 
 def _search_news_article(item: dict[str, Any]) -> NewsArticle | None:
-    """Parse the FLAT news shape the search endpoint returns.
+    """Parse the flat news shape the search endpoint returns.
 
-    Distinct from :func:`_news_article`: the fields sit at the top level rather than under
-    ``content``, the timestamp is unix seconds rather than an ISO string, and there is no
-    summary at all - which is reported as null rather than filled in from the title.
+    Unlike :func:`_news_article`'s, the fields sit at the top level, the timestamp is unix
+    seconds, and there is no summary (reported as null, not filled from the title).
     """
     title = item.get("title")
     if not title:

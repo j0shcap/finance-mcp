@@ -45,7 +45,7 @@ def test_analyze_performance_reports_risk_adjusted_stats() -> None:
     closes = [100.0 + i for i in range(120)]  # 120 calendar days: past the annualization gate
     p = make_client(
         factory=fake_ticker_factory(history_df=make_history_df(closes))
-    ).analyze_performance("AAPL", "6mo")
+    ).analyze_performance("AAPL", "6mo", risk_free_rate=0.0)
     assert p.periods_per_year is not None
     assert p.risk_free_rate == 0.0
     assert p.sharpe_ratio == pytest.approx(analytics.sharpe_ratio(closes, p.periods_per_year, 0.0))
@@ -57,7 +57,7 @@ def test_analyze_performance_reports_risk_adjusted_stats() -> None:
 def test_analyze_performance_risk_free_rate_is_echoed_and_applied() -> None:
     closes = [100.0 + (i % 7) - (i % 3) + i * 0.2 for i in range(120)]
     client = make_client(factory=fake_ticker_factory(history_df=make_history_df(closes)))
-    raw = client.analyze_performance("AAPL", "6mo")
+    raw = client.analyze_performance("AAPL", "6mo", risk_free_rate=0.0)
     excess = client.analyze_performance("AAPL", "6mo", risk_free_rate=0.05)
     assert excess.risk_free_rate == 0.05
     assert raw.sharpe_ratio is not None and excess.sharpe_ratio is not None
@@ -76,7 +76,6 @@ def test_analyze_performance_computes_calmar_from_its_own_figures() -> None:
 
 
 def test_analyze_performance_nulls_risk_adjusted_stats_on_a_short_window() -> None:
-    """Every risk-adjusted figure needs periods_per_year, which a short window lacks."""
     p = make_client(
         factory=fake_ticker_factory(history_df=make_history_df([100.0, 101.0, 99.0, 103.0]))
     ).analyze_performance("AAPL", "5d", risk_free_rate=0.05)
@@ -89,7 +88,7 @@ def test_analyze_performance_nulls_risk_adjusted_stats_on_a_short_window() -> No
 
 
 def test_analyze_performance_rejects_a_risk_free_rate_of_minus_one() -> None:
-    """The tool bounds this, but the data layer is reachable directly."""
+    # The tool bounds this, but the data layer is reachable directly.
     client = make_client(
         factory=fake_ticker_factory(history_df=make_history_df([100.0 + i for i in range(120)]))
     )
@@ -103,12 +102,9 @@ def _perf_stats(closes: list[float], **df_kw: Any) -> PerformanceStats:
 
 
 def test_analyze_performance_one_year_annualized_equals_total_return() -> None:
-    """366 seven-day-a-week bars spanning one calendar year, as for BTC-USD.
-
-    The tolerance is not slop: 365 elapsed days is 365/365.25 = 0.99932 years, so the CAGR
-    exponent is 1.000685 and the figures differ in the 4th significant digit. Exact
-    equality at years=1.0 is pinned in test_analytics_logic.py.
-    """
+    # 366 daily bars, as for BTC-USD. The tolerance is not slop: 365 elapsed days is
+    # 0.99932 years, so the figures differ in the 4th significant digit. Exact equality at
+    # years=1.0 is pinned in test_analytics_logic.py.
     closes = [100.0 * (0.7702 ** (i / 365)) for i in range(366)]
     p = _perf_stats(closes)
     assert p.bars == 366
@@ -188,11 +184,8 @@ def test_analyze_performance_does_not_annualize_below_the_threshold() -> None:
 
 
 def test_analyze_performance_annualizes_the_shortest_three_month_window() -> None:
-    """A 3mo window must annualize whatever the call date.
-
-    Depending on the date, period="3mo" spans 87-95 elapsed days between the first and last
-    bar; 88 bars = 87 elapsed days is the shortest.
-    """
+    # period="3mo" spans 87-95 elapsed days depending on the call date; 88 daily bars is
+    # the shortest.
     p = _perf_stats([100.0 + i for i in range(88)])
     assert p.annualized_return_percent is not None
     assert p.annualized_volatility_percent is not None
@@ -232,8 +225,9 @@ def test_repeated_analysis_of_an_oversized_history_does_not_refetch() -> None:
     # would go back to the network. The derived result is tiny; cache that instead.
     factory, calls = _counting_history([100.0 + i for i in range(MAX_CACHEABLE_BARS + 1)])
     client = make_client(factory)
-    first = client.analyze_performance("AAPL", "max")
-    second = client.analyze_performance("AAPL", "max")
+    # An explicit rate keeps the count about the asset's bars, not the T-bill history.
+    first = client.analyze_performance("AAPL", "max", 0.0)
+    second = client.analyze_performance("AAPL", "max", 0.0)
     assert len(calls) == 1
     assert first.total_return_percent == second.total_return_percent
 
@@ -252,7 +246,7 @@ def test_analyze_performance_and_get_price_history_share_one_fetch(history_first
     client = make_client(factory)
     if history_first:
         client.get_price_history("AAPL", period="6mo", interval="1d")
-    client.analyze_performance("AAPL", "6mo")
+    client.analyze_performance("AAPL", "6mo", 0.0)
     client.get_price_history("AAPL", period="6mo", interval="1d")
     assert len(calls) == 1
 
@@ -283,22 +277,21 @@ def test_analyze_performance_caches_within_ttl_and_keys_on_period() -> None:
     factory, calls = _counting_history([100.0, 110.0, 99.0])
     clock = FakeClock()
     client = make_client(factory, clock=clock, history_ttl=300.0)
-    client.analyze_performance("AAPL", "1mo")
-    client.analyze_performance("AAPL", "1mo")
+    client.analyze_performance("AAPL", "1mo", 0.0)
+    client.analyze_performance("AAPL", "1mo", 0.0)
     assert len(calls) == 1
-    client.analyze_performance("AAPL", "1y")
+    client.analyze_performance("AAPL", "1y", 0.0)
     assert len(calls) == 2
     clock.advance(301.0)
-    client.analyze_performance("AAPL", "1mo")
+    client.analyze_performance("AAPL", "1mo", 0.0)
     assert len(calls) == 3
 
 
 def test_analyze_performance_cache_keys_on_the_risk_free_rate() -> None:
-    """A second call at a different rate recomputes rather than replaying the first result."""
     df = make_history_df([100.0 + i for i in range(300)])
     client = make_client(factory=fake_ticker_factory(history_df=df))
 
-    raw = client.analyze_performance("AAPL", "1y")
+    raw = client.analyze_performance("AAPL", "1y", 0.0)
     excess = client.analyze_performance("AAPL", "1y", 0.05)
 
     assert raw.risk_free_rate == 0.0
@@ -306,7 +299,7 @@ def test_analyze_performance_cache_keys_on_the_risk_free_rate() -> None:
     assert raw.sharpe_ratio is not None and excess.sharpe_ratio is not None
     assert excess.sharpe_ratio < raw.sharpe_ratio
     # And the first rate is still served from cache rather than recomputed differently.
-    assert client.analyze_performance("AAPL", "1y").sharpe_ratio == raw.sharpe_ratio
+    assert client.analyze_performance("AAPL", "1y", 0.0).sharpe_ratio == raw.sharpe_ratio
 
 
 def test_analyze_performance_sma_200_populated() -> None:

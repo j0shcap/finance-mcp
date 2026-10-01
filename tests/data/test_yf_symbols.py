@@ -4,7 +4,7 @@ import pytest
 
 from finance_mcp.data.errors import SymbolNotFound
 from tests.fakes import (
-    INCOME,
+    INCOME_WITH_NAN,
     QUOTE_FI,
     counting,
     fake_ticker_factory,
@@ -16,7 +16,6 @@ from tests.fakes import (
 
 
 def test_symbols_are_normalized_before_caching_and_echoed_normalized() -> None:
-    """'aapl' and ' AAPL ' name the same instrument, so they must share one cache entry."""
     factory, calls = counting(fake_ticker_factory(fast_info=QUOTE_FI))
     client = make_client(factory)
     lower = client.get_quote(["aapl"]).quotes
@@ -42,7 +41,9 @@ def test_profile_metrics_analyst_news_and_performance_normalize_symbol() -> None
         info=info,
         history_df=df,
         news=[make_news_item("Hi")],
-        financials={"income_stmt": make_financials_df(INCOME, ["2024-09-30", "2023-09-30"])},
+        financials={
+            "income_stmt": make_financials_df(INCOME_WITH_NAN, ["2024-09-30", "2023-09-30"])
+        },
     )
     client = make_client(factory=factory)
     assert client.get_company_profile(" aapl ").symbol == "AAPL"

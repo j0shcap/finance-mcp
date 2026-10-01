@@ -3,9 +3,13 @@
 import inspect
 import json
 import math
+from typing import Any
 
 import pytest
 from fastmcp import Client
+from fastmcp.client.client import CallToolResult
+from fastmcp.client.transports import FastMCPTransport
+from mcp.types import TextContent
 from pydantic import BaseModel
 
 from finance_mcp.data import models
@@ -15,8 +19,7 @@ from finance_mcp.data.models import (
     PriceBar,
     round_significant,
 )
-from finance_mcp.server import create_server
-from tests.fakes import QUOTE_FI, fake_ticker_factory, make_client, make_history_df
+from tests.fakes import QUOTE_FI, connect, fake_ticker_factory, make_history_df
 
 # Yahoo's prices are float32 values widened to float64, so the digits past the 7th are
 # conversion noise: float32(316.98) is 316.9800109863281.
@@ -38,6 +41,13 @@ CALCULATOR_MODELS = {
     "RateConversionResult",
     "TVMResult",
 }
+
+
+def _text_payload(result: CallToolResult) -> Any:
+    """The JSON a client reads from the result's text content block."""
+    content = result.content[0]
+    assert isinstance(content, TextContent)
+    return json.loads(content.text)
 
 
 def _all_models() -> dict[str, type[BaseModel]]:
@@ -123,25 +133,24 @@ async def test_tool_results_are_rounded_over_the_protocol() -> None:
     factory = fake_ticker_factory(
         fast_info=noisy_quote, history_df=make_history_df([NOISY_PRICE, 330.1401062011719])
     )
-    async with Client(create_server(yf_client=make_client(factory=factory))) as client:
+    async with connect(factory) as client:
         quote = await client.call_tool("get_quote", {"tickers": ["AAPL"]})
         history = await client.call_tool("get_price_history", {"ticker": "AAPL"})
 
-    quote_text = json.loads(quote.content[0].text)
+    quote_text = _text_payload(quote)
     assert quote_text["quotes"][0]["price"] == 316.98
     assert quote_text["quotes"][0]["change"] == 2.830017  # 2.8300170898437...
     assert quote.structured_content is not None
     assert quote.structured_content["quotes"][0]["price"] == 316.98
 
-    bars = json.loads(history.content[0].text)["bars"]
+    bars = _text_payload(history)["bars"]
     assert [bar["close"] for bar in bars] == [316.98, 330.1401]
 
 
-async def test_calculator_results_keep_full_precision() -> None:
-    async with Client(create_server()) as client:
-        result = await client.call_tool(
-            "bond_price", {"face": 1000, "coupon_rate": 0.05, "years_to_maturity": 10, "ytm": 0.06}
-        )
-    price = json.loads(result.content[0].text)["price"]
+async def test_calculator_results_keep_full_precision(client: Client[FastMCPTransport]) -> None:
+    result = await client.call_tool(
+        "bond_price", {"face": 1000, "coupon_rate": 0.05, "years_to_maturity": 10, "ytm": 0.06}
+    )
+    price = _text_payload(result)["price"]
     assert price == pytest.approx(925.6126256977221, rel=1e-15)
     assert price != round_significant(price)
