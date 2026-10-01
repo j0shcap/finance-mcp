@@ -1,6 +1,7 @@
 [project]
 name = "mcp-finance"
-version = "0.4.2"
+# From the git tag (hatch-vcs): vX.Y.Z builds X.Y.Z, anything after it X.Y.(Z+1).devN+g<sha>.
+dynamic = ["version"]
 description = "An MCP server providing finance tools: a yfinance wrapper, computed analytics, and financial calculators."
 readme = "README.md"
 requires-python = ">=3.13"
@@ -73,8 +74,21 @@ dev = [
 ]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs>=0.5"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.version.raw-options]
+# A source tree without git metadata (e.g. a git archive) builds 0.0.0 rather than failing;
+# the release workflow refuses any build whose version isn't exactly the tag.
+fallback_version = "0.0.0"
+
+[tool.uv]
+# The version comes from git, so rebuild the editable install when HEAD or the tags move;
+# otherwise the dev environment reports whatever version it was first installed at.
+cache-keys = [{ file = "pyproject.toml" }, { git = { commit = true, tags = true } }]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/finance_mcp"]
