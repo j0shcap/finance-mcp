@@ -92,3 +92,17 @@ def test_settings_reject_a_negative_cache_ttl(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setenv("FINANCE_MCP_QUOTE_CACHE_TTL_SECONDS", "-1")
     with pytest.raises(ValidationError):
         get_settings()
+
+
+def test_main_runs_without_the_fastmcp_banner(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The banner is the one thing the server writes on every launch, into the client's log,
+    and it comes with a PyPI update check whose advice ("pip install --upgrade fastmcp")
+    would step outside the fastmcp<4 range pyproject pins."""
+    kwargs_seen: list[dict[str, object]] = []
+
+    def fake_run(self: FastMCP, *args: object, **kwargs: object) -> None:
+        kwargs_seen.append(kwargs)
+
+    monkeypatch.setattr(FastMCP, "run", fake_run)
+    main()
+    assert kwargs_seen == [{"show_banner": False}]

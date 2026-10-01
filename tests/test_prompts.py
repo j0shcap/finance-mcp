@@ -8,7 +8,12 @@ from fastmcp.client.transports import FastMCPTransport
 from mcp.shared.exceptions import McpError
 from mcp.types import TextContent
 
-from finance_mcp.conventions import CALCULATOR_CONVENTIONS, CONVENTIONS_URI, UNITS_GLOSSARY
+from finance_mcp.conventions import (
+    CALCULATOR_CONVENTIONS,
+    CONVENTIONS_URI,
+    CROSS_LISTING_RULE,
+    UNITS_GLOSSARY,
+)
 from finance_mcp.prompts._render import DISCLAIMER
 from finance_mcp.tools._inputs import MAX_COMPARE_TICKERS
 
@@ -546,3 +551,45 @@ async def test_compare_stocks_ranks_honestly(client: Client[FastMCPTransport]) -
     assert '"insufficient data" bucket - not last place' in text
     assert "call it a tie" in text
     assert "what would change its rank" in text
+
+
+# --- cross-listings: which "ratios" survive two currencies --------------------------
+
+
+#: Price multiples Yahoo computes across the quote and reporting currencies for a
+#: cross-listing. Exploratory QA (2026-09-30): TM's P/S came back 0.004 (real ~0.6), SAP's
+#: EV/EBITDA 288 (real ~18), TSM's P/B 94 (real ~7) - while P/E held up.
+CROSS_CURRENCY_FIELDS = (
+    "price_to_sales",
+    "price_to_book",
+    "enterprise_value",
+    "ev_to_ebitda",
+    "ev_to_revenue",
+)
+
+
+@pytest.mark.parametrize("field", CROSS_CURRENCY_FIELDS)
+def test_glossary_warns_that_cross_listing_price_multiples_mix_currencies(field: str) -> None:
+    assert field in CROSS_LISTING_RULE
+    assert CROSS_LISTING_RULE in UNITS_GLOSSARY
+
+
+def test_glossary_no_longer_claims_enterprise_value_is_in_the_quote_currency() -> None:
+    """It is not, for a cross-listing: TM's 3.5e13 is neither JPY nor USD."""
+    assert "enterprise_value and the EPS" not in UNITS_GLOSSARY
+
+
+@pytest.mark.parametrize(
+    ("name", "args"),
+    [("analyze_stock", {"ticker": "TM"}), ("compare_stocks", {"tickers": "TM, HMC, F, GM"})],
+)
+async def test_peer_prompts_do_not_send_cross_listings_to_their_cross_currency_ratios(
+    client: Client[FastMCPTransport], name: str, args: dict[str, str]
+) -> None:
+    """They said only that a cross-listing's absolute amounts were inconsistent, leaving
+    "compare on ratios" to point the model at exactly the ratios that are wrong."""
+    text = await _render(client, name, args)
+    assert "rank it on P/E, PEG and the margins only" in text
+    assert "price_to_sales, price_to_book and EV multiples" in text
+    assert "absolute amounts are internally inconsistent" not in text
+    assert "absolute amounts are not internally consistent" not in text

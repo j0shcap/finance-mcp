@@ -468,17 +468,17 @@ class KeyMetrics(MarketData):
     """Valuation / profitability / leverage ratios as reported by Yahoo. Units vary by field.
 
     Absolute amounts are NOT all in one currency: the financialData figures (total debt/cash,
-    free cash flow, EBITDA) are in ``financial_currency``, while the market-derived enterprise
-    value is in ``currency``. When the two differ (ADRs and other cross-listings) Yahoo's
-    derived per-share figures can also be internally inconsistent, so compare such companies
-    on the ratios rather than on absolute amounts.
+    free cash flow, EBITDA) are in ``financial_currency``, the EPS fields in ``currency``. When
+    the two differ (ADRs and other cross-listings) Yahoo computes the price multiples and
+    enterprise value across both currencies, so those are unreliable; see
+    ``conventions.CROSS_LISTING_RULE`` for what such a company can be compared on.
     """
 
     symbol: str = Field(description="Ticker symbol.")
     currency: str | None = Field(
         default=None,
         description="Quote currency (ISO 4217, e.g. 'USD') the shares trade in; the unit for "
-        "enterprise_value and the EPS fields.",
+        "the EPS fields.",
     )
     financial_currency: str | None = Field(
         default=None,
@@ -489,18 +489,31 @@ class KeyMetrics(MarketData):
     )
     trailing_pe: float | None = Field(default=None, description="Trailing P/E ratio.")
     forward_pe: float | None = Field(default=None, description="Forward P/E ratio.")
-    price_to_book: float | None = Field(default=None, description="Price/book ratio.")
-    price_to_sales: float | None = Field(default=None, description="Price/sales (TTM) ratio.")
+    price_to_book: float | None = Field(
+        default=None,
+        description="Price/book ratio. Unreliable for a cross-listing (financial_currency != "
+        "currency): Yahoo divides the listed price by book value in another currency.",
+    )
+    price_to_sales: float | None = Field(
+        default=None,
+        description="Price/sales (TTM) ratio. Unreliable for a cross-listing: Yahoo divides "
+        "market cap in `currency` by revenue in `financial_currency`.",
+    )
     peg_ratio: float | None = Field(default=None, description="P/E-to-growth ratio.")
     enterprise_value: float | None = Field(
         default=None,
-        description="Enterprise value in `currency` (absolute units). Yahoo derives it from "
-        "market cap, so for cross-listings whose share count and quote currency disagree it can "
-        "be badly wrong - sanity-check it against market_cap + total_debt - total_cash.",
+        description="Enterprise value (absolute units), as Yahoo derives it from market cap "
+        "and the balance sheet. In `currency` for a domestic listing; for a cross-listing it "
+        "mixes both currencies and is badly wrong - recompute it from market cap, total_debt "
+        "and total_cash at a quoted FX rate.",
     )
-    ev_to_ebitda: float | None = Field(default=None, description="Enterprise value / EBITDA ratio.")
+    ev_to_ebitda: float | None = Field(
+        default=None,
+        description="Enterprise value / EBITDA ratio. Unreliable wherever enterprise_value is.",
+    )
     ev_to_revenue: float | None = Field(
-        default=None, description="Enterprise value / revenue ratio."
+        default=None,
+        description="Enterprise value / revenue ratio. Unreliable wherever enterprise_value is.",
     )
     return_on_equity: float | None = Field(
         default=None, description="Return on equity, as a fraction (0.27 = 27%)."
@@ -894,8 +907,8 @@ class TickerComparisonRow(MarketData):
     financial_currency: str | None = Field(
         default=None,
         description="Currency the company reports financials in. Differs from `currency` for "
-        "ADRs and other cross-listings, which makes its absolute amounts and `currency` "
-        "figures inconsistent - prefer ratios for such a row.",
+        "ADRs and other cross-listings, whose price_to_sales, price_to_book and EV multiples "
+        "Yahoo computes across both currencies - rank such a row on P/E, PEG and the margins.",
     )
     currency_differs: bool = Field(
         default=False,
@@ -941,14 +954,26 @@ class TickerComparisonRow(MarketData):
     )
     trailing_pe: float | None = Field(default=None, description="Trailing P/E ratio.")
     forward_pe: float | None = Field(default=None, description="Forward P/E ratio.")
-    price_to_book: float | None = Field(default=None, description="Price/book ratio.")
-    price_to_sales: float | None = Field(default=None, description="Price/sales (TTM) ratio.")
+    price_to_book: float | None = Field(
+        default=None,
+        description="Price/book ratio. Unreliable for a cross-listing (financial_currency != "
+        "currency): Yahoo divides the listed price by book value in another currency.",
+    )
+    price_to_sales: float | None = Field(
+        default=None,
+        description="Price/sales (TTM) ratio. Unreliable for a cross-listing: Yahoo divides "
+        "market cap in `currency` by revenue in `financial_currency`.",
+    )
     peg_ratio: float | None = Field(
         default=None,
         description="P/E-to-growth ratio - the growth-adjusted multiple to rank on, rather "
         "than raw P/E.",
     )
-    ev_to_ebitda: float | None = Field(default=None, description="Enterprise value / EBITDA.")
+    ev_to_ebitda: float | None = Field(
+        default=None,
+        description="Enterprise value / EBITDA. Unreliable for a cross-listing: Yahoo mixes "
+        "both currencies into the enterprise value.",
+    )
     profit_margins: float | None = Field(
         default=None, description="Net profit margin as a FRACTION (0.27 = 27%)."
     )

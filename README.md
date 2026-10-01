@@ -148,3 +148,25 @@ Assertions cover shape and unit plausibility rather than exact values — margin
 `debt_to_equity` and `dividend_yield` as percents, `period_ends` descending — and each tool is
 exercised both through `YFinanceClient` and through an in-process MCP client. Throttling is
 retried and then reported as a skip, so it never reads as a contract failure.
+
+### End-to-end tests
+
+`tests/e2e/` tests the artifact rather than the source: it builds the wheel, installs it into a
+fresh venv and launches the server the three ways a client config can — the `mcp-finance`
+console script, `python -m finance_mcp`, and `uvx --from <wheel> mcp-finance` — then speaks MCP
+to it over stdio. That catches what an in-process client cannot: a broken entry point, a module
+or dependency missing from the wheel, or a stray `print` corrupting the JSON-RPC stream.
+
+```bash
+make e2e   # builds the wheel; needs uv on PATH and access to the package index, not Yahoo
+```
+
+It checks the handshake, every tool's annotations and schemas, every prompt and the
+conventions resource, calls each calculator with a published golden input, and cuts the
+server's network to prove an outage is never reported as an unknown symbol. The Yahoo-backed
+half is also marked `live`, so it runs with `make test-live`. Set `FINANCE_MCP_E2E_WHEEL` to
+test a prebuilt wheel instead of building one.
+
+The calculators are also cross-checked in `make check` against independent implementations
+(`numpy-financial`, `scipy`) with `hypothesis` property tests: TVM round-trips, NPV at the
+IRR, bond price ↔ yield, and loan schedules that amortize to zero.

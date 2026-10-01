@@ -43,8 +43,20 @@ CALCULATOR_TOOLS = (
     "convert_rate",
 )
 
+#: Which get_key_metrics figures survive a cross-listing. Part of the glossary, and the rule the
+#: peer-comparison prompts point at when they say what a cross-listed row can be ranked on.
+CROSS_LISTING_RULE = """\
+- Cross-listings (financial_currency differs from currency, e.g. an ADR): Yahoo computes \
+price_to_sales, price_to_book, enterprise_value, ev_to_ebitda and ev_to_revenue by mixing the \
+quote currency with the reporting currency, and its book_value and revenue_per_share need not be \
+per listed share - so all seven can be off by an exchange rate or an ADR ratio (TM's P/S has come \
+back as 0.004, SAP's EV/EBITDA as 288). Never rank or value a cross-listing on them. Use \
+trailing_pe, forward_pe and peg_ratio (the listed price over EPS per listed share, both in \
+currency) and the margins and returns, which are each within one currency; recompute any other \
+multiple from get_financials, converting with a quoted FX rate (e.g. get_quote on JPY=X)."""
+
 #: Per-field units. Shared verbatim by the resource and the analyze_stock prompt.
-UNITS_GLOSSARY = """\
+UNITS_GLOSSARY = f"""\
 - return_on_equity, return_on_assets, gross_margins, operating_margins, profit_margins, and \
 ebitda_margins are FRACTIONS (0.27 = 27%, 1.41 = 141%) - multiply by 100 for display.
 - debt_to_equity is ALREADY A PERCENT (79.5 means 79.5% ~ 0.80x) - it is NOT 79.5x.
@@ -53,9 +65,10 @@ ebitda_margins are FRACTIONS (0.27 = 27%, 1.41 = 141%) - multiply by 100 for dis
 - P/E, forward P/E, P/B, P/S, PEG, EV/EBITDA, EV/Revenue, current/quick ratio are plain ratios; \
 EV, total debt/cash, FCF, EBITDA are absolute amounts; EPS and book value are per-share.
 - Absolute amounts are not all in one currency: get_key_metrics reports total debt/cash, FCF, \
-EBITDA, revenue per share and book value in financial_currency, while enterprise_value and the EPS \
-fields are in currency (the quote currency). get_financials values are in the statement's currency \
-field. For most US names these are the same; for ADRs and other cross-listings they are not.
+EBITDA, revenue per share and book value in financial_currency, and the EPS fields in currency \
+(the quote currency). get_financials values are in the statement's currency field. For most US \
+names these are the same; for ADRs and other cross-listings they are not.
+{CROSS_LISTING_RULE}
 - analyze_performance runs on auto-adjusted prices, so its returns already include reinvested \
 dividends (~ total return) - do not add the dividend yield on top.
 - analyze_performance annualizes over calendar time, so annualized_return_percent equals \
@@ -92,7 +105,8 @@ quote currency, so a cross-currency pair mixes an FX move into every figure.
 - compare_tickers returns partial results like get_quote: a ticker with no usable price history is \
 in errors with no row, while a row whose valuation metrics failed is present with those fields \
 null and metrics_error set. Rows flagged currency_differs (and the table-level mixed_currencies) \
-are not denominated in base_currency - rank those on ratios, not absolute amounts. Each row \
+are not denominated in base_currency - rank those on ratios, not absolute amounts, and a \
+cross-listed row only on the ratios the cross-listing rule above keeps. Each row \
 carries its own periods_per_year, so a 24/7 instrument in the table was annualized on a different \
 calendar than the equities beside it - check it before ranking volatility or sharpe_ratio across \
 rows."""

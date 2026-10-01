@@ -39,6 +39,8 @@ jobs:
         run: uv sync
       - name: Run the live contract suite
         # 3.13 only: this tests our agreement with Yahoo, which does not vary by interpreter.
+        # Includes the Yahoo-backed e2e tests (tests/e2e/, marked live too), which build the
+        # wheel and drive it over stdio.
         # pipefail so tee cannot mask a failing exit code.
         run: |
           set -o pipefail

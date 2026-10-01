@@ -132,7 +132,9 @@ def _find_all_roots(
       sign, and a pair of roots closer together than one grid step, where both lie
       inside a single interval and the endpoints share a sign. A refined turning point
       counts as a root when ``|f|`` there has collapsed to the floating-point
-      cancellation floor, measured relative to the bracket endpoints (``tangent_tol``);
+      cancellation floor, measured relative to the SMALLER bracket endpoint
+      (``tangent_tol``) - next to the rate == -1 pole the other one can be ~1e15, which
+      would pass a plain local minimum off as a double root;
       if instead it has crossed zero, the two halves each hold a root and are bisected
       separately.
 
@@ -162,13 +164,18 @@ def _find_all_roots(
         else:  # local maximum of f: minimize -f
             turning = _minimize(lambda t: -f(t), bracket_low, bracket_high)
         f_turning = f(turning)
-        tolerance = max(abs(values[i - 1]), abs(values[i + 1])) * tangent_tol
+        tolerance = min(abs(values[i - 1]), abs(values[i + 1])) * tangent_tol
         if abs(f_turning) <= tolerance:
             roots.append(turning)  # tangent (double) root
-        elif f_turning * values[i - 1] < 0.0:
-            # The extremum overshot zero: a root on each side, both inside one step.
-            roots.append(_bisect_bracket(f, bracket_low, turning))
-            roots.append(_bisect_bracket(f, turning, bracket_high))
+        else:
+            # The extremum overshot zero: a root in each half that straddles it, both
+            # inside one step. Only those halves: next to a sign change (one endpoint on
+            # each side of zero) just one does, and bisecting the other would return its
+            # endpoint as if it were a root.
+            if f_turning * values[i - 1] < 0.0:
+                roots.append(_bisect_bracket(f, bracket_low, turning))
+            if f_turning * values[i + 1] < 0.0:
+                roots.append(_bisect_bracket(f, turning, bracket_high))
 
     roots.sort()
     deduped: list[float] = []
@@ -202,12 +209,22 @@ def _require_rate(rate: float) -> None:
         raise InvalidInput("rate must be greater than -1 (-100%) per period.")
 
 
+def _annuity_factor(rate: float, nper: float) -> float:
+    """``((1+rate)**nper - 1) / rate``, accurate as ``rate`` approaches 0.
+
+    Written naively, ``1 + rate`` rounds to exactly 1 for ``|rate|`` below ~1e-16, so the
+    numerator cancels to 0 and the annuity term vanishes (or is divided by). expm1/log1p
+    keep the precision, so the factor tends to ``nper``, its limit, instead.
+    """
+    return math.expm1(nper * math.log1p(rate)) / rate
+
+
 def _fv(pv: float, pmt: float, rate: float, nper: float, due: bool = False) -> float:
     if rate == 0.0:
         return -(pv + pmt * nper)
     growth: float = (1.0 + rate) ** nper
     mult = (1.0 + rate) if due else 1.0
-    return -(pv * growth + pmt * mult * (growth - 1.0) / rate)
+    return -(pv * growth + pmt * mult * _annuity_factor(rate, nper))
 
 
 def _pv(fv: float, pmt: float, rate: float, nper: float, due: bool = False) -> float:
@@ -222,7 +239,7 @@ def _pv(fv: float, pmt: float, rate: float, nper: float, due: bool = False) -> f
             "representable for this rate and nper."
         )
     mult = (1.0 + rate) if due else 1.0
-    return -(fv + pmt * mult * (growth - 1.0) / rate) / growth
+    return -(fv + pmt * mult * _annuity_factor(rate, nper)) / growth
 
 
 def _pmt(pv: float, fv: float, rate: float, nper: float, due: bool = False) -> float:
@@ -232,7 +249,7 @@ def _pmt(pv: float, fv: float, rate: float, nper: float, due: bool = False) -> f
         return -(pv + fv) / nper
     growth: float = (1.0 + rate) ** nper
     mult = (1.0 + rate) if due else 1.0
-    return -(pv * growth + fv) * rate / (mult * (growth - 1.0))
+    return -(pv * growth + fv) / (mult * _annuity_factor(rate, nper))
 
 
 def _nper(pv: float, fv: float, pmt: float, rate: float, due: bool = False) -> float:
@@ -247,14 +264,20 @@ def _nper(pv: float, fv: float, pmt: float, rate: float, due: bool = False) -> f
         ratio = -fv / pv
         if ratio <= 0.0:
             raise InvalidInput("No real solution for nper with the given pv/fv signs.")
-        return math.log(ratio) / math.log(1.0 + rate)
+        return math.log(ratio) / math.log1p(rate)
     mult = (1.0 + rate) if due else 1.0
     k = pmt * mult / rate
+    if not math.isfinite(k):
+        # A rate so small that pmt/rate overflows is zero to working precision, and the
+        # zero-rate answer is then exact.
+        return -(pv + fv) / pmt
     numerator = k - fv
     denominator = k + pv
     if denominator == 0.0 or numerator / denominator <= 0.0:
         raise InvalidInput("No real solution for nper with the given inputs.")
-    return math.log(numerator / denominator) / math.log(1.0 + rate)
+    # log1p of (numerator/denominator - 1), not log of the ratio: for a tiny rate k is huge
+    # and the ratio rounds to 1, just as 1 + rate does in the denominator.
+    return math.log1p(-(fv + pv) / denominator) / math.log1p(rate)
 
 
 def _rate(pv: float, fv: float, pmt: float, nper: float, due: bool = False) -> float:

@@ -67,9 +67,10 @@ return. Read the table's errors list and any row's metrics_error before treating
 a finding, and each row's periods_per_year before ranking volatility or sharpe_ratio - rows on \
 different calendars are not directly comparable. Currency: any row flagged currency_differs (or \
 a table with mixed_currencies true) is not denominated in base_currency - its returns carry an \
-FX move the others do not, so compare those rows on ratios and say so. A row whose \
-financial_currency differs from its own currency is a cross-listing whose absolute amounts are \
-internally inconsistent.
+FX move the others do not, so compare those rows on ratios and say so. A row \
+whose financial_currency differs from its own currency is a cross-listing: its price_to_sales, \
+price_to_book and EV multiples mix two currencies, so rank it on P/E, PEG and the margins only \
+(the glossary's cross-listing rule).
 
 ## Phase 5 - Performance, risk-adjusted return & technical posture
 From analyze_performance: total & annualized return, annualized volatility, max drawdown, the \
@@ -185,8 +186,10 @@ ranking is regime-dependent and weight it less. Past returns are context, not a 
 ## Phase 6 - Currency
 If a table reports mixed_currencies, or a row is flagged currency_differs, those rows' returns \
 carry an FX move the others do not and their absolute amounts are in another currency: rank them \
-on ratios only, and say so. A row whose financial_currency differs from its currency is a \
-cross-listing whose absolute amounts are not internally consistent.
+on ratios only, and say so. A row whose financial_currency differs from its \
+currency is a cross-listing: Yahoo computes its price_to_sales, price_to_book and EV multiples \
+across two currencies, so rank it on P/E, PEG and the margins only, as the cross-listing rule in \
+{conventions_uri} sets out.
 
 ## Phase 7 - Verdict
 - Score each ticker against the rubric you declared. Tickers missing too many inputs go in an \
