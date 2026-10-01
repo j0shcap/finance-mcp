@@ -18,6 +18,8 @@ def build_default_client() -> YFinanceClient:
         history_ttl=float(s.history_cache_ttl_seconds),
         fundamentals_ttl=float(s.fundamentals_cache_ttl_seconds),
         max_bars=s.max_history_bars,
+        max_concurrent_requests=s.max_concurrent_requests,
+        request_retries=s.request_retries,
     )
 
 

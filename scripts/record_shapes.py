@@ -19,8 +19,8 @@ from pathlib import Path
 from typing import Any
 
 import yfinance as yf
-from yfinance.exceptions import YFRateLimitError
 
+from finance_mcp.data import yahoo
 from scripts.yahoo_shapes import (
     attribute_shape,
     drift,
@@ -118,14 +118,8 @@ def _fetch[T](call: Callable[[], T]) -> T:
 
 
 def is_transient(exc: BaseException) -> bool:
-    """A timeout, dropped connection, throttle or server error rather than an answer."""
-    if isinstance(exc, YFRateLimitError) or type(exc).__name__ in _TRANSIENT_CLASS_NAMES:
-        return True
-    status = getattr(getattr(exc, "response", None), "status_code", None)
-    return status in (429, 500, 502, 503, 504)
-
-
-_TRANSIENT_CLASS_NAMES = frozenset({"Timeout", "ReadTimeout", "ConnectTimeout", "ConnectionError"})
+    """The server's definition, plus slow read timeouts: a script has no client to keep waiting."""
+    return yahoo.is_transient(exc) or type(exc).__name__ in {"Timeout", "ReadTimeout"}
 
 
 def _raised(call: Callable[[], Any]) -> dict[str, Any]:

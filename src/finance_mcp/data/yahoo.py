@@ -10,14 +10,18 @@ YahooSource takes symbols already normalized by its caller and never caches: cac
 the choice of what to fetch together belong to YFinanceClient.
 """
 
+import itertools
 import math
+import random
+import threading
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
 
 import yfinance as yf
-from yfinance.exceptions import YFTickerMissingError
+from yfinance.exceptions import YFRateLimitError, YFTickerMissingError
 
 from finance_mcp.data.errors import DataUnavailable, SymbolNotFound
 from finance_mcp.data.models import (
@@ -58,34 +62,111 @@ FINANCIALS_ATTR = {
 }
 
 
+#: Most Yahoo requests in flight at once, and retries of a transient failure, by default.
+DEFAULT_MAX_CONCURRENT_REQUESTS = 8
+DEFAULT_REQUEST_RETRIES = 2
+#: First backoff before a retry; each further one is three times longer (2s, 6s, ...), each
+#: jittered by +-50% so throttled requests don't retry in lockstep.
+RETRY_BASE_DELAY_SECONDS = 2.0
+#: A retry is only started if it can begin within this long of the first attempt. yfinance's
+#: own request timeout is 30s, so this keeps a retried call well inside an MCP client's.
+RETRY_BUDGET_SECONDS = 15.0
+#: curl_cffi failures that happen fast, before a response: worth another try. A ReadTimeout
+#: (or plain Timeout) has already spent yfinance's 30s, and SSL or proxy errors don't heal.
+_TRANSIENT_ERROR_NAMES = frozenset({"ConnectTimeout", "ConnectionError", "ChunkedEncodingError"})
+_PERMANENT_ERROR_NAMES = frozenset({"SSLError", "ProxyError"})
+
+# Indirections the tests replace, so backoff is instant and jitter-free under test.
+_sleep: Callable[[float], None] = time.sleep
+
+
+def _jitter(delay: float) -> float:
+    return delay * random.uniform(0.5, 1.5)  # nosec B311 - spreads retries, not security
+
+
+_gate_holder = threading.local()
+
+
+def is_transient(exc: BaseException) -> bool:
+    """Throttling or a fast network failure: a later attempt can succeed."""
+    if isinstance(exc, YFRateLimitError):
+        return True
+    names = {cls.__name__ for cls in type(exc).__mro__}
+    if names & _PERMANENT_ERROR_NAMES:
+        return False
+    if type(exc).__name__ in _TRANSIENT_ERROR_NAMES:
+        return True
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    return status == 429 or (isinstance(status, int) and 500 <= status < 600)
+
+
 class YahooSource:
-    """Fetches and parses one kind of Yahoo data per method, into this package's models."""
+    """Fetches and parses one kind of Yahoo data per method, into this package's models.
+
+    Every Yahoo request goes through ``_request``: at most ``max_concurrent_requests`` run at
+    once, and a throttled or dropped request is retried with backoff.
+    """
 
     def __init__(
         self,
         ticker_factory: Callable[[str], Any] = yf.Ticker,
         search_factory: Callable[[str], Any] = yf.Search,
+        *,
+        max_concurrent_requests: int = DEFAULT_MAX_CONCURRENT_REQUESTS,
+        request_retries: int = DEFAULT_REQUEST_RETRIES,
     ) -> None:
         self._ticker = ticker_factory
         # Widened so the keyword arguments yf.Search is called with typecheck.
         self._search: Callable[..., Any] = search_factory
+        self._gate = threading.BoundedSemaphore(max_concurrent_requests)
+        self._retry_delays = tuple(
+            RETRY_BASE_DELAY_SECONDS * 3**attempt for attempt in range(request_retries)
+        )
         # By default yfinance's price and statement fetches swallow a transport failure and
         # return an empty frame, which reads exactly like an unknown symbol; every
         # classification here needs failures as exceptions. Process-wide, but this server
         # is the only yfinance user in its process.
         yf.config.debug.hide_exceptions = False
 
+    def _request[T](self, fetch: Callable[[], T], *, retry: bool = True) -> T:
+        """Run one Yahoo request under the gate, retrying transient failures.
+
+        The gate is held only while ``fetch`` runs, never during a backoff, and is not
+        reentrant: ``fetch`` must be a leaf request, which a nested call enforces by raising.
+        The last failure is re-raised unchanged, so callers classify it as before.
+        """
+        if getattr(_gate_holder, "held", False):
+            raise RuntimeError("nested Yahoo request: wrap only the request itself in _request")
+        delays = self._retry_delays if retry else ()
+        started = time.monotonic()
+        for attempt in itertools.count():
+            with self._gate:
+                _gate_holder.held = True
+                try:
+                    return fetch()
+                except Exception as exc:
+                    wait = _jitter(delays[attempt]) if attempt < len(delays) else None
+                    out_of_budget = (
+                        wait is not None
+                        and time.monotonic() - started + wait > RETRY_BUDGET_SECONDS
+                    )
+                    if wait is None or out_of_budget or not is_transient(exc):
+                        raise
+                finally:
+                    _gate_holder.held = False
+            _sleep(wait)
+        raise AssertionError("unreachable")  # pragma: no cover - itertools.count is endless
+
     def _ticker_with_info(
-        self, symbol: str, fetch_label: str, kind: str
+        self, symbol: str, fetch_label: str, kind: str, *, retry: bool = True
     ) -> tuple[Any, dict[str, Any]]:
         """Fetch a ticker and its ``.info``, asserting the symbol names a real instrument.
 
         Access errors are classified by _data_error; an ``info`` dict that is empty or has
         no longName/shortName (Yahoo's tell for an unknown symbol) becomes SymbolNotFound.
         """
-        ticker = self._ticker(symbol)
         try:
-            info = ticker.info
+            ticker, info = self._request(lambda: _with_info(self._ticker(symbol)), retry=retry)
         except Exception as exc:
             raise _data_error(exc, fetch_label, kind, symbol) from exc
         if not info or not (info.get("longName") or info.get("shortName")):
@@ -94,16 +175,17 @@ class YahooSource:
 
     def quote(self, symbol: str) -> Quote:
         try:
-            fi = self._ticker(symbol).fast_info
-            price = _opt(getattr(fi, "last_price", None))
-            prev = _opt(getattr(fi, "previous_close", None))
-            currency = getattr(fi, "currency", None)
-            day_high = _opt(getattr(fi, "day_high", None))
-            day_low = _opt(getattr(fi, "day_low", None))
-            year_high = _opt(getattr(fi, "year_high", None))
-            year_low = _opt(getattr(fi, "year_low", None))
-            market_cap = _opt(getattr(fi, "market_cap", None))
-            volume = _opt(getattr(fi, "last_volume", None))
+            # One request block: fast_info's attributes fetch lazily, several requests deep.
+            fi = self._request(lambda: _read_fast_info(self._ticker(symbol)))
+            price = _opt(fi["last_price"])
+            prev = _opt(fi["previous_close"])
+            currency = fi["currency"]
+            day_high = _opt(fi["day_high"])
+            day_low = _opt(fi["day_low"])
+            year_high = _opt(fi["year_high"])
+            year_low = _opt(fi["year_low"])
+            market_cap = _opt(fi["market_cap"])
+            volume = _opt(fi["last_volume"])
         except Exception as exc:
             raise _data_error(exc, "quote", "quote", symbol) from exc
         if price is None:
@@ -130,7 +212,11 @@ class YahooSource:
         intraday = interval in INTRADAY_INTERVALS
         no_history = f"No price history for '{symbol}'. Check the symbol/period/interval."
         try:
-            df = self._ticker(symbol).history(period=period, interval=interval, auto_adjust=True)
+            df = self._request(
+                lambda: self._ticker(symbol).history(
+                    period=period, interval=interval, auto_adjust=True
+                )
+            )
         except Exception as exc:
             # Unhidden, an unknown symbol raises (a 404, YFPricesMissingError) rather than
             # returning an empty frame; the no-data signals keep the history wording.
@@ -160,9 +246,8 @@ class YahooSource:
     ) -> FinancialStatement:
         """The parsed statement, without its currency (that comes from another endpoint)."""
         attr = FINANCIALS_ATTR[(statement, period)]
-        ticker = self._ticker(symbol)
         with _unavailable_on_error(f"Failed to fetch {statement} statement for '{symbol}'"):
-            df = getattr(ticker, attr)
+            df = self._request(lambda: getattr(self._ticker(symbol), attr))
         if df is None or df.empty:
             raise SymbolNotFound(
                 f"No {statement} statement available for '{symbol}'. It may be an ETF, index, or "
@@ -186,6 +271,8 @@ class YahooSource:
         ticker, info = self._ticker_with_info(symbol, "profile", "profile")
         # Also covers the dividends/splits reads, which are separate Yahoo requests.
         with _unavailable_on_error(f"Failed to parse profile for '{symbol}'"):
+            dividends = self._request(lambda: ticker.dividends)
+            splits = self._request(lambda: ticker.splits)
             return CompanyProfile(
                 symbol=symbol,
                 name=info.get("longName") or info.get("shortName"),
@@ -201,8 +288,8 @@ class YahooSource:
                 forward_pe=_opt(info.get("forwardPE")),
                 dividend_yield=_opt(info.get("dividendYield")),
                 beta=_opt(info.get("beta")),
-                recent_dividends=_dividend_events(ticker.dividends, limit=8),
-                splits=_split_events(ticker.splits),
+                recent_dividends=_dividend_events(dividends, limit=8),
+                splits=_split_events(splits),
             )
 
     def key_metrics(self, symbol: str) -> KeyMetrics:
@@ -257,6 +344,7 @@ class YahooSource:
             )
         # Also covers the recommendations read, which is a separate Yahoo request.
         with _unavailable_on_error(parse_failed):
+            recommendations = self._request(lambda: ticker.recommendations)
             return AnalystData(
                 symbol=symbol,
                 currency=info.get("currency"),
@@ -268,12 +356,12 @@ class YahooSource:
                 target_median_price=target_median,
                 target_high_price=target_high,
                 target_low_price=target_low,
-                recommendation_trend=_recommendation_trend(ticker.recommendations),
+                recommendation_trend=_recommendation_trend(recommendations),
             )
 
     def news(self, symbol: str, count: int) -> tuple[list[NewsArticle], NewsSource]:
         with _unavailable_on_error(f"Failed to fetch news for '{symbol}'"):
-            items = self._ticker(symbol).get_news(count=count, tab="news")
+            items = self._request(lambda: self._ticker(symbol).get_news(count=count, tab="news"))
         if not items:
             # Ambiguous: yfinance turns a 500 from the news endpoint into an empty list.
             # Cross-check search rather than report "no recent news", which the model
@@ -284,7 +372,8 @@ class YahooSource:
         return articles, "ticker"
 
     def identity(self, symbol: str) -> Identity:
-        _, info = self._ticker_with_info(symbol, "company identity", "identity")
+        # Best-effort (it only labels news), so a throttled lookup isn't retried.
+        _, info = self._ticker_with_info(symbol, "company identity", "identity", retry=False)
         return Identity(
             quote_type=info.get("quoteType"),
             long_name=info.get("longName"),
@@ -298,7 +387,10 @@ class YahooSource:
         so raising would turn a symbol with genuinely no coverage into an error.
         """
         try:
-            found = self._search(symbol, max_results=1, news_count=count, lists_count=0).news
+            found = self._request(
+                lambda: self._search(symbol, max_results=1, news_count=count, lists_count=0).news,
+                retry=False,
+            )
         except Exception:
             return []
         articles = (_search_news_article(item) for item in found or [])
@@ -306,8 +398,11 @@ class YahooSource:
 
     def search(self, query: str, max_results: int) -> SymbolSearchResult:
         with _unavailable_on_error(f"Search failed for '{query}'"):
-            result = self._search(query, max_results=max_results, news_count=0, lists_count=0)
-            quotes = result.quotes
+            quotes = self._request(
+                lambda: (
+                    self._search(query, max_results=max_results, news_count=0, lists_count=0).quotes
+                )
+            )
         if not quotes:
             return SymbolSearchResult(query=query, matches=[])
         with _unavailable_on_error(f"Failed to parse search results for '{query}'"):
@@ -315,8 +410,35 @@ class YahooSource:
             return SymbolSearchResult(query=query, matches=matches)
 
     def statement_currency(self, symbol: str) -> str | None:
-        """The currency a symbol's statements are reported in, from ``.info``."""
-        return _read_statement_currency(self._ticker(symbol))
+        """The currency a symbol's statements are reported in, from ``.info``.
+
+        Best-effort (it only labels a statement), so a throttled read isn't retried.
+        """
+        return self._request(lambda: _read_statement_currency(self._ticker(symbol)), retry=False)
+
+
+def _with_info(ticker: Any) -> tuple[Any, dict[str, Any]]:
+    return ticker, ticker.info
+
+
+#: The fast_info attributes a quote reads. Each may fetch lazily, so they are all read inside
+#: one gated request.
+_FAST_INFO_FIELDS = (
+    "last_price",
+    "previous_close",
+    "currency",
+    "day_high",
+    "day_low",
+    "year_high",
+    "year_low",
+    "market_cap",
+    "last_volume",
+)
+
+
+def _read_fast_info(ticker: Any) -> dict[str, Any]:
+    fast_info = ticker.fast_info
+    return {name: getattr(fast_info, name, None) for name in _FAST_INFO_FIELDS}
 
 
 def _read_statement_currency(ticker: Any) -> str | None:

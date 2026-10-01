@@ -25,12 +25,21 @@ YAHOO_PY = Path(__file__).resolve().parent.parent / "src" / "finance_mcp" / "dat
 def keys_read(source: str | None = None) -> dict[str, list[str]]:
     """Receiver name -> the literal keys yahoo.py reads from it, sorted.
 
-    ``info.get("trailingPE")`` lands under "info", ``getattr(fi, "last_price", None)`` under
-    "fi", ``content.get("title")`` under "content", and so on.
+    ``info.get("trailingPE")`` lands under "info", ``content.get("title")`` under "content",
+    and so on. The fast_info attributes a quote reads are listed in ``_FAST_INFO_FIELDS``
+    and land under "fi".
     """
     tree = ast.parse(source if source is not None else YAHOO_PY.read_text(encoding="utf-8"))
     found: defaultdict[str, set[str]] = defaultdict(set)
     for node in ast.walk(tree):
+        if _is_fast_info_fields(node):
+            assert isinstance(node, ast.Assign) and isinstance(node.value, ast.Tuple)
+            found["fi"].update(
+                elt.value
+                for elt in node.value.elts
+                if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
+            )
+            continue
         if not isinstance(node, ast.Call) or not node.args:
             continue
         key = node.args[1] if _is_getattr(node) else node.args[0]
@@ -42,6 +51,14 @@ def keys_read(source: str | None = None) -> dict[str, list[str]]:
         ):
             found[receiver.id].add(key.value)
     return {receiver: sorted(keys) for receiver, keys in sorted(found.items())}
+
+
+def _is_fast_info_fields(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == "_FAST_INFO_FIELDS" for t in node.targets)
+        and isinstance(node.value, ast.Tuple)
+    )
 
 
 def _is_getattr(node: ast.Call) -> bool:
