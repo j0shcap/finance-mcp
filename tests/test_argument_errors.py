@@ -1,5 +1,6 @@
 """Argument-validation failures reach the model as one clean, self-correctable message."""
 
+import logging
 from typing import Annotated, Any
 
 import pytest
@@ -143,6 +144,24 @@ async def test_a_validation_error_from_a_tool_body_is_masked_by_the_server() -> 
     async with Client(server) as client:
         result = await client.call_tool("broken", {}, raise_on_error=False)
     _assert_masked_server_error(_text(result))
+
+
+async def test_a_validation_error_from_a_tool_body_is_logged_with_its_traceback(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # fastmcp only logs it as a WARNING about invalid arguments, with no traceback, so the
+    # operator would otherwise never see which model rejected what.
+    server = create_server()
+
+    @server.tool
+    def broken() -> _Positive:
+        return _Positive(value=-1.0)
+
+    async with Client(server) as client:
+        await client.call_tool("broken", {}, raise_on_error=False)
+    [record] = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert record.getMessage() == "Error calling tool 'broken'"
+    assert record.exc_info is not None and "_Positive" in str(record.exc_info[1])
 
 
 async def test_other_tool_errors_pass_through_unchanged() -> None:

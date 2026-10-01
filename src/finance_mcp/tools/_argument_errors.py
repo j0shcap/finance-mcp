@@ -20,8 +20,11 @@ import mcp.types as mt
 from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.tools import ToolResult
+from fastmcp.utilities.logging import get_logger
 from pydantic import ValidationError
 from pydantic_core import ErrorDetails
+
+logger = get_logger(__name__)
 
 #: Longest offending value quoted back in a pattern error; a longer one is cut short.
 MAX_QUOTED_VALUE = 20
@@ -43,8 +46,11 @@ class ArgumentErrorMiddleware(Middleware):
             if invalid is not None:
                 raise ToolError(describe_argument_error(name, invalid)) from exc
             if isinstance(exc, ValidationError):
-                # FastMCP's own masked wording. Its masking runs inside call_next, before
-                # this point, so the error has to leave here already a tool error.
+                # FastMCP's own masked wording and log line. Its masking runs inside
+                # call_next, before this point, so the error has to leave here already a
+                # tool error; and it logs this one only as an argument warning, so the
+                # traceback naming the rejecting model is logged here.
+                logger.exception(f"Error calling tool {name!r}")
                 raise ToolError(f"Error calling tool {name!r}") from exc
             raise
 
