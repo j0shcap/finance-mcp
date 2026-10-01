@@ -126,7 +126,10 @@ def register(mcp: FastMCP) -> None:
                 )
             ),
         ] = None,
-        fv: Annotated[float | None, Field(description="Future value.")] = None,
+        fv: Annotated[
+            float | None,
+            Field(description="Future value (defaults to 0 if omitted, as in Excel)."),
+        ] = None,
         pmt: Annotated[
             float | None,
             Field(description="Payment per period (defaults to 0 if omitted)."),

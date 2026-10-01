@@ -297,19 +297,34 @@ def time_value_of_money(
 ) -> TVMResult:
     """Solve a time-value-of-money problem for one unknown variable.
 
-    Provide every variable except the one named by ``solve_for``. ``pmt`` defaults
-    to 0 when omitted and not being solved for. Covers compound interest, present/
-    future value, annuity payments, period count, and CAGR (solve for ``rate`` with
-    ``pmt=0``). ``when`` selects end- or begin-of-period payments (begin = annuity-due).
+    Provide every variable except the one named by ``solve_for``. ``pmt`` and ``fv``
+    default to 0 when omitted and not being solved for, as in Excel's PMT/PV/NPER/RATE.
+    Covers compound interest, present/future value, annuity payments, period count, and
+    CAGR (solve for ``rate`` with ``pmt=0``). ``when`` selects end- or begin-of-period
+    payments (begin = annuity-due).
     """
-    given = {"pv": pv, "fv": fv, "pmt": 0.0 if pmt is None else pmt, "rate": rate, "nper": nper}
+    fv_defaulted = fv is None and solve_for != "fv"
+    given = {
+        "pv": pv,
+        "fv": 0.0 if fv is None else fv,
+        "pmt": 0.0 if pmt is None else pmt,
+        "rate": rate,
+        "nper": nper,
+    }
     del given[solve_for]
     known: dict[str, float] = {}
     for name, value in given.items():
         known[name] = _require(name, value)
         if name == "rate":
             _require_rate(known[name])
-    solved = _TVM_SOLVERS[solve_for](**known, due=when == "begin")
+    try:
+        solved = _TVM_SOLVERS[solve_for](**known, due=when == "begin")
+    except InvalidInput as exc:
+        # An omitted fv silently became 0; when that leaves no solution (e.g. a CAGR
+        # solve without fv), the default is the likely mistake, so say so.
+        if fv_defaulted:
+            raise InvalidInput(f"{exc} Note: fv was omitted and defaulted to 0.") from exc
+        raise
     return TVMResult(solved_for=solve_for, solved_value=solved, **known, **{solve_for: solved})
 
 
