@@ -16,7 +16,7 @@ import pytest
 from yfinance.exceptions import YFException
 
 from finance_mcp.data import analytics
-from finance_mcp.data.yfinance_client import TREASURY_BILL_SYMBOL
+from finance_mcp.data.yfinance_client import TREASURY_BILL_SYMBOL, _in_parallel
 from tests.fakes import counting, fake_multi_ticker_factory, make_client, make_history_df
 
 # 200 weekdays from Monday 2024-01-01 to Friday 2024-10-04: past the annualization gate.
@@ -131,12 +131,29 @@ def test_bill_data_implying_a_non_positive_price_is_unavailable_not_an_error() -
     assert p.risk_free_rate_note is not None and "^IRX" in p.risk_free_rate_note
 
 
-def test_an_unavailable_rate_is_not_cached() -> None:
+def test_a_rate_unavailable_because_the_fetch_failed_is_not_cached() -> None:
     factory, calls = counting(_factory(**_bill_override(history_error=YFException("down"))))
     client = make_client(factory)
     client.analyze_performance("AAPL", "1y")
     client.analyze_performance("AAPL", "1y")
     assert calls.count(TREASURY_BILL_SYMBOL) == 2
+
+
+@pytest.mark.parametrize(
+    "bills",
+    [_bills(4.03, start="2024-03-01", n=150), _bills(500.0)],
+    ids=["window-not-covered", "implausible-quote"],
+)
+def test_a_rate_unavailable_for_a_lasting_reason_is_cached(bills: pd.DataFrame) -> None:
+    # The same history gives the same answer, and a long window's bars are too big to
+    # cache - without the result cached, every call would refetch both histories.
+    factory, calls = counting(_factory(**_bill_override(history_df=bills)))
+    client = make_client(factory)
+    first = client.analyze_performance("AAPL", "1y")
+    client.analyze_performance("AAPL", "1y")
+    assert first.risk_free_rate_source == "unavailable"
+    assert calls.count(TREASURY_BILL_SYMBOL) == 1
+    assert calls.count("AAPL") == 1
 
 
 def test_a_resolved_default_rate_is_cached() -> None:
@@ -266,6 +283,7 @@ def test_compare_tickers_gives_each_row_the_treasury_bill_rate() -> None:
     table = make_client(_rows_factory()).compare_tickers(["AAPL", "MSFT"], "1y")
     assert table.risk_free_rate is None  # the caller passed none
     assert table.risk_free_rate_source == "treasury_bill"
+    assert table.risk_free_rate_note is None
     for row in table.rows:
         assert row.risk_free_rate == pytest.approx(RATE_4_03)
         assert row.risk_free_rate_source == "treasury_bill"
@@ -302,6 +320,9 @@ def test_compare_tickers_rows_without_a_rate_still_rank_on_everything_else() -> 
     factory = _rows_factory(**_bill_override(history_error=YFException("bills down")))
     table = make_client(factory).compare_tickers(["AAPL", "MSFT"], "1y")
     assert table.errors == []
+    # The header must not claim the T-bill was applied when its one fetch failed.
+    assert table.risk_free_rate_source == "unavailable"
+    assert table.risk_free_rate_note is not None and "bills down" in table.risk_free_rate_note
     for row in table.rows:
         assert row.risk_free_rate_source == "unavailable"
         assert row.risk_free_rate_note is not None
@@ -319,8 +340,49 @@ def test_compare_tickers_with_a_given_rate_uses_it_everywhere_without_fetching()
     assert TREASURY_BILL_SYMBOL not in calls
 
 
+def test_compare_tickers_fetches_the_bills_alongside_the_rows() -> None:
+    # The bill fetch blocks until a row's history fetch has started. Fetched before the
+    # rows, it would time out and every row would come back without a rate.
+    rows_started = threading.Event()
+    inner = _rows_factory()
+
+    def factory(symbol: str) -> Any:
+        if symbol == TREASURY_BILL_SYMBOL:
+            if not rows_started.wait(timeout=10):
+                raise YFException("the bills were fetched before any row started")
+        else:
+            rows_started.set()
+        return inner(symbol)
+
+    table = make_client(factory).compare_tickers(["AAPL", "MSFT"], "1y")
+    assert all(row.risk_free_rate_source == "treasury_bill" for row in table.rows)
+
+
 def test_compare_tickers_with_nothing_to_fetch_does_not_fetch_bills() -> None:
     factory, calls = counting(_rows_factory())
     table = make_client(factory).compare_tickers(["  "], "1y")
     assert table.rows == []
     assert calls == []
+
+
+# --- _in_parallel --------------------------------------------------------------------
+
+
+def test_in_parallel_keeps_the_second_error_when_both_fail() -> None:
+    def first() -> None:
+        raise ValueError("first failed")
+
+    def second() -> None:
+        raise KeyError("second failed")
+
+    with pytest.raises(ValueError, match="first failed") as excinfo:
+        _in_parallel(first, second)
+    assert any("second failed" in note for note in excinfo.value.__notes__)
+
+
+def test_in_parallel_raises_the_second_error_when_only_it_fails() -> None:
+    def second() -> None:
+        raise KeyError("second failed")
+
+    with pytest.raises(KeyError, match="second failed"):
+        _in_parallel(lambda: 1, second)

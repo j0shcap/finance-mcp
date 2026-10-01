@@ -14,7 +14,7 @@ import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable, Iterator
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, date, datetime
 from typing import Any, NamedTuple, cast
@@ -103,6 +103,9 @@ class _RiskFree(NamedTuple):
     rate: float | None
     source: RiskFreeSource
     note: str | None = None
+    #: True only when the T-bill FETCH failed, so a retry could resolve the rate. A window
+    #: the history does not cover, or an implausible quote, gives the same answer each time.
+    retryable: bool = False
 
 
 #: The T-bill history a computation draws its default rate from: the bars, or why they
@@ -368,23 +371,26 @@ class YFinanceClient:
         # window would go back to the network. PerformanceStats is a few hundred bytes.
         # The rate is part of the key because the Sharpe, Sortino and downside figures are
         # computed from it: keying on (symbol, period) alone would serve the first caller's
-        # rate to every later one. A result whose default rate could not be resolved is not
-        # kept, so the next call retries the T-bill fetch instead of replaying the gap.
-        return self._cached(
+        # rate to every later one. A result whose T-bill FETCH failed is not kept, so the
+        # next call retries it instead of replaying the gap; one whose rate is unavailable
+        # for a lasting reason is cached like any other.
+        stats, _ = self._cached(
             ("performance", symbol, period, _rate_key(risk_free_rate)),
             self._history_ttl,
             lambda: self._fetch_performance(symbol, period, risk_free_rate),
-            cacheable=lambda stats: stats.risk_free_rate_source != "unavailable",
+            cacheable=lambda fetched: not fetched[1].retryable,
         )
+        return stats
 
     def _fetch_performance(
         self, symbol: str, period: str, risk_free_rate: float | None
-    ) -> PerformanceStats:
+    ) -> tuple[PerformanceStats, _RiskFree]:
         bars, bills = _in_parallel(
             lambda: self._all_bars(symbol, period, "1d"),
             lambda: self._bills_for(period, risk_free_rate),
         )
-        return _performance(symbol, period, bars, _resolve_risk_free(risk_free_rate, bills, bars))
+        risk_free = _resolve_risk_free(risk_free_rate, bills, bars)
+        return _performance(symbol, period, bars, risk_free), risk_free
 
     def _bills_for(self, period: str, risk_free_rate: float | None) -> _Bills:
         """The T-bill history for a default rate; nothing when the caller gave a rate.
@@ -491,27 +497,35 @@ class YFinanceClient:
         already use, so a batch costs no more than calling them one at a time -- and one
         ticker's failure reports itself instead of discarding the rows that worked.
 
-        For a default rate the T-bill history is fetched ONCE, before the rows, and each
+        For a default rate the T-bill history is fetched ONCE, alongside the rows, and each
         row averages it over its own dates: a period="max" history is too long to cache,
         so fetching it per row would cost a round trip per ticker.
         """
         pending, failures = _normalize_batch(symbols)
         errors = [ComparisonError(symbol=raw, error=reason) for raw, reason in failures]
-        bills = self._bills_for(period, risk_free_rate) if pending else None
-        built = _fetch_concurrently(
-            pending,
-            lambda s: self._comparison_row(s, period, risk_free_rate, bills),
-            COMPARE_MAX_WORKERS,
-        )
+        bills: _Bills = None
+        built: list[TickerComparisonRow | ComparisonError] = []
+        if pending:
+            # Started alongside the rows; each row waits for it only after its own bars.
+            with ThreadPoolExecutor(max_workers=1) as bill_pool:
+                bills_future = bill_pool.submit(self._bills_for, period, risk_free_rate)
+                built = _fetch_concurrently(
+                    pending,
+                    lambda s: self._comparison_row(s, period, risk_free_rate, bills_future),
+                    COMPARE_MAX_WORKERS,
+                )
+                bills = bills_future.result()
         rows = [r for r in built if isinstance(r, TickerComparisonRow)]
         errors.extend(r for r in built if isinstance(r, ComparisonError))
         base_currency = next((row.currency for row in rows if row.currency), None)
         for row in rows:
             row.currency_differs = row.currency is not None and row.currency != base_currency
+        table_rate = _table_risk_free(risk_free_rate, bills)
         return TickerComparison(
             period=period,
             risk_free_rate=risk_free_rate,
-            risk_free_rate_source="caller" if risk_free_rate is not None else "treasury_bill",
+            risk_free_rate_source=table_rate.source,
+            risk_free_rate_note=table_rate.note,
             base_currency=base_currency,
             mixed_currencies=any(row.currency_differs for row in rows),
             rows=rows,
@@ -519,7 +533,11 @@ class YFinanceClient:
         )
 
     def _comparison_row(
-        self, symbol: str, period: str, risk_free_rate: float | None, bills: _Bills
+        self,
+        symbol: str,
+        period: str,
+        risk_free_rate: float | None,
+        bills: Future[_Bills],
     ) -> TickerComparisonRow | ComparisonError:
         """One ticker's row, or the reason it has none.
 
@@ -531,9 +549,8 @@ class YFinanceClient:
         """
         try:
             bars = self._all_bars(symbol, period, "1d")
-            perf = _performance(
-                symbol, period, bars, _resolve_risk_free(risk_free_rate, bills, bars)
-            )
+            risk_free = _resolve_risk_free(risk_free_rate, bills.result(), bars)
+            perf = _performance(symbol, period, bars, risk_free)
         except DataUnavailable as exc:
             return ComparisonError(symbol=symbol, error=str(exc))
         metrics: KeyMetrics | None = None
@@ -928,6 +945,36 @@ def _performance(
     )
 
 
+_HOW_TO_PROCEED = (
+    "Pass risk_free_rate explicitly to get the rate-dependent figures (0 gives raw "
+    "return per unit of risk)."
+)
+
+
+def _bills_fetch_failed(reason: str) -> _RiskFree:
+    """No default rate because the T-bill history could not be fetched: worth a retry."""
+    return _RiskFree(
+        None,
+        "unavailable",
+        f"The 13-week T-bill yield ({TREASURY_BILL_SYMBOL}) could not be fetched: {reason}. "
+        f"{_HOW_TO_PROCEED}",
+        retryable=True,
+    )
+
+
+def _table_risk_free(risk_free_rate: float | None, bills: _Bills) -> _RiskFree:
+    """compare_tickers' header: the caller's rate, or whether the one T-bill fetch worked.
+
+    Window coverage is judged per row, so a header over a successful fetch says
+    "treasury_bill" and leaves any row-level gap to that row's own source and note.
+    """
+    if risk_free_rate is not None:
+        return _RiskFree(risk_free_rate, "caller")
+    if isinstance(bills, str):
+        return _bills_fetch_failed(bills)
+    return _RiskFree(None, "treasury_bill")
+
+
 def _rate_key(risk_free_rate: float | None) -> str:
     """Cache-key component: the caller's rate, or a marker for the T-bill default."""
     return "treasury_bill" if risk_free_rate is None else str(risk_free_rate)
@@ -950,19 +997,10 @@ def _risk_free_over(risk_free_rate: float | None, bills: _Bills, start: str, end
     """
     if risk_free_rate is not None:
         return _RiskFree(risk_free_rate, "caller")
-    how_to_proceed = (
-        "Pass risk_free_rate explicitly to get the rate-dependent figures (0 gives raw "
-        "return per unit of risk)."
-    )
     # _bills_for fetches whenever no rate was given, so bills is the history or the
     # reason it could not be fetched.
     if not isinstance(bills, list):
-        return _RiskFree(
-            None,
-            "unavailable",
-            f"The 13-week T-bill yield ({TREASURY_BILL_SYMBOL}) could not be fetched: "
-            f"{bills}. {how_to_proceed}",
-        )
+        return _bills_fetch_failed(str(bills))
     first_day, last_day = _day(start), _day(end)
     inside = [b for b in bills if first_day <= _day(b.date) <= last_day]
     tolerance = RISK_FREE_EDGE_TOLERANCE_DAYS
@@ -976,7 +1014,7 @@ def _risk_free_over(risk_free_rate: float | None, bills: _Bills, start: str, end
             "unavailable",
             f"The 13-week T-bill history ({TREASURY_BILL_SYMBOL}) covers {bills[0].date} to "
             f"{bills[-1].date}, which does not span the measured window {start} to {end}. "
-            f"{how_to_proceed}",
+            f"{_HOW_TO_PROCEED}",
         )
     try:
         rates = [analytics.treasury_bill_effective_rate(b.close) for b in inside]
@@ -985,7 +1023,7 @@ def _risk_free_over(risk_free_rate: float | None, bills: _Bills, start: str, end
             None,
             "unavailable",
             f"The 13-week T-bill history ({TREASURY_BILL_SYMBOL}) has an implausible "
-            f"quote: {exc} {how_to_proceed}",
+            f"quote: {exc} {_HOW_TO_PROCEED}",
         )
     return _RiskFree(statistics.fmean(rates), "treasury_bill")
 
@@ -996,11 +1034,22 @@ def _day(timestamp: str) -> date:
 
 
 def _in_parallel[A, B](first: Callable[[], A], second: Callable[[], B]) -> tuple[A, B]:
-    """Run two independent blocking fetches at once; either one's exception propagates."""
+    """Run two independent blocking fetches at once; either one's exception propagates.
+
+    If both fail, the first error is raised with the second attached as a note, so
+    neither is lost.
+    """
     with ThreadPoolExecutor(max_workers=2) as pool:
         first_future = pool.submit(first)
         second_future = pool.submit(second)
-        return first_future.result(), second_future.result()
+        try:
+            first_result = first_future.result()
+        except Exception as exc:
+            second_error = second_future.exception()
+            if second_error is not None:
+                exc.add_note(f"The fetch run alongside it also failed: {second_error!r}")
+            raise
+        return first_result, second_future.result()
 
 
 def _flag_mentions(

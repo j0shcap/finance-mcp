@@ -1086,10 +1086,16 @@ class TickerComparison(MarketData):
         "decimal (0.045 = 4.5%). Null when none was passed: each row then carries its own "
         "13-week T-bill average over its own dates - read the rows' risk_free_rate.",
     )
-    risk_free_rate_source: Literal["caller", "treasury_bill"] = Field(
+    risk_free_rate_source: RiskFreeSource = Field(
         description="'caller': every row uses risk_free_rate. 'treasury_bill': each row uses "
-        "the T-bill yield over its own dates (see each row's risk_free_rate_source, which is "
-        "'unavailable' where that could not be formed)."
+        "the T-bill yield over its own dates (a row's own risk_free_rate_source is "
+        "'unavailable' where its window is not covered). 'unavailable': the T-bill history "
+        "could not be fetched, so no row has a rate - see risk_free_rate_note."
+    )
+    risk_free_rate_note: str | None = Field(
+        default=None,
+        description="Why the table-level source is 'unavailable', and how to proceed; null "
+        "otherwise.",
     )
     base_currency: str | None = Field(
         default=None,
