@@ -7,6 +7,8 @@ contain breaking changes, and each one is listed under **Breaking changes**.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-01
+
 ### Added
 - README sections on conventions & units and on the data source, with Claude Code and Claude
   Desktop setup; `CONTRIBUTING.md`, `SECURITY.md`, this changelog, issue and pull-request
@@ -169,7 +171,8 @@ contain breaking changes, and each one is listed under **Breaking changes**.
 Baseline for this changelog: market-data, analytics and calculator tools, and the
 `analyze_stock` prompt.
 
-[Unreleased]: https://github.com/j0shcap/finance-mcp/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/j0shcap/finance-mcp/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/j0shcap/finance-mcp/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/j0shcap/finance-mcp/compare/v0.4.0...v0.4.2
 [0.4.0]: https://github.com/j0shcap/finance-mcp/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/j0shcap/finance-mcp/compare/v0.2.0...v0.3.0
