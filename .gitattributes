@@ -1,0 +1,2 @@
+# The contract snapshot is compared byte for byte; keep it LF on every checkout.
+tests/snapshots/** text eol=lf

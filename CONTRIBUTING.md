@@ -23,6 +23,7 @@ uv run pre-commit install   # optional: ruff, mypy and bandit on every commit
 | `make test` | just the offline test suite | while iterating |
 | `make e2e` | builds the wheel and drives it over stdio | when touching packaging, the entry point or anything printed |
 | `make test-live` | contract tests against real Yahoo endpoints | when touching `data/yfinance_client.py` |
+| `make snapshot` | rewrites the model-facing contract snapshot | after an intended change to anything a client sees |
 
 `make check` never touches the network: tests mock yfinance through `tests/fakes.py`. Tests that
 need the network or a built wheel are marked `live` or `e2e` and are deselected by default;
@@ -42,6 +43,20 @@ need the network or a built wheel are marked `live` or `e2e` and are deselected 
   model. Don't swallow exceptions or return placeholder values: missing data is `null` or an
   error, never a guess.
 
+## The contract snapshot
+
+`tests/snapshots/contract/` holds everything a client receives that steers the model: the
+server instructions, every tool's description, annotations and input/output schemas, every
+prompt rendered with its `tests/prompt_samples.py` arguments, and the conventions resource.
+`make check` fails on any difference. When the change is intended, run `make snapshot` and
+review the result with `git diff --word-diff` before committing it. The `.md` files hold the
+long prose (tool descriptions, rendered prompts) so it diffs line by line.
+
+A `fastmcp`, `mcp` or `pydantic` bump can change generated schemas or appended text, and
+that fails the snapshot too, on purpose. Dependabot groups those packages into one PR:
+check it out, run `make snapshot`, review and push. Pushing to a Dependabot branch stops
+its automatic rebases, which is fine for a one-off.
+
 ## Adding a tool
 
 1. Put the logic in `src/finance_mcp/data/` (`calculators.py`, `analytics.py` or
@@ -55,12 +70,13 @@ need the network or a built wheel are marked `live` or `e2e` and are deselected 
    published golden input in `GOLDEN` (`tests/e2e/golden.py`).
 5. Add a README bullet under `## Tools` in the form ``- `tool_name` — what it does``.
    `tests/test_readme_drift.py` fails until the README and the registry agree.
+6. Run `make snapshot` and commit the new contract files.
 
 ## Adding a prompt
 
 Register it in `prompts/analysis.py` or `prompts/calculations.py`, add sample arguments to
-`SAMPLE_ARGS` in `tests/test_prompt_tool_drift.py` (that test checks every tool, parameter and
-field the prompt names), and add a README bullet under `## Prompts`.
+`SAMPLE_ARGS` in `tests/prompt_samples.py` (the drift test then checks every tool, parameter and
+field the prompt names), add a README bullet under `## Prompts`, and run `make snapshot`.
 
 ## Commits and pull requests
 
