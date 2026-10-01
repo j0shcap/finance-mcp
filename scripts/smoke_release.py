@@ -28,17 +28,21 @@ async def smoke(version: str, from_spec: str) -> list[str]:
     problems: list[str] = []
     async with stdio_client(server) as (read, write), ClientSession(read, write) as session:
         init = await session.initialize()
-        if init.server_info.version != version:
-            problems.append(f"the server reports {init.server_info.version}, not {version}")
-        tools = {tool.name for tool in (await session.list_tools()).tools}
-        if "loan_schedule" not in tools:
-            problems.append(f"loan_schedule is not among the {len(tools)} tools listed")
-        result = await session.call_tool(
-            "loan_schedule", {"principal": 400000, "annual_rate": 0.065, "term_months": 360}
-        )
-        payment = json.loads("".join(getattr(c, "text", "") for c in result.content))
-        if result.is_error or payment.get("monthly_payment") != 2528.27:
-            problems.append(f"loan_schedule returned {payment}")
+        # Launched: from here on, a failure is a defect in the release, not a reason to retry.
+        try:
+            if init.server_info.version != version:
+                problems.append(f"the server reports {init.server_info.version}, not {version}")
+            tools = {tool.name for tool in (await session.list_tools()).tools}
+            if "loan_schedule" not in tools:
+                problems.append(f"loan_schedule is not among the {len(tools)} tools listed")
+            result = await session.call_tool(
+                "loan_schedule", {"principal": 400000, "annual_rate": 0.065, "term_months": 360}
+            )
+            payment = json.loads("".join(getattr(c, "text", "") for c in result.content))
+            if result.is_error or payment.get("monthly_payment") != 2528.27:
+                problems.append(f"loan_schedule returned {payment}")
+        except Exception as exc:
+            problems.append(f"the installed server failed a check: {exc!r}")
     return problems
 
 

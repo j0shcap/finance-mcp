@@ -50,7 +50,7 @@ index kinds and timezones, column dtypes, the type of each key it reads (found b
 `yahoo.py`), what an unknown symbol raises - into `tests/shapes/yahoo.json`, with none of
 Yahoo's values. `tests/test_fakes_match_shapes.py` holds the fakes in `tests/fakes.py` to
 it, so the unit suite parses realistic payloads. The nightly live job runs
-`scripts/record_shapes.py --check` and fails when Yahoo, yfinance or pandas starts returning
+`python -m scripts.record_shapes --check` and fails when Yahoo, yfinance or pandas starts returning
 something new; then run `make record-shapes` (it merges with what is committed), update the
 fakes the shape test names, and fix any parser that needs it.
 

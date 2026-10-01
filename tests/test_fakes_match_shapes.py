@@ -2,7 +2,7 @@
 
 The unit suite parses data from tests/fakes.py. Holding those builders to recorded shapes is
 what makes that suite a test of the parsers against real payloads rather than imagined ones.
-When Yahoo, yfinance or pandas changes a shape, the nightly job's `record_shapes.py --check`
+When Yahoo, yfinance or pandas changes a shape, the nightly job's `record_shapes --check`
 fails; re-record with `make record-shapes` and these tests say which fakes to update.
 """
 
