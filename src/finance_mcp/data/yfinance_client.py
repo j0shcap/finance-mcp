@@ -8,13 +8,13 @@ what is cached and for how long, and assembles results from the pure modules
 import difflib
 import time
 from collections.abc import Callable
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future
 from typing import Any
 
 import yfinance as yf
 
 from finance_mcp.data.cache import CacheKey, TTLCache
-from finance_mcp.data.concurrency import in_parallel, map_concurrently
+from finance_mcp.data.concurrency import in_background, in_parallel, map_concurrently
 from finance_mcp.data.errors import DataUnavailable, InvalidInput, SymbolNotFound
 from finance_mcp.data.models import (
     AnalystData,
@@ -244,8 +244,7 @@ class YFinanceClient:
         built: list[TickerComparisonRow | ComparisonError] = []
         if pending:
             # Started alongside the rows; each row waits for it only after its own bars.
-            with ThreadPoolExecutor(max_workers=1) as bill_pool:
-                bills_future = bill_pool.submit(self._bills_for, period, risk_free_rate)
+            with in_background(lambda: self._bills_for(period, risk_free_rate)) as bills_future:
                 built = map_concurrently(
                     pending,
                     lambda s: self._ticker_row(s, period, risk_free_rate, bills_future),
@@ -469,9 +468,3 @@ def _norm(symbol: str) -> str:
     if not normalized:
         raise SymbolNotFound("Empty ticker symbol.")
     return normalized
-
-
-# Signals that genuinely mean "Yahoo has no data for this symbol". KeyError is what
-# fast_info leaks for an unknown symbol; YFTickerMissingError covers yfinance's own
-# missing-ticker/timezone/prices errors (YFTzMissingError and YFPricesMissingError
-# subclass it). Anything outside this set is treated as a source/transport failure.

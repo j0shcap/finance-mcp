@@ -43,7 +43,7 @@ _HOW_TO_PROCEED = (
 )
 
 
-def bills_fetch_failed(reason: str) -> RiskFree:
+def _bills_fetch_failed(reason: str) -> RiskFree:
     """No default rate because the T-bill history could not be fetched: worth a retry."""
     return RiskFree(
         None,
@@ -63,7 +63,7 @@ def table_risk_free(risk_free_rate: float | None, bills: Bills) -> RiskFree:
     if risk_free_rate is not None:
         return RiskFree(risk_free_rate, "caller")
     if isinstance(bills, str):
-        return bills_fetch_failed(bills)
+        return _bills_fetch_failed(bills)
     return RiskFree(None, "treasury_bill")
 
 
@@ -82,9 +82,9 @@ def risk_free_over(risk_free_rate: float | None, bills: Bills, start: str, end: 
     """
     if risk_free_rate is not None:
         return RiskFree(risk_free_rate, "caller")
-    # With no rate given, _bills_for always fetched: bills is the history or its error.
+    # With no rate given the caller always fetched: bills is the history or its error.
     if not isinstance(bills, list):
-        return bills_fetch_failed(str(bills))
+        return _bills_fetch_failed(str(bills))
     first_day, last_day = day(start), day(end)
     inside = [b for b in bills if first_day <= day(b.date) <= last_day]
     tolerance = RISK_FREE_EDGE_TOLERANCE_DAYS

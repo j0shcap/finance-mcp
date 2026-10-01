@@ -39,7 +39,10 @@ from finance_mcp.data.models import (
 )
 from finance_mcp.data.relevance import Identity
 
-#: Exceptions that mean Yahoo has no data for the symbol, not that the fetch failed.
+#: Signals that genuinely mean "Yahoo has no data for this symbol". KeyError is what
+#: fast_info leaks for an unknown symbol; YFTickerMissingError covers yfinance's own
+#: missing-ticker/timezone/prices errors (YFTzMissingError and YFPricesMissingError
+#: subclass it). Anything outside this set is treated as a source/transport failure.
 _NO_DATA_ERRORS = (KeyError, YFTickerMissingError)
 #: Intervals whose bars are points in time rather than whole sessions. Kept in sync with
 #: HistoryInterval (a test pins it): everything that is not a daily-or-longer interval.

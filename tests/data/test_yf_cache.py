@@ -89,6 +89,26 @@ def test_refreshing_a_present_key_makes_it_most_recently_used() -> None:
     assert ("k", "B") not in cache
 
 
+def test_ttl_cache_refetches_an_expired_entry() -> None:
+    clock = FakeClock()
+    cache = TTLCache(clock, max_entries=4)
+    assert cache.get_or_fetch(("k",), 30.0, lambda: "first") == "first"
+    clock.advance(29.0)
+    assert cache.get_or_fetch(("k",), 30.0, lambda: "second") == "first"
+    clock.advance(1.0)
+    assert cache.get_or_fetch(("k",), 30.0, lambda: "second") == "second"
+
+
+def test_ttl_cache_evicts_the_least_recently_used_entry() -> None:
+    cache = TTLCache(FakeClock(), max_entries=2)
+    cache.get_or_fetch(("a",), 30.0, lambda: "a")
+    cache.get_or_fetch(("b",), 30.0, lambda: "b")
+    cache.get_or_fetch(("a",), 30.0, lambda: "unused")  # a is now the most recently used
+    cache.get_or_fetch(("c",), 30.0, lambda: "c")
+    assert ("a",) in cache and ("c",) in cache and ("b",) not in cache
+    assert len(cache) == 2
+
+
 def test_a_value_the_predicate_rejects_is_returned_but_not_kept() -> None:
     cache = TTLCache(FakeClock(), max_entries=4)
     assert cache.get_or_fetch(("k",), 30.0, lambda: "big", cacheable=lambda v: v != "big") == "big"

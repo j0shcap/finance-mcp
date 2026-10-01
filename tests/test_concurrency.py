@@ -4,7 +4,7 @@ import threading
 
 import pytest
 
-from finance_mcp.data.concurrency import in_parallel, map_concurrently
+from finance_mcp.data.concurrency import in_background, in_parallel, map_concurrently
 
 
 def test_in_parallel_keeps_the_second_error_when_both_fail() -> None:
@@ -44,3 +44,15 @@ def test_map_concurrently_keeps_input_order() -> None:
 
 def test_map_concurrently_of_nothing_is_empty() -> None:
     assert map_concurrently([], str.upper, max_workers=4) == []
+
+
+def test_in_background_runs_while_the_block_does() -> None:
+    started = threading.Event()
+
+    def fetch() -> str:
+        started.set()
+        return "bills"
+
+    with in_background(fetch) as future:
+        assert started.wait(timeout=10)
+        assert future.result() == "bills"
