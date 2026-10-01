@@ -1,5 +1,7 @@
 """YFinanceClient.get_company_profile."""
 
+from types import SimpleNamespace
+
 import pandas as pd
 import pytest
 from yfinance.exceptions import (
@@ -7,6 +9,7 @@ from yfinance.exceptions import (
 )
 
 from finance_mcp.data.errors import DataUnavailable, SymbolNotFound
+from finance_mcp.data.yahoo import corporate_actions
 from tests.fakes import (
     fake_ticker_factory,
     make_client,
@@ -114,18 +117,31 @@ def test_get_company_profile_parse_error_is_data_unavailable() -> None:
     assert "AAPL" in str(exc.value)
 
 
-@pytest.mark.parametrize("read", ["dividends", "splits"])
-def test_get_company_profile_event_read_error_is_data_unavailable(read: str) -> None:
+def test_get_company_profile_event_read_error_is_data_unavailable() -> None:
     # .info has already identified the instrument, so this is not SymbolNotFound.
     client = make_client(
-        factory=fake_ticker_factory(
-            info=FULL_INFO, **{f"{read}_error": YFException(f"{read} down")}
-        )
+        factory=fake_ticker_factory(info=FULL_INFO, actions_error=YFException("chart down"))
     )
     with pytest.raises(DataUnavailable) as exc:
         client.get_company_profile("AAPL")
     assert type(exc.value) is DataUnavailable
-    assert f"{read} down" in str(exc.value)
+    assert "chart down" in str(exc.value)
+
+
+def test_get_company_profile_reads_events_from_weekly_history() -> None:
+    # Daily history since listing is megabytes; weekly carries the same events.
+    factory = fake_ticker_factory(info=FULL_INFO)
+    make_client(factory=factory).get_company_profile("AAPL")
+    assert factory.captured_actions_calls == [("max", "1wk")]  # type: ignore[attr-defined]
+
+
+def test_corporate_actions_without_the_private_cache_uses_the_public_reads() -> None:
+    dividends = make_series(["2024-02-09"], [0.24])
+    splits = make_series(["2020-08-31"], [4.0])
+    read_dividends, read_splits = corporate_actions(
+        SimpleNamespace(dividends=dividends, splits=splits)
+    )
+    assert read_dividends is dividends and read_splits is splits
 
 
 def test_get_company_profile_nan_employees_nulled_not_fatal() -> None:

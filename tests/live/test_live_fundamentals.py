@@ -6,11 +6,16 @@ unit assertions live here.
 
 import datetime
 
+import pytest
+import yfinance as yf
+
+from finance_mcp.data.yahoo import corporate_actions
 from tests.live.conftest import (
     AAPL,
     SAP,
     SPY,
     Layer,
+    _is_rate_limited,
     iso_dates_descending,
     require_present,
 )
@@ -207,6 +212,29 @@ async def test_company_profile_shape(layer: Layer) -> None:
     for split in profile.splits:
         datetime.date.fromisoformat(split.date)
         assert split.ratio > 0
+
+
+# yf_client builds a YahooSource, which makes yfinance raise a throttle instead of
+# returning an empty Series.
+@pytest.mark.usefixtures("yf_client")
+def test_profile_events_from_weekly_history_match_the_public_daily_events() -> None:
+    """corporate_actions' weekly-history shortcut returns exactly what .dividends/.splits do.
+
+    KO's events reach back to a 1965 split, so a source that drops old events can't pass.
+    The private cache is asserted present too: without it corporate_actions quietly takes the
+    slow public path, and this test is where that should show up.
+    """
+    ticker = yf.Ticker("KO")
+    try:
+        assert hasattr(ticker._lazy_load_price_history(), "_get_history_cache")
+        dividends, splits = corporate_actions(ticker)
+        daily_dividends, daily_splits = ticker.dividends, ticker.splits
+    except Exception as exc:
+        if _is_rate_limited(exc):
+            pytest.skip(f"Yahoo rate-limited the KO history: {exc}")
+        raise
+    assert splits.index.min().year < 1970, f"KO's earliest split is missing: {splits}"
+    assert dividends.equals(daily_dividends) and splits.equals(daily_splits)
 
 
 async def test_company_profile_dividend_yield_is_a_percent(layer: Layer) -> None:

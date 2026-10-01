@@ -105,8 +105,7 @@ def fake_ticker_factory(
     recommendations: pd.DataFrame | None = None,
     news: list[dict[str, Any]] | None = None,
     news_error: Exception | None = None,
-    dividends_error: Exception | None = None,
-    splits_error: Exception | None = None,
+    actions_error: Exception | None = None,
     recommendations_error: Exception | None = None,
 ) -> Callable[[str], Any]:
     """Build a ticker factory returning a stub Ticker for any symbol.
@@ -124,8 +123,21 @@ def fake_ticker_factory(
     financials_map = financials or {}
     # The ``count`` and ``tab`` the last get_news call received.
     captured_news_call: dict[str, int | str] = {}
+    # The (period, interval) of every dividends-and-splits read, in order.
+    captured_actions_calls: list[tuple[str, str]] = []
     # Every attribute the client may read a statement from, so the stub cannot drift.
     statement_attrs = frozenset(FINANCIALS_ATTR.values())
+
+    def history_cache(period: str, interval: str) -> dict[str, Any]:
+        # yfinance's private price-history cache, which corporate_actions reads.
+        if actions_error is not None:
+            raise actions_error
+        captured_actions_calls.append((period, interval))
+        empty = pd.Series(dtype=float)
+        return {
+            "dividends": dividends if dividends is not None else empty,
+            "splits": splits if splits is not None else empty,
+        }
 
     class _Ticker:
         @property
@@ -145,17 +157,8 @@ def fake_ticker_factory(
                 raise info_error
             return info if info is not None else {}
 
-        @property
-        def dividends(self) -> Any:
-            if dividends_error is not None:
-                raise dividends_error
-            return dividends if dividends is not None else pd.Series(dtype=float)
-
-        @property
-        def splits(self) -> Any:
-            if splits_error is not None:
-                raise splits_error
-            return splits if splits is not None else pd.Series(dtype=float)
+        def _lazy_load_price_history(self) -> Any:
+            return SimpleNamespace(_get_history_cache=history_cache)
 
         @property
         def recommendations(self) -> Any:
@@ -181,6 +184,7 @@ def fake_ticker_factory(
         return _Ticker()
 
     factory.captured_news_call = captured_news_call  # type: ignore[attr-defined]
+    factory.captured_actions_calls = captured_actions_calls  # type: ignore[attr-defined]
     return factory
 
 
