@@ -182,18 +182,6 @@ def test_run_calc_passes_through_invalid_input_message() -> None:
         run_calc(boom)
 
 
-async def test_loan_schedule_rate_overflow_surfaces_as_tool_error(
-    client: Client[FastMCPTransport],
-) -> None:
-    # annual_rate=1e4 satisfies the Field(ge=0) bound, so it reaches the data layer.
-    # The actionable, model-facing message must survive the run_calc -> ToolError hop.
-    with pytest.raises(ToolError, match="annual_rate is too large for this term"):
-        await client.call_tool(
-            "loan_schedule",
-            {"principal": 1000.0, "annual_rate": 1e4, "term_months": 360},
-        )
-
-
 async def test_time_value_of_money_overflow_surfaces_as_tool_error(
     client: Client[FastMCPTransport],
 ) -> None:
@@ -319,30 +307,52 @@ async def test_bond_price_dated_tool_treasury_convention(
     assert street.data.clean_price == pytest.approx(99.738573, abs=1e-6)
 
 
-#: One call per calculator that passes every Field bound but fails the calculator's own checks.
-INVALID_CALLS: dict[str, dict[str, Any]] = {
-    "time_value_of_money": {"solve_for": "fv", "pv": -1000.0, "pmt": 0.0, "nper": 10.0},
-    "loan_schedule": {"principal": 1000.0, "annual_rate": 0.05, "term_months": 0},
-    "irr": {"cashflows": [100.0, 200.0]},
-    "npv": {"rate": 0.1, "cashflows": []},
-    "xnpv": {"rate": 0.1, "cashflows": []},
-    "xirr": {
-        "cashflows": [
-            {"date": "2021-01-01", "amount": 100.0},
-            {"date": "2022-01-01", "amount": 200.0},
-        ]
-    },
-    "convert_rate": {"rate": -20.0, "periods_per_year": 12, "direction": "nominal_to_effective"},
+#: Per calculator, a call that passes every Field bound but fails the calculator's own
+#: checks, and that calculator's message. npv and xnpv are absent: their Field bounds
+#: already exclude every input the calculator would reject.
+INVALID_CALLS: dict[str, tuple[dict[str, Any], str]] = {
+    "time_value_of_money": (
+        {"solve_for": "fv", "pv": -1000.0, "pmt": 0.0, "nper": 10.0},
+        "'rate' is required",
+    ),
+    # annual_rate=1e4 satisfies Field(ge=0), but (1 + 1e4/12)**360 overflows.
+    "loan_schedule": (
+        {"principal": 1000.0, "annual_rate": 1e4, "term_months": 360},
+        "annual_rate is too large for this term",
+    ),
+    "irr": ({"cashflows": [100.0, 200.0]}, "sign change"),
+    "xirr": (
+        {
+            "cashflows": [
+                {"date": "2021-01-01", "amount": 100.0},
+                {"date": "2022-01-01", "amount": 200.0},
+            ]
+        },
+        "sign change",
+    ),
+    "convert_rate": (
+        {"rate": -20.0, "periods_per_year": 12, "direction": "nominal_to_effective"},
+        "Invalid nominal rate",
+    ),
     # ytm = -frequency makes the discount base 1 + ytm/frequency zero.
-    "bond_price": {"face": 1000.0, "coupon_rate": 0.05, "years_to_maturity": 10.0, "ytm": -2.0},
-    "bond_ytm": {
-        "face": 1000.0,
-        "coupon_rate": 0.05,
-        "years_to_maturity": 2.5,
-        "price": 950.0,
-        "frequency": 1,
-    },
-    "mirr": {"cashflows": [-100.0, -50.0], "finance_rate": 0.1, "reinvest_rate": 0.1},
+    "bond_price": (
+        {"face": 1000.0, "coupon_rate": 0.05, "years_to_maturity": 10.0, "ytm": -2.0},
+        "greater than -frequency",
+    ),
+    "bond_ytm": (
+        {
+            "face": 1000.0,
+            "coupon_rate": 0.05,
+            "years_to_maturity": 2.5,
+            "price": 950.0,
+            "frequency": 1,
+        },
+        "whole number of coupon periods",
+    ),
+    "mirr": (
+        {"cashflows": [-100.0, -50.0], "finance_rate": 0.1, "reinvest_rate": 0.1},
+        "one negative and one positive",
+    ),
 }
 
 
@@ -350,8 +360,9 @@ INVALID_CALLS: dict[str, dict[str, Any]] = {
 async def test_invalid_input_surfaces_as_tool_error(
     client: Client[FastMCPTransport], tool: str
 ) -> None:
-    with pytest.raises(ToolError):
-        await client.call_tool(tool, INVALID_CALLS[tool])
+    arguments, message = INVALID_CALLS[tool]
+    with pytest.raises(ToolError, match=message):
+        await client.call_tool(tool, arguments)
 
 
 @pytest.mark.parametrize(
