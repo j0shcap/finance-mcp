@@ -90,7 +90,7 @@ select = ["E", "W", "F", "B", "I", "UP", "SIM", "RUF"]
 [tool.mypy]
 python_version = "3.13"
 strict = true
-files = ["src", "tests"]
+files = ["src", "tests", "scripts"]
 
 [[tool.mypy.overrides]]
 module = ["yfinance.*", "pandas.*", "numpy_financial.*", "scipy.*"]
