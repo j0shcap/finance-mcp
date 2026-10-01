@@ -25,24 +25,7 @@ from fastmcp import Client
 from fastmcp.client.transports import FastMCPTransport
 from mcp.types import TextContent, Tool
 
-#: Arguments to render each prompt with. Must name every registered prompt, so a new
-#: prompt cannot bypass the guard by never being rendered.
-SAMPLE_ARGS: dict[str, dict[str, str]] = {
-    "analyze_stock": {"ticker": "AAPL", "horizon": "3y"},
-    "compare_stocks": {"tickers": "KO, PEP, MDLZ", "horizon": "3y"},
-    "investment_cashflows": {
-        "cashflows": "-1000, 300, 300, 400",
-        "discount_rate": "8%",
-        "reinvest_rate": "6%",
-    },
-    "bond_analysis": {"bond": "UST 4% due 2036-01-15, clean 92.30", "shock_bp": "50"},
-    "loan_planner": {
-        "principal": "400000",
-        "annual_rate": "6.5%",
-        "term_months": "360",
-        "extra_payment": "250",
-    },
-}
+from tests.prompt_samples import SAMPLE_ARGS
 
 _CALL_SITE = re.compile(r"\b([a-z][a-z0-9_]*)\(")
 _CALL_WITH_ARGS = re.compile(r"\b([a-z][a-z0-9_]*)\(([^()]*)\)")
