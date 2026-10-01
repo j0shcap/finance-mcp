@@ -118,3 +118,8 @@ commit builds a `.devN` version that can't pass for a release. There is no versi
 
 The release must be created by a person (or a personal token), not by another workflow's
 `GITHUB_TOKEN`, which can't trigger the Publish workflow. Pre-release tags aren't published.
+
+If verification fails, nothing reached PyPI, but the GitHub Release and its tag exist. Remove
+both with `gh release delete vX.Y.Z --cleanup-tag --yes`, fix `master`, and run
+`make release` again. Deleting only the release keeps the tag, and a new release would then
+build the old commit; `make release` refuses to start while the tag exists.

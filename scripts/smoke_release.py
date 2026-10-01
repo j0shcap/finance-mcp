@@ -6,6 +6,10 @@ Launches ``uvx --refresh --from mcp-finance==X.Y.Z mcp-finance`` over stdio, che
 server reports that version and lists its tools, and calls one calculator (no network
 needed beyond the install). ``--from-spec`` launches something else instead, e.g. a local
 wheel, to rehearse the script.
+
+Exit status: 0 when it all checks out, 1 when the installed release is wrong, and 75
+(EX_TEMPFAIL) when it could not be installed or launched at all, which is worth retrying
+while the package index catches up.
 """
 
 import argparse
@@ -43,7 +47,13 @@ def main() -> int:
     parser.add_argument("version")
     parser.add_argument("--from-spec", help="what uvx installs (default: mcp-finance==VERSION)")
     args = parser.parse_args()
-    problems = asyncio.run(smoke(args.version, args.from_spec or f"mcp-finance=={args.version}"))
+    try:
+        problems = asyncio.run(
+            smoke(args.version, args.from_spec or f"mcp-finance=={args.version}")
+        )
+    except Exception as exc:  # the install or launch failed; nothing was checked
+        print(f"could not install or launch mcp-finance {args.version}: {exc!r}", file=sys.stderr)
+        return 75
     for problem in problems:
         print(f"error: {problem}", file=sys.stderr)
     if not problems:

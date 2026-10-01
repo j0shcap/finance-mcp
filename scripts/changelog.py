@@ -45,15 +45,12 @@ def cut_release(text: str, version: str, date: str) -> str:
         raise ChangelogError(f"{version!r} is not a release version: expected X.Y.Z")
     if version in released_versions(text):
         raise ChangelogError(f"CHANGELOG.md already has a section for {version}")
-    unreleased = _section_body(text, "Unreleased")
+    start, end = _section_span(text, "Unreleased")
+    unreleased = text[start:end]
     if not unreleased.strip():
         raise ChangelogError("the [Unreleased] section is empty: nothing to release")
     previous = released_versions(text)[0]
-    text = text.replace(
-        f"## [Unreleased]{unreleased}",
-        f"## [Unreleased]\n\n## [{version}] - {date}\n\n{unreleased.lstrip(chr(10))}",
-        1,
-    )
+    text = f"{text[:start]}\n\n## [{version}] - {date}\n\n{unreleased.lstrip(chr(10))}{text[end:]}"
     links = {m["version"]: m for m in _LINK.finditer(text)}
     if "Unreleased" not in links:
         raise ChangelogError("CHANGELOG.md has no [Unreleased] compare link")
@@ -69,17 +66,24 @@ def cut_release(text: str, version: str, date: str) -> str:
 
 def _section_body(text: str, version: str) -> str:
     """Everything after ``## [version]...`` up to the next section or the link block."""
+    start, end = _section_span(text, version)
+    return text[start:end]
+
+
+def _section_span(text: str, version: str) -> tuple[int, int]:
+    """Where the body of ``## [version]...`` starts (end of its heading line) and ends."""
     headings = list(_HEADING.finditer(text))
     for index, heading in enumerate(headings):
         if heading["version"] != version:
             continue
-        start = text.index("\n", heading.end())
+        newline = text.find("\n", heading.end())
+        start = newline if newline != -1 else len(text)
         if index + 1 < len(headings):
             end = headings[index + 1].start()
         else:
             first_link = _LINK.search(text, start)
             end = first_link.start() if first_link else len(text)
-        return text[start:end]
+        return start, end
     raise ChangelogError(f"CHANGELOG.md has no section for {version}")
 
 

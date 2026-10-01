@@ -59,6 +59,10 @@ jobs:
             exit 1
           fi
           if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            if [ -n "$(git tag --points-at HEAD)" ]; then
+              echo "::error::HEAD is already tagged ($(git tag --points-at HEAD | xargs)); rehearse from a later commit." >&2
+              exit 1
+            fi
             git tag "$TAG"  # local only, never pushed: lets hatch-vcs build the rehearsed version
           elif ! git merge-base --is-ancestor "$TAG" origin/master; then
             echo "::error::$TAG is not on master." >&2
@@ -145,10 +149,15 @@ jobs:
         run: python3 scripts/check_pypi_release.py release.json dist
       - name: Install by name and call a tool
         run: |
+          # Exit 75 means the install or launch failed, which the simple index lagging the
+          # JSON API explains, so retry; any other failure is a real one.
           for _ in $(seq 10); do
-            if uv run --no-project --with mcp scripts/smoke_release.py "$VERSION"; then
-              exit 0
+            status=0
+            uv run --no-project --with 'mcp>=2,<3' scripts/smoke_release.py "$VERSION" || status=$?
+            if [ "$status" -ne 75 ]; then
+              exit "$status"
             fi
-            sleep 30  # the simple index can lag the JSON API
+            sleep 30
           done
+          echo "::error::mcp-finance $VERSION could not be installed by name." >&2
           exit 1

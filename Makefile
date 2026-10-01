@@ -39,6 +39,11 @@ release-prep:
 release:
 	@test -n "$(VERSION)" || { echo "usage: make release VERSION=X.Y.Z" >&2; exit 1; }
 	git fetch origin master
+	@if git ls-remote --exit-code --tags origin "refs/tags/v$(VERSION)" > /dev/null; then \
+		echo "v$(VERSION) already exists on origin. After a failed release, remove it first:" >&2; \
+		echo "  gh release delete v$(VERSION) --cleanup-tag --yes" >&2; \
+		exit 1; \
+	fi
 	git show origin/master:CHANGELOG.md > .release-changelog.md
 	uv run python scripts/changelog.py notes $(VERSION) --file .release-changelog.md > .release-notes.md
 	gh release create v$(VERSION) --target "$$(git rev-parse origin/master)" \

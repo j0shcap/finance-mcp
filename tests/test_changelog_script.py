@@ -144,3 +144,15 @@ def test_the_cli_reports_an_error_and_exits_non_zero(
     path.write_text(CHANGELOG, encoding="utf-8")
     assert main(["notes", "9.9.9", "--file", str(path)]) == 1
     assert "no released section for 9.9.9" in capsys.readouterr().err
+
+
+def test_a_suffixed_unreleased_heading_is_still_cut_in_full() -> None:
+    suffixed = CHANGELOG.replace("## [Unreleased]\n", "## [Unreleased] - TBD\n")
+    cut = cut_release(suffixed, "0.5.0", "2026-10-02")
+    assert release_notes(cut, "0.5.0") == "### Changed\n- Requires fastmcp 4.x.\n"
+    assert "## [Unreleased] - TBD\n\n## [0.5.0] - 2026-10-02\n" in cut
+
+
+def test_a_heading_on_the_last_line_without_a_newline_is_an_empty_section() -> None:
+    with pytest.raises(ChangelogError, match="empty"):
+        release_notes("# Changelog\n\n## [0.1.0] - 2026-01-01", "0.1.0")
