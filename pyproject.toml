@@ -34,7 +34,7 @@ classifiers = [
 dependencies = [
   # fastmcp is the API surface we build on (FastMCP, Client, ToolError,
   # client.transports), so cap below the next major: a 4.x release may break it.
-  "fastmcp>=3.0,<4",
+  "fastmcp>=3.0,<5",
   "pydantic>=2.11.7", # floor required by fastmcp 3.x
   "pydantic-settings>=2.0",
   # yf.Search and Ticker.get_news(count=, tab=) landed in the 0.2.5x line along
