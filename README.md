@@ -52,7 +52,9 @@ and deterministic financial calculators.
 
 The calculators are pure and deterministic; the market-data and analytics tools fetch
 live data (briefly cached) and surface source errors clearly. All tools return typed,
-structured results and report invalid inputs as clear errors.
+structured results and report invalid inputs as clear errors. Market-data results are
+rounded to 7 significant digits (whole numbers such as volumes keep every digit), the
+precision Yahoo actually provides; calculator results are returned at full precision.
 
 ## Prompts
 

@@ -1,9 +1,10 @@
 """Pydantic return models. Every tool returns one of these (never a bare dict)."""
 
 import datetime
-from typing import Literal
+import math
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SerializerFunctionWrapHandler, field_serializer
 
 TVMVariable = Literal["pv", "fv", "pmt", "rate", "nper"]
 Statement = Literal["income", "balance", "cashflow"]
@@ -15,6 +16,50 @@ RateDirection = Literal["nominal_to_effective", "effective_to_nominal"]
 Compounding = Literal["discrete", "continuous"]
 BondDayCount = Literal["actual/actual", "30/360"]
 FirstPeriodDiscount = Literal["compound", "simple"]
+
+
+#: Significant digits kept in market-data output. Yahoo's prices are float32 values
+#: widened to float64 (float32 holds ~7.2 digits), so the rest is conversion noise:
+#: float32(316.98) arrives as 316.9800109863281.
+MARKET_DATA_SIGNIFICANT_DIGITS = 7
+
+
+def round_significant(value: float, digits: int = MARKET_DATA_SIGNIFICANT_DIGITS) -> float:
+    """Round ``value`` to ``digits`` significant digits, never rounding away integer digits.
+
+    316.9800109863281 -> 316.98 and 1.133529782295227 -> 1.13353, but a volume of
+    49875295 keeps every digit: past ``digits`` integer digits the value is rounded to
+    a whole number instead. Zero, NaN and infinities pass through unchanged.
+    """
+    if value == 0.0 or not math.isfinite(value):
+        return value
+    return round(value, max(0, digits - 1 - math.floor(math.log10(abs(value)))))
+
+
+def _round_floats(value: Any) -> Any:
+    if isinstance(value, float):
+        return round_significant(value)
+    if isinstance(value, list):
+        return [_round_floats(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _round_floats(item) for key, item in value.items()}
+    return value
+
+
+class MarketData(BaseModel):
+    """Base for results built from Yahoo data: floats are rounded on output only.
+
+    Rounding happens in serialization, so attributes keep full precision for the
+    analytics that read them, and the published schema is unchanged. Calculator results
+    do not use this base: they are exact math that callers check against Excel.
+    """
+
+    # Deliberately no return annotation: pydantic takes a serializer's return type as the
+    # field's published output schema, so "-> Any" would erase every field's type. Left
+    # unannotated, each field keeps its own schema.
+    @field_serializer("*", mode="wrap")
+    def _round_market_floats(self, value: Any, handler: SerializerFunctionWrapHandler):  # type: ignore[no-untyped-def]
+        return _round_floats(handler(value))
 
 
 class TVMResult(BaseModel):
@@ -232,7 +277,7 @@ class BondDatedYTM(BaseModel):
     )
 
 
-class Quote(BaseModel):
+class Quote(MarketData):
     """A current price snapshot for one ticker."""
 
     symbol: str = Field(description="Ticker symbol.")
@@ -257,7 +302,7 @@ class Quote(BaseModel):
     volume: float | None = Field(default=None, description="Last trade volume, in shares.")
 
 
-class QuoteError(BaseModel):
+class QuoteError(MarketData):
     """Why one ticker in a get_quote batch could not be fetched."""
 
     symbol: str = Field(
@@ -269,7 +314,7 @@ class QuoteError(BaseModel):
     )
 
 
-class QuoteResult(BaseModel):
+class QuoteResult(MarketData):
     """Quotes for a batch of tickers: the ones that worked, plus per-ticker failures."""
 
     quotes: list[Quote] = Field(
@@ -283,7 +328,7 @@ class QuoteResult(BaseModel):
     )
 
 
-class PriceBar(BaseModel):
+class PriceBar(MarketData):
     """One OHLCV bar. Prices are auto-adjusted for splits and dividends."""
 
     date: str = Field(
@@ -298,7 +343,7 @@ class PriceBar(BaseModel):
     volume: float = Field(description="Volume, in shares.")
 
 
-class PriceSummary(BaseModel):
+class PriceSummary(MarketData):
     """Compact summary over the requested history window."""
 
     start_date: str = Field(description="First bar date/timestamp (see PriceBar.date).")
@@ -313,7 +358,7 @@ class PriceSummary(BaseModel):
     bars: int = Field(description="Number of bars in the full window.")
 
 
-class PriceHistory(BaseModel):
+class PriceHistory(MarketData):
     """OHLCV history plus a computed summary."""
 
     symbol: str = Field(description="Ticker symbol.")
@@ -326,7 +371,7 @@ class PriceHistory(BaseModel):
     )
 
 
-class FinancialStatement(BaseModel):
+class FinancialStatement(MarketData):
     """A financial statement (income/balance/cashflow) as a label -> per-period values table."""
 
     symbol: str = Field(description="Ticker symbol.")
@@ -364,14 +409,14 @@ class FinancialStatement(BaseModel):
     )
 
 
-class DividendEvent(BaseModel):
+class DividendEvent(MarketData):
     """A single cash dividend."""
 
     date: str = Field(description="Ex-dividend date (ISO 8601).")
     amount: float = Field(description="Cash dividend per share, in the trading currency.")
 
 
-class SplitEvent(BaseModel):
+class SplitEvent(MarketData):
     """A single stock split."""
 
     date: str = Field(description="Split date (ISO 8601).")
@@ -380,7 +425,7 @@ class SplitEvent(BaseModel):
     )
 
 
-class CompanyProfile(BaseModel):
+class CompanyProfile(MarketData):
     """Company profile and key stats, with recent corporate actions."""
 
     symbol: str = Field(description="Ticker symbol.")
@@ -419,7 +464,7 @@ class CompanyProfile(BaseModel):
     splits: list[SplitEvent] = Field(default_factory=list, description="Stock split history.")
 
 
-class KeyMetrics(BaseModel):
+class KeyMetrics(MarketData):
     """Valuation / profitability / leverage ratios as reported by Yahoo. Units vary by field.
 
     Absolute amounts are NOT all in one currency: the financialData figures (total debt/cash,
@@ -502,7 +547,7 @@ class KeyMetrics(BaseModel):
     )
 
 
-class RecommendationPeriod(BaseModel):
+class RecommendationPeriod(MarketData):
     """Analyst recommendation counts for one period bucket."""
 
     period: str = Field(
@@ -516,7 +561,7 @@ class RecommendationPeriod(BaseModel):
     strong_sell: int = Field(description="Number of analysts with a Strong Sell rating.")
 
 
-class AnalystData(BaseModel):
+class AnalystData(MarketData):
     """Sell-side analyst consensus and price targets as reported by Yahoo."""
 
     symbol: str = Field(description="Ticker symbol.")
@@ -560,7 +605,7 @@ class AnalystData(BaseModel):
     )
 
 
-class NewsArticle(BaseModel):
+class NewsArticle(MarketData):
     """A single recent news item about a symbol, as surfaced by Yahoo Finance."""
 
     title: str = Field(description="Headline text.")
@@ -580,7 +625,7 @@ class NewsArticle(BaseModel):
     )
 
 
-class NewsResult(BaseModel):
+class NewsResult(MarketData):
     """Recent news for a symbol, newest first."""
 
     symbol: str = Field(description="Ticker symbol.")
@@ -599,7 +644,7 @@ class NewsResult(BaseModel):
     )
 
 
-class SymbolMatch(BaseModel):
+class SymbolMatch(MarketData):
     """One search hit resolving a name/query to a tradable symbol."""
 
     symbol: str = Field(description="Ticker symbol, e.g. 'AAPL'.")
@@ -623,7 +668,7 @@ class SymbolMatch(BaseModel):
     )
 
 
-class SymbolSearchResult(BaseModel):
+class SymbolSearchResult(MarketData):
     """Search results for a query, best-match first."""
 
     query: str = Field(description="The search query that produced these results.")
@@ -632,7 +677,7 @@ class SymbolSearchResult(BaseModel):
     )
 
 
-class PerformanceStats(BaseModel):
+class PerformanceStats(MarketData):
     """Return and risk statistics computed from daily closes over the requested window."""
 
     symbol: str = Field(description="Ticker symbol.")
@@ -730,7 +775,7 @@ class PerformanceStats(BaseModel):
     )
 
 
-class BenchmarkComparison(BaseModel):
+class BenchmarkComparison(MarketData):
     """How one instrument performed relative to a benchmark over the dates they share.
 
     Both series are daily auto-adjusted closes, INNER-JOINED on date: a 24/7 instrument's
@@ -818,7 +863,7 @@ class BenchmarkComparison(BaseModel):
     )
 
 
-class ComparisonError(BaseModel):
+class ComparisonError(MarketData):
     """Why one ticker in a compare_tickers batch has no row."""
 
     symbol: str = Field(
@@ -831,7 +876,7 @@ class ComparisonError(BaseModel):
     )
 
 
-class TickerComparisonRow(BaseModel):
+class TickerComparisonRow(MarketData):
     """One ticker's row in a side-by-side comparison: performance plus key valuation.
 
     Performance figures come from daily auto-adjusted closes over the requested window
@@ -920,7 +965,7 @@ class TickerComparisonRow(BaseModel):
     )
 
 
-class TickerComparison(BaseModel):
+class TickerComparison(MarketData):
     """Side-by-side performance and valuation for a small set of tickers.
 
     Results are partial, like get_quote: a ticker whose price history could not be fetched

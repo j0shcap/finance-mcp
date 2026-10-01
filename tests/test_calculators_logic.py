@@ -65,6 +65,25 @@ def test_missing_required_input_raises() -> None:
         time_value_of_money(solve_for="fv", pv=-1000.0, pmt=0.0, nper=10.0)
 
 
+def test_omitted_fv_defaults_to_zero() -> None:
+    # Excel's PMT/PV/NPER/RATE default fv to 0, so a plain loan payment needs no fv.
+    result = time_value_of_money(solve_for="pmt", pv=400000.0, rate=0.005, nper=360.0)
+    assert result.solved_value == pytest.approx(-2398.2021006, rel=1e-9)
+    assert result.fv == 0.0
+
+
+def test_failure_with_defaulted_fv_says_fv_was_omitted() -> None:
+    # A CAGR solve that forgot fv: the defaulted 0 is the likely mistake, so name it.
+    with pytest.raises(InvalidInput, match="fv was omitted and defaulted to 0"):
+        time_value_of_money(solve_for="rate", pv=-1000.0, nper=10.0)
+
+
+def test_failure_with_explicit_fv_does_not_mention_the_default() -> None:
+    with pytest.raises(InvalidInput) as excinfo:
+        time_value_of_money(solve_for="rate", pv=-1000.0, fv=0.0, nper=10.0)
+    assert "omitted" not in str(excinfo.value)
+
+
 def test_result_echoes_all_fields() -> None:
     result = time_value_of_money(solve_for="fv", pv=-1000.0, pmt=0.0, rate=0.05, nper=10.0)
     assert result.rate == 0.05

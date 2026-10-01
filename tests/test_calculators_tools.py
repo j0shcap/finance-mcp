@@ -20,6 +20,16 @@ async def test_time_value_of_money_tool(client: Client[FastMCPTransport]) -> Non
     assert result.data.solved_value == pytest.approx(1628.894627, rel=1e-6)
 
 
+async def test_time_value_of_money_tool_pmt_without_fv(
+    client: Client[FastMCPTransport],
+) -> None:
+    result = await client.call_tool(
+        "time_value_of_money",
+        {"solve_for": "pmt", "pv": 400000.0, "rate": 0.005, "nper": 360.0},
+    )
+    assert result.data.solved_value == pytest.approx(-2398.2021006, rel=1e-9)
+
+
 async def test_loan_schedule_tool(client: Client[FastMCPTransport]) -> None:
     result = await client.call_tool(
         "loan_schedule",
