@@ -183,6 +183,21 @@ def test_a_yfinance_without_the_quote_scraper_says_so() -> None:
         client.get_earnings("AAPL")
 
 
+@pytest.mark.parametrize(
+    "response",
+    [{"finance": {"error": "Internal"}}, {"quoteSummary": {"result": []}}, None],
+    ids=["no-envelope", "empty-result", "no-body"],
+)
+def test_a_malformed_reply_is_unavailable_not_an_unknown_symbol(response: Any) -> None:
+    def ticker(_symbol: str) -> Any:
+        return SimpleNamespace(_quote=SimpleNamespace(_fetch=lambda modules: response))
+
+    with pytest.raises(DataUnavailable) as exc:
+        make_client(ticker).get_earnings("AAPL")
+    assert type(exc.value) is DataUnavailable
+    assert "Unexpected quoteSummary response" in str(exc.value)
+
+
 def test_a_malformed_payload_is_a_parse_failure() -> None:
     summary = make_earnings_summary(dates=["next Thursday"])  # type: ignore[list-item]
     with pytest.raises(DataUnavailable, match="Failed to parse earnings for 'AAPL'"):

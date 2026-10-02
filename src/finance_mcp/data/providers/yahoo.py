@@ -547,7 +547,13 @@ def quote_summary(ticker: Any, modules: tuple[str, ...]) -> dict[str, Any]:
     fetch = getattr(getattr(ticker, "_quote", None), "_fetch", None)
     if fetch is None:
         raise DataUnavailable("This version of yfinance can't fetch Yahoo's quoteSummary.")
-    result: dict[str, Any] = fetch(modules=list(modules))["quoteSummary"]["result"][0]
+    response = fetch(modules=list(modules))
+    try:
+        result: dict[str, Any] = response["quoteSummary"]["result"][0]
+    except (KeyError, IndexError, TypeError) as exc:
+        # Not a KeyError: that is this adapter's "no such symbol" signal, and a malformed
+        # reply says nothing about the symbol.
+        raise DataUnavailable(f"Unexpected quoteSummary response: {response!r:.200}") from exc
     return result
 
 
