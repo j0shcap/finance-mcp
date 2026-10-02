@@ -23,6 +23,7 @@ MARKET_DATA_TOOLS = (
     "get_company_profile",
     "get_key_metrics",
     "get_analyst_data",
+    "get_earnings",
     "analyze_performance",
     "compare_to_benchmark",
     "compare_tickers",
@@ -62,6 +63,10 @@ ebitda_margins are FRACTIONS (0.27 = 27%, 1.41 = 141%) - multiply by 100 for dis
 - debt_to_equity is ALREADY A PERCENT (79.5 means 79.5% ~ 0.80x) - it is NOT 79.5x.
 - dividend_yield (profile) is ALREADY A PERCENT (0.35 = 0.35%, 5.92 = 5.92%) - not a fraction.
 - recommendation_mean is INVERTED: 1 = strong buy ... 5 = strong sell (lower = more bullish).
+- get_earnings: growth_percent and surprise_percent are PERCENTS (6.95 = 6.95%). EPS, revenue \
+and the reported history each carry their own currency (eps_currency, revenue_currency, \
+history_currency), which can differ for an ADR. next_report.date is the exchange's local \
+date-time; unless date_is_estimate is false it is a projection, not a date the company announced.
 - P/E, forward P/E, P/B, P/S, PEG, EV/EBITDA, EV/Revenue, current/quick ratio are plain ratios; \
 EV, total debt/cash, FCF, EBITDA are absolute amounts; EPS and book value are per-share.
 - Absolute amounts are not all in one currency: get_key_metrics reports total debt/cash, FCF, \

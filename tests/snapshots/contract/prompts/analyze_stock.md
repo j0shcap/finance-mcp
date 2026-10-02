@@ -8,6 +8,7 @@ Leave risk_free_rate out of analyze_performance, compare_to_benchmark and compar
 - analyze_performance(ticker="AAPL")
 - compare_to_benchmark(ticker="AAPL", benchmark="SPY") - swap SPY for a benchmark that fits the listing (QQQ for US tech, a local index for a non-US line)
 - get_analyst_data(ticker="AAPL")
+- get_earnings(ticker="AAPL")
 - get_news(ticker="AAPL")
 - get_quote(tickers=["AAPL"]) - returns quotes plus a per-ticker errors list
 
@@ -16,6 +17,7 @@ Leave risk_free_rate out of analyze_performance, compare_to_benchmark and compar
 - debt_to_equity is ALREADY A PERCENT (79.5 means 79.5% ~ 0.80x) - it is NOT 79.5x.
 - dividend_yield (profile) is ALREADY A PERCENT (0.35 = 0.35%, 5.92 = 5.92%) - not a fraction.
 - recommendation_mean is INVERTED: 1 = strong buy ... 5 = strong sell (lower = more bullish).
+- get_earnings: growth_percent and surprise_percent are PERCENTS (6.95 = 6.95%). EPS, revenue and the reported history each carry their own currency (eps_currency, revenue_currency, history_currency), which can differ for an ADR. next_report.date is the exchange's local date-time; unless date_is_estimate is false it is a projection, not a date the company announced.
 - P/E, forward P/E, P/B, P/S, PEG, EV/EBITDA, EV/Revenue, current/quick ratio are plain ratios; EV, total debt/cash, FCF, EBITDA are absolute amounts; EPS and book value are per-share.
 - Absolute amounts are not all in one currency: get_key_metrics reports total debt/cash, FCF, EBITDA, revenue per share and book value in financial_currency, and the EPS fields in currency (the quote currency). get_financials values are in the statement's currency field. For most US names these are the same; for ADRs and other cross-listings they are not.
 - Cross-listings (financial_currency differs from currency, e.g. an ADR): the source computes price_to_sales, price_to_book, enterprise_value, ev_to_ebitda and ev_to_revenue by mixing the quote currency with the reporting currency, and its book_value and revenue_per_share need not be per listed share - so all seven can be off by an exchange rate or an ADR ratio (TM's P/S has come back as 0.004, SAP's EV/EBITDA as 288). Never rank or value a cross-listing on them. Use trailing_pe, forward_pe and peg_ratio (the listed price over EPS per listed share, both in currency) and the margins and returns, which are each within one currency; recompute any other multiple from get_financials, converting with a quoted FX rate (e.g. get_quote on JPY=X).
@@ -48,7 +50,7 @@ From compare_to_benchmark: beta (market sensitivity) read together with correlat
 From get_quote: where the price sits in its 52-week range (context, not a signal).
 
 ## Phase 6 - Analyst view & catalysts
-From get_analyst_data: consensus recommendation, implied upside % to the mean/median target, the high-low spread as a disagreement/uncertainty signal, and the 4-period recommendation trend (upgrades vs downgrades) as sentiment momentum. From get_news: material, company-specific catalysts weighted to the 3y horizon. Articles with mentions_company false are usually market-wide stories filed under the ticker - read the title, and use one only if it bears on AAPL specifically.
+From get_analyst_data: consensus recommendation, implied upside % to the mean/median target, the high-low spread as a disagreement/uncertainty signal, and the 4-period recommendation trend (upgrades vs downgrades) as sentiment momentum. From get_earnings: whether the next report falls inside the 3y horizon (say whether its date is confirmed or estimated), the consensus for the quarter and year it covers, and the beat/miss pattern in the history. From get_news: material, company-specific catalysts weighted to the 3y horizon. Articles with mentions_company false are usually market-wide stories filed under the ticker - read the title, and use one only if it bears on AAPL specifically.
 
 ## Phase 7 - Synthesis
 - Earnings-quality flags, including the forward-P/E credibility check: forward_eps above trailing_eps implies expected earnings growth - verify the quarterly trajectory supports it, and treat an unsupported gap as a flag. When trailing_eps is positive, a forward P/E below the trailing P/E says the same thing; when trailing_eps is zero or negative the trailing P/E is meaningless, so compare the EPS figures directly instead.

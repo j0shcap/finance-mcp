@@ -11,6 +11,7 @@ from finance_mcp.data.errors import DataUnavailable, SymbolNotFound
 from finance_mcp.data.models import (
     AnalystData,
     CompanyProfile,
+    Earnings,
     FinancialStatement,
     Identity,
     KeyMetrics,
@@ -77,6 +78,9 @@ class InMemoryProvider:
     def search(self, query: str, max_results: int) -> SymbolSearchResult:
         raise DataUnavailable("not served by this provider")
 
+    def earnings(self, symbol: str) -> Earnings:
+        return Earnings(symbol=symbol)
+
     def news(self, symbol: str, count: int) -> tuple[list[NewsArticle], NewsSource]:
         return [
             NewsArticle(title="Acme beats on revenue"),
@@ -86,7 +90,7 @@ class InMemoryProvider:
 
 def _service() -> DataService:
     provider = InMemoryProvider()
-    return DataService(market=provider, news=provider)
+    return DataService(market=provider, news=provider, earnings=provider)
 
 
 def test_quotes_come_from_the_market_port() -> None:

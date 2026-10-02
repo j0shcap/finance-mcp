@@ -18,6 +18,7 @@ from typing import Protocol
 from finance_mcp.data.models import (
     AnalystData,
     CompanyProfile,
+    Earnings,
     FinancialStatement,
     Identity,
     KeyMetrics,
@@ -66,6 +67,12 @@ class MarketDataProvider(Protocol):
         ...
 
     def search(self, query: str, max_results: int) -> SymbolSearchResult: ...
+
+
+class EarningsProvider(Protocol):
+    """Earnings dates, consensus estimates and reported results."""
+
+    def earnings(self, symbol: str) -> Earnings: ...
 
 
 class NewsProvider(Protocol):

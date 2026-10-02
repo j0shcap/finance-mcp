@@ -1,0 +1,362 @@
+{
+  "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": false,
+    "openWorldHint": true,
+    "readOnlyHint": true,
+    "title": "Earnings Dates & Estimates"
+  },
+  "description": "When a company reports next, what analysts expect, and whether it beat lately.\n\nnext_report: the next report's date-time in the exchange's timezone, and whether the\ncompany has confirmed it (date_is_estimate false; true or null means it hasn't).\nestimates: EPS and revenue consensus (average, low, high, analyst count, year-ago value,\ngrowth) for the quarter the next report covers, the quarter after, and their fiscal\nyears, each with fiscal_period_end. history: the last four quarters' EPS against the\nconsensus, oldest first, with surprise_percent. growth_percent and surprise_percent are\nPERCENTS; EPS, revenue and history can each be in a different currency, so check\neps_currency, revenue_currency and history_currency. Companies only: ETFs, funds,\nindices, currencies and crypto return an error.",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "ticker": {
+        "description": "Ticker symbol, e.g. 'AAPL'. Case-insensitive. Exchange suffixes and prefixes are allowed (BRK-B, ^GSPC, RY.TO, BTC-USD, EURUSD=X); one symbol per value.",
+        "maxLength": 24,
+        "minLength": 1,
+        "pattern": "^\\s*[A-Za-z0-9.\\-^=]{1,20}\\s*$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "ticker"
+    ],
+    "type": "object"
+  },
+  "name": "get_earnings",
+  "outputSchema": {
+    "description": "Upcoming earnings date, the consensus for coming periods, and recent EPS surprises.",
+    "properties": {
+      "estimates": {
+        "description": "Consensus for the reporting and following quarter and fiscal year, in that order; a period without coverage is left out, so this can be shorter or empty.",
+        "items": {
+          "description": "EPS and revenue consensus for one upcoming fiscal period.",
+          "properties": {
+            "eps": {
+              "description": "Earnings per share, in eps_currency.",
+              "properties": {
+                "analysts": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "description": "Number of analysts estimating."
+                },
+                "average": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "description": "Mean of the analysts' estimates."
+                },
+                "growth_percent": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "description": "average against year_ago as a PERCENT (6.95 = 6.95%), as reported; an implausible value usually means a wrong year_ago."
+                },
+                "high": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "description": "Highest estimate."
+                },
+                "low": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "description": "Lowest estimate."
+                },
+                "year_ago": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "description": "The same figure for the fiscal period a year earlier."
+                }
+              },
+              "type": "object"
+            },
+            "eps_currency": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Currency (ISO 4217) of the EPS figures."
+            },
+            "fiscal_period_end": {
+              "description": "Last day of the fiscal period (YYYY-MM-DD).",
+              "type": "string"
+            },
+            "period": {
+              "description": "Which period: 'reporting_quarter' is the quarter the NEXT report covers (it may already have ended, awaiting its report), 'following_quarter' the one after; 'reporting_fiscal_year' is the fiscal year that quarter belongs to, 'following_fiscal_year' the next. Read fiscal_period_end for the actual dates.",
+              "enum": [
+                "reporting_quarter",
+                "following_quarter",
+                "reporting_fiscal_year",
+                "following_fiscal_year"
+              ],
+              "type": "string"
+            },
+            "revenue": {
+              "description": "Revenue as an absolute amount (not millions), in revenue_currency.",
+              "properties": {
+                "analysts": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "description": "Number of analysts estimating."
+                },
+                "average": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "description": "Mean of the analysts' estimates."
+                },
+                "growth_percent": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "description": "average against year_ago as a PERCENT (6.95 = 6.95%), as reported; an implausible value usually means a wrong year_ago."
+                },
+                "high": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "description": "Highest estimate."
+                },
+                "low": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "description": "Lowest estimate."
+                },
+                "year_ago": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "description": "The same figure for the fiscal period a year earlier."
+                }
+              },
+              "type": "object"
+            },
+            "revenue_currency": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Currency (ISO 4217) of the revenue figures. Can differ from eps_currency (an ADR's EPS in USD, its revenue in the home currency): check both before comparing."
+            }
+          },
+          "required": [
+            "period",
+            "fiscal_period_end",
+            "eps",
+            "revenue"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "history": {
+        "description": "The last (up to) four reported quarters, oldest first (newest LAST).",
+        "items": {
+          "description": "One reported quarter: EPS against the consensus going in.",
+          "properties": {
+            "eps_actual": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Reported EPS, in history_currency."
+            },
+            "eps_estimate": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Consensus EPS before the report, in history_currency."
+            },
+            "fiscal_quarter_end": {
+              "description": "Last day of the fiscal quarter (YYYY-MM-DD).",
+              "type": "string"
+            },
+            "surprise_percent": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "How far eps_actual beat (positive) or missed (negative) eps_estimate, as a PERCENT of the estimate (4.52 = 4.52%), as the source reports it."
+            }
+          },
+          "required": [
+            "fiscal_quarter_end"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "history_currency": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Currency (ISO 4217) of the history's EPS. Can differ from the listing currency (BABA's EPS is in CNY, SHOP.TO's in USD)."
+      },
+      "next_report": {
+        "anyOf": [
+          {
+            "description": "When the next earnings report is due.",
+            "properties": {
+              "date": {
+                "description": "ISO 8601 date-time in the exchange's local time where known (else UTC), e.g. '2026-10-29T16:00:00-04:00' (after the close). Can be a day or two in the past just after a report: compare it with today.",
+                "type": "string"
+              },
+              "date_is_estimate": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "True when the company has not confirmed the date and it is a projection (the time of day is then a placeholder); false when confirmed; null when unknown. Unless false, don't state the date as fact."
+              },
+              "window_end": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "When the date is a window rather than a day, its last date-time (same format as date); null for a single day."
+              }
+            },
+            "required": [
+              "date"
+            ],
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "The next report, or null if no date is known."
+      },
+      "symbol": {
+        "description": "Ticker symbol.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "symbol"
+    ],
+    "type": "object"
+  },
+  "title": "Earnings Dates & Estimates"
+}

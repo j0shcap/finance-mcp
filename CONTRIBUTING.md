@@ -49,8 +49,8 @@ Market data reaches the tools through three layers, so a new data or news source
 adapter, not a change to the logic:
 
 - **Ports** (`data/providers/ports.py`): `typing.Protocol` interfaces, one per source that could
-  be replaced on its own (`MarketDataProvider`, `NewsProvider`). They speak only this package's
-  models and errors.
+  be replaced on its own (`MarketDataProvider`, `NewsProvider`, `EarningsProvider`). They
+  speak only this package's models and errors.
 - **Adapters** (`data/providers/`): one module per provider. `yahoo.py` (`YahooProvider`) holds
   every yfinance call, Yahoo field name and Yahoo quirk, and implements every port.
 - **Logic** (`data/service.py`, `DataService`): what is fetched together, what is cached and

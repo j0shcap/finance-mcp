@@ -20,6 +20,7 @@ and deterministic financial calculators.
 - `get_financials` — income statement, balance sheet, or cash flow (annual or quarterly) as line items by period; values labelled with the company's reporting `currency`, with an optional line-item filter that reports any labels it couldn't match (plus close-match suggestions).
 - `get_company_profile` — sector, industry, market cap, P/E, beta, business summary, plus recent dividends and stock splits.
 - `get_analyst_data` — sell-side analyst consensus: price targets, consensus recommendation, and the recent rating trend (analyst counts over the last four months).
+- `get_earnings` — the next earnings date (confirmed or estimated, in the exchange's time), EPS and revenue consensus for the coming quarters and fiscal years, and the last four quarters' EPS surprises.
 - `search_symbols` — resolve a company or instrument name to ticker symbol(s), best match first, across all instrument types (equity, ETF, crypto, …).
 - `get_news` — recent news headlines for a ticker, newest first: title, publisher, link, publish time, and a short summary (no news returns an empty list, not an error). For a stock, each article is flagged with whether it names the company or its ticker, since Yahoo files market-wide stories under tickers too.
 

@@ -658,6 +658,111 @@ class AnalystData(MarketData):
     )
 
 
+EarningsPeriod = Literal[
+    "reporting_quarter", "following_quarter", "reporting_fiscal_year", "following_fiscal_year"
+]
+
+
+class EstimateRange(MarketData):
+    """Analysts' consensus for one figure over one fiscal period."""
+
+    average: float | None = Field(default=None, description="Mean of the analysts' estimates.")
+    low: float | None = Field(default=None, description="Lowest estimate.")
+    high: float | None = Field(default=None, description="Highest estimate.")
+    analysts: int | None = Field(default=None, description="Number of analysts estimating.")
+    year_ago: float | None = Field(
+        default=None, description="The same figure for the fiscal period a year earlier."
+    )
+    growth_percent: float | None = Field(
+        default=None,
+        description="average against year_ago as a PERCENT (6.95 = 6.95%), as reported; an "
+        "implausible value usually means a wrong year_ago.",
+    )
+
+
+class PeriodEstimate(MarketData):
+    """EPS and revenue consensus for one upcoming fiscal period."""
+
+    period: EarningsPeriod = Field(
+        description="Which period: 'reporting_quarter' is the quarter the NEXT report covers "
+        "(it may already have ended, awaiting its report), 'following_quarter' the one after; "
+        "'reporting_fiscal_year' is the fiscal year that quarter belongs to, "
+        "'following_fiscal_year' the next. Read fiscal_period_end for the actual dates."
+    )
+    fiscal_period_end: str = Field(description="Last day of the fiscal period (YYYY-MM-DD).")
+    eps: EstimateRange = Field(description="Earnings per share, in eps_currency.")
+    eps_currency: str | None = Field(
+        default=None, description="Currency (ISO 4217) of the EPS figures."
+    )
+    revenue: EstimateRange = Field(
+        description="Revenue as an absolute amount (not millions), in revenue_currency."
+    )
+    revenue_currency: str | None = Field(
+        default=None,
+        description="Currency (ISO 4217) of the revenue figures. Can differ from eps_currency "
+        "(an ADR's EPS in USD, its revenue in the home currency): check both before comparing.",
+    )
+
+
+class ReportedQuarter(MarketData):
+    """One reported quarter: EPS against the consensus going in."""
+
+    fiscal_quarter_end: str = Field(description="Last day of the fiscal quarter (YYYY-MM-DD).")
+    eps_estimate: float | None = Field(
+        default=None, description="Consensus EPS before the report, in history_currency."
+    )
+    eps_actual: float | None = Field(default=None, description="Reported EPS, in history_currency.")
+    surprise_percent: float | None = Field(
+        default=None,
+        description="How far eps_actual beat (positive) or missed (negative) eps_estimate, as "
+        "a PERCENT of the estimate (4.52 = 4.52%), as the source reports it.",
+    )
+
+
+class NextEarnings(MarketData):
+    """When the next earnings report is due."""
+
+    date: str = Field(
+        description="ISO 8601 date-time in the exchange's local time where known (else UTC), "
+        "e.g. '2026-10-29T16:00:00-04:00' (after the close). Can be a day or two in the past "
+        "just after a report: compare it with today."
+    )
+    date_is_estimate: bool | None = Field(
+        default=None,
+        description="True when the company has not confirmed the date and it is a "
+        "projection (the time of day is then a placeholder); false when confirmed; null when "
+        "unknown. Unless false, don't state the date as fact.",
+    )
+    window_end: str | None = Field(
+        default=None,
+        description="When the date is a window rather than a day, its last date-time (same "
+        "format as date); null for a single day.",
+    )
+
+
+class Earnings(MarketData):
+    """Upcoming earnings date, the consensus for coming periods, and recent EPS surprises."""
+
+    symbol: str = Field(description="Ticker symbol.")
+    next_report: NextEarnings | None = Field(
+        default=None, description="The next report, or null if no date is known."
+    )
+    estimates: list[PeriodEstimate] = Field(
+        default_factory=list,
+        description="Consensus for the reporting and following quarter and fiscal year, in "
+        "that order; a period without coverage is left out, so this can be shorter or empty.",
+    )
+    history: list[ReportedQuarter] = Field(
+        default_factory=list,
+        description="The last (up to) four reported quarters, oldest first (newest LAST).",
+    )
+    history_currency: str | None = Field(
+        default=None,
+        description="Currency (ISO 4217) of the history's EPS. Can differ from the listing "
+        "currency (BABA's EPS is in CNY, SHOP.TO's in USD).",
+    )
+
+
 class Identity(NamedTuple):
     """What the relevance flags need to know about a symbol.
 

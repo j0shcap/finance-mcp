@@ -3,7 +3,7 @@
 Finance tools over live market data plus offline financial calculators.
 
 Two tool families:
-- Market data (open world, live, one data-source lookup each): search_symbols, get_quote, get_price_history, get_financials, get_company_profile, get_key_metrics, get_analyst_data, analyze_performance, compare_to_benchmark, compare_tickers, get_news.
+- Market data (open world, live, one data-source lookup each): search_symbols, get_quote, get_price_history, get_financials, get_company_profile, get_key_metrics, get_analyst_data, get_earnings, analyze_performance, compare_to_benchmark, compare_tickers, get_news.
   Resolve a name to a ticker with search_symbols first; get_quote prices up to 25 tickers in
   one call. Tickers are case-insensitive, with the usual exchange prefixes and
   suffixes: BRK-B, ^GSPC, RY.TO, BTC-USD, EURUSD=X.

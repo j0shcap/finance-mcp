@@ -31,6 +31,7 @@ period="annual" and "quarterly")
 - compare_to_benchmark(ticker="{ticker}", benchmark="SPY") - swap SPY for a \
 benchmark that fits the listing (QQQ for US tech, a local index for a non-US line)
 - get_analyst_data(ticker="{ticker}")
+- get_earnings(ticker="{ticker}")
 - get_news(ticker="{ticker}")
 - get_quote(tickers=["{ticker}"]) - returns quotes plus a per-ticker errors list
 
@@ -96,7 +97,10 @@ From get_quote: where the price sits in its 52-week range (context, not a signal
 ## Phase 6 - Analyst view & catalysts
 From get_analyst_data: consensus recommendation, implied upside % to the mean/median target, the \
 high-low spread as a disagreement/uncertainty signal, and the 4-period recommendation trend \
-(upgrades vs downgrades) as sentiment momentum. From get_news: material, company-specific \
+(upgrades vs downgrades) as sentiment momentum. From get_earnings: whether the next report \
+falls inside the {horizon} horizon (say whether its date is confirmed or estimated), the \
+consensus for the quarter and year it covers, and the beat/miss pattern in the history. From \
+get_news: material, company-specific \
 catalysts weighted to the {horizon} horizon. Articles with mentions_company false are usually \
 market-wide stories filed under the ticker - read the title, and use one only if it bears on \
 {ticker} specifically.

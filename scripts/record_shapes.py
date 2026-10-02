@@ -48,6 +48,13 @@ def record() -> dict[str, Any]:
     search = _fetch(lambda: yf.Search("apple", max_results=3, news_count=3, lists_count=0))
     recommendations = _fetch(lambda: apple.recommendations)
     dividends, splits = _fetch(lambda: yahoo.corporate_actions(apple))
+    earnings = _fetch(lambda: yahoo.quote_summary(apple, yahoo.EARNINGS_MODULES))
+    etf_earnings = _fetch(lambda: yahoo.quote_summary(yf.Ticker("SPY"), yahoo.EARNINGS_MODULES))
+    # VOD.L has fiscal-year coverage but none for its quarters (null end dates).
+    partly_covered = _fetch(lambda: yahoo.quote_summary(yf.Ticker("VOD.L"), yahoo.EARNINGS_MODULES))
+    trend = earnings["earningsTrend"]["trend"] + partly_covered["earningsTrend"]["trend"]
+    eps_estimates = [item["earningsEstimate"] for item in trend]
+    revenue_estimates = [item["revenueEstimate"] for item in trend]
     shapes: dict[str, Any] = {
         "fast_info": attribute_shape(
             apple.fast_info, keys["fi"], lambda obj, name: _fetch(lambda: getattr(obj, name))
@@ -78,6 +85,20 @@ def record() -> dict[str, Any]:
         "news_content": _news_content_shape([item["content"] for item in news], keys["content"]),
         "search_quote": mapping_shape(search.quotes, keys["q"]),
         "search_news_item": mapping_shape(search.news, keys["item"]),
+        # An ETF's response carries quoteType alone, which is how the adapter recognizes one.
+        "earnings_modules": mapping_shape([earnings, etf_earnings], keys["modules"]),
+        "earnings_quote_type": mapping_shape([earnings["quoteType"]], keys["quote_type"]),
+        "earnings_calendar": mapping_shape([earnings["calendarEvents"]], keys["calendar"]),
+        "earnings_next": mapping_shape(
+            [earnings["calendarEvents"]["earnings"]], keys["calendar_earnings"]
+        ),
+        "earnings_trend_item": mapping_shape(trend, keys["trend_item"]),
+        "earnings_estimate": mapping_shape(eps_estimates + revenue_estimates, keys["estimate"]),
+        "earnings_eps_estimate": mapping_shape(eps_estimates, keys["eps_estimate"]),
+        "earnings_revenue_estimate": mapping_shape(revenue_estimates, keys["revenue_estimate"]),
+        "earnings_quarter": mapping_shape(
+            earnings["earningsHistory"]["history"], keys["earnings_quarter"]
+        ),
         "unknown_symbol": {
             "fast_info.last_price": _raised(lambda: yf.Ticker(UNKNOWN).fast_info.last_price),
             "history": _raised(lambda: yf.Ticker(UNKNOWN).history(period="1mo")),
