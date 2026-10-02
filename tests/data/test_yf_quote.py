@@ -1,4 +1,4 @@
-"""YFinanceClient.get_quote: parsing, caching and partial batches."""
+"""DataService.get_quote: parsing, caching and partial batches."""
 
 import threading
 from types import SimpleNamespace
@@ -12,8 +12,8 @@ from finance_mcp.data.errors import DataUnavailable, SymbolNotFound
 from finance_mcp.data.models import (
     QuoteResult,
 )
-from finance_mcp.data.yahoo import YahooSource
-from finance_mcp.data.yfinance_client import (
+from finance_mcp.data.providers.yahoo import YahooProvider
+from finance_mcp.data.service import (
     QUOTE_MAX_WORKERS,
 )
 from tests.fakes import (
@@ -53,7 +53,7 @@ def test_get_quote_caches_within_ttl() -> None:
 
 @pytest.mark.parametrize("price", [None, float("nan"), float("inf")])
 def test_get_quote_without_a_finite_price_is_symbol_not_found(price: float | None) -> None:
-    source = YahooSource(
+    source = YahooProvider(
         fake_ticker_factory(fast_info={"last_price": price, "previous_close": 1.0})
     )
     with pytest.raises(SymbolNotFound, match="No quote data for 'BAD'"):
@@ -61,7 +61,7 @@ def test_get_quote_without_a_finite_price_is_symbol_not_found(price: float | Non
 
 
 def test_get_quote_surfaces_yfinance_error_message() -> None:
-    source = YahooSource(
+    source = YahooProvider(
         fake_ticker_factory(fast_info_error=YFException("yahoo says: rate limited"))
     )
     with pytest.raises(DataUnavailable) as exc:
@@ -90,7 +90,7 @@ class _RaisingCurrencyFastInfo:
 
 
 def test_get_quote_fast_info_attr_error_becomes_data_unavailable() -> None:
-    source = YahooSource(lambda _symbol: SimpleNamespace(fast_info=_RaisingCurrencyFastInfo()))
+    source = YahooProvider(lambda _symbol: SimpleNamespace(fast_info=_RaisingCurrencyFastInfo()))
     with pytest.raises(DataUnavailable) as exc:
         source.quote("X")
     assert "boom" in str(exc.value)

@@ -1,4 +1,4 @@
-"""YFinanceClient.get_company_profile."""
+"""DataService.get_company_profile."""
 
 from types import SimpleNamespace
 from typing import Any
@@ -10,7 +10,7 @@ from yfinance.exceptions import (
 )
 
 from finance_mcp.data.errors import DataUnavailable, SymbolNotFound
-from finance_mcp.data.yahoo import corporate_actions
+from finance_mcp.data.providers.yahoo import corporate_actions
 from tests.fakes import (
     fake_ticker_factory,
     make_client,

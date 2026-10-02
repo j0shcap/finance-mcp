@@ -3,9 +3,9 @@
     uv run python -m scripts.record_shapes          # rewrite tests/shapes/yahoo.json
     uv run python -m scripts.record_shapes --check  # exit 1, with a diff, if Yahoo drifted
 
-About fifteen live calls cover every kind of payload src/finance_mcp/data/yahoo.py parses. The
-nightly live job runs --check, so a change in what Yahoo, yfinance or pandas return shows up
-as a readable diff, and the test fakes - held to this file by
+About fifteen live calls cover every kind of payload src/finance_mcp/data/providers/yahoo.py
+parses. The nightly live job runs --check, so a change in what Yahoo, yfinance or pandas
+return shows up as a readable diff, and the test fakes - held to this file by
 tests/test_fakes_match_shapes.py - follow it once it is re-recorded.
 """
 
@@ -20,7 +20,7 @@ from typing import Any
 
 import yfinance as yf
 
-from finance_mcp.data import yahoo
+from finance_mcp.data.providers import yahoo
 from scripts.yahoo_shapes import (
     attribute_shape,
     drift,
@@ -42,7 +42,7 @@ NESTED_NEWS_KEYS = {"provider": "displayName", "canonicalUrl": "url", "clickThro
 
 def record() -> dict[str, Any]:
     keys = keys_read()
-    yf.config.debug.hide_exceptions = False  # as YahooSource sets it
+    yf.config.debug.hide_exceptions = False  # as YahooProvider sets it
     apple = yf.Ticker("AAPL")
     news = _fetch(lambda: apple.get_news(count=5, tab="news"))
     search = _fetch(lambda: yf.Search("apple", max_results=3, news_count=3, lists_count=0))

@@ -16,7 +16,7 @@ import pytest
 from yfinance.exceptions import YFException
 
 from finance_mcp.data import analytics
-from finance_mcp.data.risk_free import TREASURY_BILL_SYMBOL
+from finance_mcp.data.providers.yahoo import TREASURY_BILL_SYMBOL
 from tests.fakes import counting, fake_multi_ticker_factory, make_client, make_history_df
 
 # 200 weekdays from Monday 2024-01-01 to Friday 2024-10-04: past the annualization gate.
@@ -128,7 +128,7 @@ def test_bill_data_implying_a_non_positive_price_is_unavailable_not_an_error() -
     factory = _factory(**_bill_override(history_df=_bills(500.0)))
     p = make_client(factory).analyze_performance("AAPL", "1y")
     assert p.risk_free_rate_source == "unavailable"
-    assert p.risk_free_rate_note is not None and "^IRX" in p.risk_free_rate_note
+    assert p.risk_free_rate_note is not None and "13-week US T-bill" in p.risk_free_rate_note
 
 
 def test_a_rate_unavailable_because_the_fetch_failed_is_not_cached() -> None:

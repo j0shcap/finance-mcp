@@ -8,7 +8,7 @@ from fastmcp import Client
 from fastmcp.client.transports import FastMCPTransport
 from hypothesis import settings
 
-from finance_mcp.data import yahoo
+from finance_mcp.data.providers import yahoo
 from finance_mcp.server import create_server
 
 # Derandomized so `make check` explores the same examples on every run and machine: a

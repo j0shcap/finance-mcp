@@ -13,9 +13,6 @@ from finance_mcp.data import analytics
 from finance_mcp.data.errors import InvalidInput
 from finance_mcp.data.models import PriceBar, RiskFreeSource
 
-#: Yahoo's 13-week US Treasury bill yield, the default risk-free rate. Quoted in percent on
-#: a bank-discount basis; see analytics.treasury_bill_effective_rate.
-TREASURY_BILL_SYMBOL = "^IRX"
 #: How far inside a measured window the T-bill history may start or end and still count as
 #: covering it, so a bond-market holiday at either edge is not a gap.
 RISK_FREE_EDGE_TOLERANCE_DAYS = 7
@@ -48,8 +45,7 @@ def _bills_fetch_failed(reason: str) -> RiskFree:
     return RiskFree(
         None,
         "unavailable",
-        f"The 13-week T-bill yield ({TREASURY_BILL_SYMBOL}) could not be fetched: {reason}. "
-        f"{_HOW_TO_PROCEED}",
+        f"The 13-week US T-bill yield could not be fetched: {reason}. {_HOW_TO_PROCEED}",
         retryable=True,
     )
 
@@ -96,7 +92,7 @@ def risk_free_over(risk_free_rate: float | None, bills: Bills, start: str, end: 
         return RiskFree(
             None,
             "unavailable",
-            f"The 13-week T-bill history ({TREASURY_BILL_SYMBOL}) covers {bills[0].date} to "
+            f"The 13-week US T-bill history covers {bills[0].date} to "
             f"{bills[-1].date}, which does not span the measured window {start} to {end}. "
             f"{_HOW_TO_PROCEED}",
         )
@@ -106,8 +102,7 @@ def risk_free_over(risk_free_rate: float | None, bills: Bills, start: str, end: 
         return RiskFree(
             None,
             "unavailable",
-            f"The 13-week T-bill history ({TREASURY_BILL_SYMBOL}) has an implausible "
-            f"quote: {exc} {_HOW_TO_PROCEED}",
+            f"The 13-week US T-bill history has an implausible quote: {exc} {_HOW_TO_PROCEED}",
         )
     return RiskFree(statistics.fmean(rates), "treasury_bill")
 

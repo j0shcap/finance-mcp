@@ -7,6 +7,12 @@ contain breaking changes, and each one is listed under **Breaking changes**.
 
 ## [Unreleased]
 
+### Changed
+- Market data now reaches the tools through provider-neutral interfaces, with every yfinance
+  and Yahoo specific in one adapter, so other data and news sources can be added without
+  touching the logic. The only visible change: a risk-free note says "the 13-week US T-bill
+  yield" without Yahoo's `^IRX` symbol.
+
 ## [0.5.1] - 2026-10-01
 
 ### Fixed

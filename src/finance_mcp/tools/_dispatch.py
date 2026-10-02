@@ -13,7 +13,7 @@ from finance_mcp.data.errors import DataUnavailable, InvalidInput
 
 
 async def run_data[T](call: Callable[[], T]) -> T:
-    """Run a blocking yfinance-backed ``call`` off the event loop.
+    """Run a blocking data-layer ``call`` off the event loop.
 
     Translates DataUnavailable (and its SymbolNotFound subclass) and InvalidInput into a
     ToolError whose message is surfaced to the model. InvalidInput comes from data-layer

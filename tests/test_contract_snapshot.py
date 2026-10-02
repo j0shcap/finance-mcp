@@ -26,7 +26,7 @@ from tests.fakes import make_client
 
 
 async def _contract() -> dict[str, str]:
-    async with Client(create_server(yf_client=make_client())) as client:
+    async with Client(create_server(service=make_client())) as client:
         return await collect_contract(client)
 
 
@@ -66,7 +66,7 @@ async def test_contract_files_are_exactly_what_the_index_lists() -> None:
 
 
 async def test_a_prompt_without_sample_arguments_says_what_to_add() -> None:
-    server = create_server(yf_client=make_client())
+    server = create_server(service=make_client())
 
     @server.prompt
     def unsampled() -> str:
@@ -144,7 +144,7 @@ def test_update_removes_directories_left_empty(tmp_path: Path) -> None:
 
 
 async def test_a_duplicate_resource_name_is_rejected() -> None:
-    server = create_server(yf_client=make_client())
+    server = create_server(service=make_client())
 
     @server.resource("finance://other", name="finance_conventions")
     def other() -> str:
@@ -156,7 +156,7 @@ async def test_a_duplicate_resource_name_is_rejected() -> None:
 
 
 async def test_a_binary_resource_is_rejected_rather_than_snapshotted_empty() -> None:
-    server = create_server(yf_client=make_client())
+    server = create_server(service=make_client())
 
     @server.resource("finance://blob", name="blob", mime_type="application/octet-stream")
     def blob() -> bytes:

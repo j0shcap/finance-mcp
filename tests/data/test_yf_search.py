@@ -1,4 +1,4 @@
-"""YFinanceClient.search_symbols."""
+"""DataService.search_symbols."""
 
 from typing import Any
 

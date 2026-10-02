@@ -31,8 +31,8 @@ from fastmcp.exceptions import ToolError
 from yfinance.exceptions import YFRateLimitError
 
 from finance_mcp.data.errors import DataUnavailable
-from finance_mcp.data.yfinance_client import YFinanceClient
-from finance_mcp.server import build_default_client, create_server
+from finance_mcp.data.service import DataService
+from finance_mcp.server import build_data_service, create_server
 
 _LIVE_DIR = Path(__file__).parent
 
@@ -104,19 +104,19 @@ def retry_throttled[T](fetch: Callable[[], T], what: str) -> T:
 
 
 @pytest.fixture(scope="session")
-def yf_client() -> YFinanceClient:
+def service() -> DataService:
     """One real client per session, built as production builds it.
 
-    Session-scoped so its TTL cache spans the whole run; via build_default_client so the
+    Session-scoped so its TTL cache spans the whole run; via build_data_service so the
     settings-to-client wiring is exercised too.
     """
-    return build_default_client()
+    return build_data_service()
 
 
 @pytest.fixture(scope="session")
-def mcp_server(yf_client: YFinanceClient) -> Any:
+def mcp_server(service: DataService) -> Any:
     """A server on the SAME client, so the mcp layer reuses the direct layer's cache."""
-    return create_server(yf_client=yf_client)
+    return create_server(service=service)
 
 
 class Layer:
@@ -126,8 +126,8 @@ class Layer:
     Everything else about the layer follows from that, so the two cannot disagree.
     """
 
-    def __init__(self, yf_client: YFinanceClient, mcp_client: Client[Any] | None = None) -> None:
-        self._yf = yf_client
+    def __init__(self, service: DataService, mcp_client: Client[Any] | None = None) -> None:
+        self._yf = service
         self._mcp = mcp_client
 
     @property
@@ -150,7 +150,7 @@ class Layer:
     async def call(self, tool: str, **kwargs: Any) -> Any:
         """Call `tool`, retrying while throttled and skipping if it never clears.
 
-        The server already retries a throttled request (YahooSource), so these outer retries
+        The server already retries a throttled request (YahooProvider), so these outer retries
         give Yahoo longer to clear: up to nine attempts before a throttled test skips.
 
         Returns the same model at either layer, so one test body covers both.
@@ -195,7 +195,7 @@ class Layer:
 
 @pytest.fixture(params=["direct", "mcp"])
 async def layer(
-    request: pytest.FixtureRequest, yf_client: YFinanceClient, mcp_server: Any
+    request: pytest.FixtureRequest, service: DataService, mcp_server: Any
 ) -> AsyncIterator[Layer]:
     """Runs each dependent test twice, once per layer.
 
@@ -204,10 +204,10 @@ async def layer(
     and the Yahoo call underneath is cached.
     """
     if request.param == "direct":
-        yield Layer(yf_client)
+        yield Layer(service)
         return
     async with Client(mcp_server) as connected:
-        yield Layer(yf_client, connected)
+        yield Layer(service, connected)
 
 
 def require_present(model: Any, fields: Sequence[str]) -> None:

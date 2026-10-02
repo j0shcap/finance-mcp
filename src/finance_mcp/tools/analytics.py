@@ -1,4 +1,4 @@
-"""MCP tools for computed analytics, backed by YFinanceClient."""
+"""MCP tools for computed analytics, backed by DataService."""
 
 from typing import Annotated
 
@@ -12,14 +12,14 @@ from finance_mcp.data.models import (
     PerformanceStats,
     TickerComparison,
 )
-from finance_mcp.data.yfinance_client import YFinanceClient
+from finance_mcp.data.service import DataService
 from finance_mcp.tools._annotations import market_data
 from finance_mcp.tools._dispatch import run_data
 from finance_mcp.tools._inputs import MAX_COMPARE_TICKERS, RiskFreeRate, Ticker
 
 
-def register(mcp: FastMCP, client: YFinanceClient) -> None:
-    """Register analytics tools bound to a YFinanceClient."""
+def register(mcp: FastMCP, service: DataService) -> None:
+    """Register analytics tools bound to a DataService."""
 
     @mcp.tool(annotations=market_data("Key Valuation & Profitability Metrics"))
     async def get_key_metrics(
@@ -35,7 +35,7 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
         differ for ADRs and other cross-listings, where Yahoo computes P/S, P/B, EV and the
         EV multiples across both currencies: use P/E, PEG and the margins for those.
         """
-        return await run_data(lambda: client.get_key_metrics(ticker))
+        return await run_data(lambda: service.get_key_metrics(ticker))
 
     @mcp.tool(annotations=market_data("Return & Risk Statistics"))
     async def analyze_performance(
@@ -67,7 +67,7 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
         average cannot be formed those three are null with risk_free_rate_note saying why.
         For beta, alpha or a comparison against an index, use compare_to_benchmark.
         """
-        return await run_data(lambda: client.analyze_performance(ticker, period, risk_free_rate))
+        return await run_data(lambda: service.analyze_performance(ticker, period, risk_free_rate))
 
     @mcp.tool(annotations=market_data("Benchmark-Relative Statistics"))
     async def compare_to_benchmark(
@@ -103,7 +103,7 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
         it straight.
         """
         return await run_data(
-            lambda: client.compare_to_benchmark(ticker, benchmark, period, risk_free_rate)
+            lambda: service.compare_to_benchmark(ticker, benchmark, period, risk_free_rate)
         )
 
     @mcp.tool(annotations=market_data("Side-by-Side Ticker Comparison"))
@@ -145,4 +145,4 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
         whose financial_currency differs from its currency is a cross-listing: its P/S, P/B
         and EV multiples mix two currencies, so rank it on P/E, PEG and the margins.
         """
-        return await run_data(lambda: client.compare_tickers(tickers, period, risk_free_rate))
+        return await run_data(lambda: service.compare_tickers(tickers, period, risk_free_rate))

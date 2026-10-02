@@ -1,4 +1,4 @@
-"""The TTL and LRU cache behind every YFinanceClient method."""
+"""The TTL and LRU cache behind every DataService method."""
 
 from types import SimpleNamespace
 from typing import Any

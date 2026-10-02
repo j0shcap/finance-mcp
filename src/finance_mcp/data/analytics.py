@@ -119,7 +119,7 @@ def periodic_risk_free(annual_rate: float, periods_per_year: float) -> float:
 
 
 TREASURY_BILL_DAYS = 91
-"""Term of a 13-week Treasury bill, the instrument ^IRX quotes."""
+"""Term of a 13-week Treasury bill, whose yield is the default risk-free rate."""
 
 
 def treasury_bill_effective_rate(discount_yield_percent: float) -> float:

@@ -1,4 +1,4 @@
-"""YFinanceClient.get_financials: statements, line-item filtering and reporting currency."""
+"""DataService.get_financials: statements, line-item filtering and reporting currency."""
 
 from collections.abc import Callable
 from typing import Any, Literal
@@ -10,8 +10,8 @@ from yfinance.exceptions import (
 )
 
 from finance_mcp.data.errors import DataUnavailable, SymbolNotFound
-from finance_mcp.data.yfinance_client import (
-    YFinanceClient,
+from finance_mcp.data.service import (
+    DataService,
 )
 from tests.fakes import (
     INCOME_WITH_NAN,
@@ -165,7 +165,7 @@ def test_financial_statement_currency_is_none_when_info_is_unusable(
 # --- line-item filtering: unknown labels are reported, not dropped ---
 
 
-def _income_client() -> YFinanceClient:
+def _income_client() -> DataService:
     df = make_financials_df(INCOME_WITH_NAN, ["2024-09-30", "2023-09-30"])
     return make_client(factory=fake_ticker_factory(financials={"income_stmt": df}))
 

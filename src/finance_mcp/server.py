@@ -1,29 +1,38 @@
-"""Server assembly: build the FastMCP instance and register every tool/prompt module."""
+"""Server assembly: build the FastMCP instance and register every tool/prompt module.
+
+Also the composition root: the one place that chooses which provider serves each port.
+"""
 
 from fastmcp import FastMCP
 
 from finance_mcp import __version__, conventions
-from finance_mcp.data.yfinance_client import YFinanceClient
+from finance_mcp.data.providers.yahoo import YahooProvider
+from finance_mcp.data.service import DataService
 from finance_mcp.prompts import analysis, calculations
 from finance_mcp.settings import get_settings
 from finance_mcp.tools import analytics, calculators, equities
 from finance_mcp.tools._argument_errors import ArgumentErrorMiddleware
 
 
-def build_default_client() -> YFinanceClient:
-    """Build a YFinanceClient with cache TTLs sourced from settings/env."""
+def build_data_service() -> DataService:
+    """The DataService over Yahoo, configured from settings/env."""
     s = get_settings()
-    return YFinanceClient(
+    # One instance serves every port, so its request gate bounds all Yahoo calls together.
+    yahoo = YahooProvider(
+        max_concurrent_requests=s.max_concurrent_requests,
+        request_retries=s.request_retries,
+    )
+    return DataService(
+        market=yahoo,
+        news=yahoo,
         quote_ttl=float(s.quote_cache_ttl_seconds),
         history_ttl=float(s.history_cache_ttl_seconds),
         fundamentals_ttl=float(s.fundamentals_cache_ttl_seconds),
         max_bars=s.max_history_bars,
-        max_concurrent_requests=s.max_concurrent_requests,
-        request_retries=s.request_retries,
     )
 
 
-def create_server(yf_client: YFinanceClient | None = None) -> FastMCP:
+def create_server(service: DataService | None = None) -> FastMCP:
     """Create and configure the finance-mcp FastMCP server."""
     mcp: FastMCP = FastMCP(
         "finance-mcp",
@@ -31,16 +40,17 @@ def create_server(yf_client: YFinanceClient | None = None) -> FastMCP:
         version=__version__,
         # Domain errors already reach the model as ToolError (see tools/_dispatch.py),
         # which masking preserves. Masking covers everything else: an unexpected
-        # yfinance/transport failure must not put a traceback's internals, URLs, or
+        # provider/transport failure must not put a traceback's internals, URLs, or
         # credentials in front of the model.
         mask_error_details=True,
     )
     mcp.add_middleware(ArgumentErrorMiddleware())
-    client = yf_client if yf_client is not None else build_default_client()
+    if service is None:
+        service = build_data_service()
     conventions.register(mcp)
     calculators.register(mcp)
-    equities.register(mcp, client)
-    analytics.register(mcp, client)
+    equities.register(mcp, service)
+    analytics.register(mcp, service)
     analysis.register(mcp)
     calculations.register(mcp)
     return mcp
