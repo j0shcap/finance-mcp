@@ -11,7 +11,7 @@
     "additionalProperties": false,
     "properties": {
       "ticker": {
-        "description": "Ticker symbol, e.g. 'AAPL'. Case-insensitive. Yahoo suffixes and prefixes are allowed (BRK-B, ^GSPC, RY.TO, BTC-USD, EURUSD=X); one symbol per value.",
+        "description": "Ticker symbol, e.g. 'AAPL'. Case-insensitive. Exchange suffixes and prefixes are allowed (BRK-B, ^GSPC, RY.TO, BTC-USD, EURUSD=X); one symbol per value.",
         "maxLength": 24,
         "minLength": 1,
         "pattern": "^\\s*[A-Za-z0-9.\\-^=]{1,20}\\s*$",
@@ -25,7 +25,7 @@
   },
   "name": "get_analyst_data",
   "outputSchema": {
-    "description": "Sell-side analyst consensus and price targets as reported by Yahoo.",
+    "description": "Sell-side analyst consensus and price targets, as the source reports them.",
     "properties": {
       "currency": {
         "anyOf": [

@@ -25,6 +25,7 @@ def build_data_service() -> DataService:
     return DataService(
         market=yahoo,
         news=yahoo,
+        earnings=yahoo,
         quote_ttl=float(s.quote_cache_ttl_seconds),
         history_ttl=float(s.history_cache_ttl_seconds),
         fundamentals_ttl=float(s.fundamentals_cache_ttl_seconds),

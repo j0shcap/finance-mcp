@@ -6,7 +6,7 @@
     "readOnlyHint": true,
     "title": "Company News"
   },
-  "description": "Recent news headlines for a symbol, newest first.\n\nEach article has a title, publisher, link and publish time (ISO8601 UTC). Summaries come\nfrom the per-symbol news stream only: when `source` is \"search\" that stream returned\nnothing and this fell back to Yahoo's search endpoint, which carries no summary, so every\nsummary is null for a reason unrelated to the stories. Works for stocks, ETFs, and crypto.\nA symbol with no news (or an unknown symbol) returns an empty article list, not an error.\n\nYahoo files market-wide stories under a ticker too, so for a stock each article's\nmentions_company says whether its title or summary names the company or its ticker.\nIt is a text match (brand and executive names are not), so it flags rather than\nfilters: every article is returned, in order. relevance_check says when the flags are\nnull (not a stock, Yahoo has no company name for it, or fetching the name failed, with\nrelevance_note saying why).",
+  "description": "Recent news headlines for a symbol, newest first.\n\nEach article has a title, publisher, link and publish time (ISO8601 UTC). Summaries come\nfrom the per-symbol news stream only: when `source` is \"search\" that stream returned\nnothing and this fell back to a news search, which carries no summary, so every\nsummary is null for a reason unrelated to the stories. Works for stocks, ETFs, and crypto.\nA symbol with no news (or an unknown symbol) returns an empty article list, not an error.\n\nA ticker's feed can include market-wide stories too, so for a stock each article's\nmentions_company says whether its title or summary names the company or its ticker.\nIt is a text match (brand and executive names are not), so it flags rather than\nfilters: every article is returned, in order. relevance_check says when the flags are\nnull (not a stock, no company name is known for it, or fetching the name failed, with\nrelevance_note saying why).",
   "inputSchema": {
     "additionalProperties": false,
     "properties": {
@@ -18,7 +18,7 @@
         "type": "integer"
       },
       "ticker": {
-        "description": "Ticker symbol, e.g. 'AAPL'. Case-insensitive. Yahoo suffixes and prefixes are allowed (BRK-B, ^GSPC, RY.TO, BTC-USD, EURUSD=X); one symbol per value.",
+        "description": "Ticker symbol, e.g. 'AAPL'. Case-insensitive. Exchange suffixes and prefixes are allowed (BRK-B, ^GSPC, RY.TO, BTC-USD, EURUSD=X); one symbol per value.",
         "maxLength": 24,
         "minLength": 1,
         "pattern": "^\\s*[A-Za-z0-9.\\-^=]{1,20}\\s*$",
@@ -37,7 +37,7 @@
       "articles": {
         "description": "Recent news articles, newest first; empty if no news is available.",
         "items": {
-          "description": "A single recent news item about a symbol, as surfaced by Yahoo Finance.",
+          "description": "A single recent news item about a symbol.",
           "properties": {
             "link": {
               "anyOf": [
@@ -61,7 +61,7 @@
                 }
               ],
               "default": null,
-              "description": "True if the title or summary names the company or its ticker; False if neither does, which usually means a market-wide story Yahoo filed under the ticker. It is a whole-word text match that leans toward False: brand and executive names ('Google' for Alphabet, 'Musk' for Tesla) and bare one- or two-letter tickers ('HD' without '$' or parentheses) do not count, so read a False article's title before discarding it. A company named by a common word can still match a Title-Case headline ('Price Target'). Null when not assessed - see the result's relevance_check."
+              "description": "True if the title or summary names the company or its ticker; False if neither does, which usually means a market-wide story filed under the ticker. It is a whole-word text match that leans toward False: brand and executive names ('Google' for Alphabet, 'Musk' for Tesla) and bare one- or two-letter tickers ('HD' without '$' or parentheses) do not count, so read a False article's title before discarding it. A company named by a common word can still match a Title-Case headline ('Price Target'). Null when not assessed - see the result's relevance_check."
             },
             "published": {
               "anyOf": [
@@ -85,7 +85,7 @@
                 }
               ],
               "default": null,
-              "description": "Publisher display name, e.g. 'Yahoo Finance'; may be null."
+              "description": "Publisher display name, e.g. 'Reuters'; may be null."
             },
             "summary": {
               "anyOf": [
@@ -113,7 +113,7 @@
       },
       "relevance_check": {
         "default": "unavailable",
-        "description": "Whether each article's mentions_company was assessed. 'applied': it was. 'not_an_equity': the symbol is an ETF, index, fund, coin or currency pair, where market-wide news is relevant, so every flag is null. 'no_company_name': Yahoo has no name for this symbol (often an unknown symbol), so every flag is null. 'unavailable': fetching the name failed (see relevance_note) - every flag is null and a retry may succeed. The articles themselves are unaffected in every case.",
+        "description": "Whether each article's mentions_company was assessed. 'applied': it was. 'not_an_equity': the symbol is an ETF, index, fund, coin or currency pair, where market-wide news is relevant, so every flag is null. 'no_company_name': there is no name for this symbol (often an unknown symbol), so every flag is null. 'unavailable': fetching the name failed (see relevance_note) - every flag is null and a retry may succeed. The articles themselves are unaffected in every case.",
         "enum": [
           "applied",
           "not_an_equity",
@@ -136,7 +136,7 @@
       },
       "source": {
         "default": "ticker",
-        "description": "Which Yahoo endpoint served these articles. 'ticker' is the per-symbol news stream, which carries a summary for each article. 'search' is the fallback used when that stream returns nothing: it still carries title, publisher, link and publish time, but NO summary, so every summary is null for a reason unrelated to the articles themselves - do not read that as the stories being contentless.",
+        "description": "Which kind of feed served these articles. 'ticker' is the per-symbol news stream, which carries a summary for each article. 'search' is the fallback used when that stream returns nothing: it still carries title, publisher, link and publish time, but NO summary, so every summary is null for a reason unrelated to the articles themselves - do not read that as the stories being contentless.",
         "enum": [
           "ticker",
           "search"

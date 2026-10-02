@@ -31,6 +31,7 @@ period="annual" and "quarterly")
 - compare_to_benchmark(ticker="{ticker}", benchmark="SPY") - swap SPY for a \
 benchmark that fits the listing (QQQ for US tech, a local index for a non-US line)
 - get_analyst_data(ticker="{ticker}")
+- get_earnings(ticker="{ticker}")
 - get_news(ticker="{ticker}")
 - get_quote(tickers=["{ticker}"]) - returns quotes plus a per-ticker errors list
 
@@ -96,7 +97,10 @@ From get_quote: where the price sits in its 52-week range (context, not a signal
 ## Phase 6 - Analyst view & catalysts
 From get_analyst_data: consensus recommendation, implied upside % to the mean/median target, the \
 high-low spread as a disagreement/uncertainty signal, and the 4-period recommendation trend \
-(upgrades vs downgrades) as sentiment momentum. From get_news: material, company-specific \
+(upgrades vs downgrades) as sentiment momentum. From get_earnings: whether the next report \
+falls inside the {horizon} horizon (say whether its date is confirmed or estimated), the \
+consensus for the quarter and year it covers, and the beat/miss pattern in the history. From \
+get_news: material, company-specific \
 catalysts weighted to the {horizon} horizon. Articles with mentions_company false are usually \
 market-wide stories filed under the ticker - read the title, and use one only if it bears on \
 {ticker} specifically.
@@ -168,7 +172,7 @@ against growth durability and business quality most; a horizon of a year or less
 weight to drawdown and risk-adjusted return. State the weights you chose, then keep them.
 
 ## Phase 4 - Growth-adjusted valuation: derive it, do not trust it blindly
-- peg_ratio from Yahoo is often null or stale and its growth basis is undisclosed - use it as one \
+- peg_ratio is often null or stale and its growth basis is undisclosed - use it as one \
 input, never the only one.
 - Implied forward EPS growth = trailing_pe / forward_pe - 1, meaningful ONLY when both are \
 positive.
@@ -193,9 +197,9 @@ ranking is regime-dependent and weight it less. Past returns are context, not a 
 If a table reports mixed_currencies, or a row is flagged currency_differs, those rows' returns \
 carry an FX move the others do not and their absolute amounts are in another currency: rank them \
 on ratios only, and say so. A row whose financial_currency differs from its \
-currency is a cross-listing: Yahoo computes its price_to_sales, price_to_book and EV multiples \
-across two currencies, so rank it on P/E, PEG and the margins only, as the cross-listing rule in \
-{conventions_uri} sets out.
+currency is a cross-listing: the source computes its price_to_sales, price_to_book and EV \
+multiples across two currencies, so rank it on P/E, PEG and the margins only, as the \
+cross-listing rule in {conventions_uri} sets out.
 
 ## Phase 7 - Verdict
 - Score each ticker against the rubric you declared. Tickers missing too many inputs go in an \

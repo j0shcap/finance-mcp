@@ -13,7 +13,7 @@
       "tickers": {
         "description": "1-25 ticker symbols, e.g. ['AAPL', 'MSFT'].",
         "items": {
-          "description": "Ticker symbol, e.g. 'AAPL'. Case-insensitive. Yahoo suffixes and prefixes are allowed (BRK-B, ^GSPC, RY.TO, BTC-USD, EURUSD=X); one symbol per value.",
+          "description": "Ticker symbol, e.g. 'AAPL'. Case-insensitive. Exchange suffixes and prefixes are allowed (BRK-B, ^GSPC, RY.TO, BTC-USD, EURUSD=X); one symbol per value.",
           "maxLength": 24,
           "minLength": 1,
           "pattern": "^\\s*[A-Za-z0-9.\\-^=]{1,20}\\s*$",

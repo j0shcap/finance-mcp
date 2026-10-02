@@ -8,6 +8,7 @@ from pydantic import Field
 from finance_mcp.data.models import (
     AnalystData,
     CompanyProfile,
+    Earnings,
     FinancialStatement,
     HistoryInterval,
     HistoryPeriod,
@@ -118,6 +119,24 @@ def register(mcp: FastMCP, service: DataService) -> None:
         """
         return await run_data(lambda: service.get_analyst_data(ticker))
 
+    @mcp.tool(annotations=market_data("Earnings Dates & Estimates"))
+    async def get_earnings(
+        ticker: Ticker,
+    ) -> Earnings:
+        """When a company reports next, what analysts expect, and whether it beat lately.
+
+        next_report: the next report's date-time in the exchange's timezone, and whether the
+        company has confirmed it (date_is_estimate false; true or null means it hasn't).
+        estimates: EPS and revenue consensus (average, low, high, analyst count, year-ago value,
+        growth) for the quarter the next report covers, the quarter after, and their fiscal
+        years, each with fiscal_period_end. history: the last four quarters' EPS against the
+        consensus, oldest first, with surprise_percent. growth_percent and surprise_percent are
+        PERCENTS; EPS, revenue and history can each be in a different currency, so check
+        eps_currency, revenue_currency and history_currency. Companies only: ETFs, funds,
+        indices, currencies and crypto return an error.
+        """
+        return await run_data(lambda: service.get_earnings(ticker))
+
     @mcp.tool(annotations=market_data("Company News"))
     async def get_news(
         ticker: Ticker,
@@ -129,15 +148,15 @@ def register(mcp: FastMCP, service: DataService) -> None:
 
         Each article has a title, publisher, link and publish time (ISO8601 UTC). Summaries come
         from the per-symbol news stream only: when `source` is "search" that stream returned
-        nothing and this fell back to Yahoo's search endpoint, which carries no summary, so every
+        nothing and this fell back to a news search, which carries no summary, so every
         summary is null for a reason unrelated to the stories. Works for stocks, ETFs, and crypto.
         A symbol with no news (or an unknown symbol) returns an empty article list, not an error.
 
-        Yahoo files market-wide stories under a ticker too, so for a stock each article's
+        A ticker's feed can include market-wide stories too, so for a stock each article's
         mentions_company says whether its title or summary names the company or its ticker.
         It is a text match (brand and executive names are not), so it flags rather than
         filters: every article is returned, in order. relevance_check says when the flags are
-        null (not a stock, Yahoo has no company name for it, or fetching the name failed, with
+        null (not a stock, no company name is known for it, or fetching the name failed, with
         relevance_note saying why).
         """
         return await run_data(lambda: service.get_news(ticker, count))

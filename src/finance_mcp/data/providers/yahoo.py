@@ -19,6 +19,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import yfinance as yf
 from yfinance.exceptions import YFRateLimitError, YFTickerMissingError
@@ -28,14 +29,20 @@ from finance_mcp.data.models import (
     AnalystData,
     CompanyProfile,
     DividendEvent,
+    Earnings,
+    EarningsPeriod,
+    EstimateRange,
     FinancialStatement,
     Identity,
     KeyMetrics,
     NewsArticle,
     NewsSource,
+    NextEarnings,
+    PeriodEstimate,
     PriceBar,
     Quote,
     RecommendationPeriod,
+    ReportedQuarter,
     SplitEvent,
     Statement,
     StatementPeriod,
@@ -45,6 +52,17 @@ from finance_mcp.data.models import (
 
 #: Yahoo's 13-week US Treasury bill yield: percent, on a bank-discount basis.
 TREASURY_BILL_SYMBOL = "^IRX"
+
+#: The quoteSummary modules behind earnings. quoteType carries the exchange timezone, and is
+#: all Yahoo returns for an instrument that doesn't report earnings (an ETF, index, coin).
+_EARNINGS_DATA_MODULES = ("calendarEvents", "earningsHistory", "earningsTrend")
+EARNINGS_MODULES = (*_EARNINGS_DATA_MODULES, "quoteType")
+_EARNINGS_PERIODS: dict[str, EarningsPeriod] = {
+    "0q": "reporting_quarter",
+    "+1q": "following_quarter",
+    "0y": "reporting_fiscal_year",
+    "+1y": "following_fiscal_year",
+}
 
 #: Signals that genuinely mean "Yahoo has no data for this symbol". KeyError is what
 #: fast_info leaks for an unknown symbol; YFTickerMissingError covers yfinance's own
@@ -409,6 +427,56 @@ class YahooProvider:
         articles = (_search_news_article(item) for item in found or [])
         return [a for a in articles if a is not None][:count]
 
+    def earnings(self, symbol: str) -> Earnings:
+        try:
+            modules = self._request(lambda: quote_summary(self._ticker(symbol), EARNINGS_MODULES))
+        except DataUnavailable:
+            raise
+        except Exception as exc:
+            raise _data_error(exc, "earnings", "earnings", symbol) from exc
+        quote_type = modules.get("quoteType") or {}
+        # Yahoo answers an instrument without earnings with quoteType alone, not a 404.
+        if quote_type.get("quoteType") != "EQUITY" and not any(
+            name in modules for name in _EARNINGS_DATA_MODULES
+        ):
+            raise DataUnavailable(
+                f"No earnings for '{symbol}': it is not a company (an ETF, fund, index, "
+                "currency or crypto), and only companies report earnings."
+            )
+        with _unavailable_on_error(f"Failed to parse earnings for '{symbol}'"):
+            exchange_tz = ZoneInfo(quote_type.get("timeZoneFullName") or "UTC")
+            history = sorted(
+                (
+                    earnings_quarter
+                    for earnings_quarter in (modules.get("earningsHistory") or {}).get("history")
+                    or []
+                    if earnings_quarter.get("quarter")
+                ),
+                key=lambda earnings_quarter: _raw(earnings_quarter["quarter"]),
+            )
+            trend = (modules.get("earningsTrend") or {}).get("trend") or []
+            # A period without coverage has no end date and nothing else worth reporting.
+            estimates = [
+                _period_estimate(trend_item)
+                for trend_item in trend
+                if trend_item.get("period") in _EARNINGS_PERIODS and trend_item.get("endDate")
+            ]
+            order = list(_EARNINGS_PERIODS.values())
+            return Earnings(
+                symbol=symbol,
+                next_report=_next_earnings(modules.get("calendarEvents") or {}, exchange_tz),
+                estimates=sorted(estimates, key=lambda estimate: order.index(estimate.period)),
+                history=[_reported_quarter(earnings_quarter) for earnings_quarter in history],
+                history_currency=next(
+                    (
+                        earnings_quarter.get("currency")
+                        for earnings_quarter in history
+                        if earnings_quarter.get("currency")
+                    ),
+                    None,
+                ),
+            )
+
     def search(self, query: str, max_results: int) -> SymbolSearchResult:
         with _unavailable_on_error(f"Search failed for '{query}'"):
             quotes = self._request(
@@ -467,6 +535,90 @@ def corporate_actions(ticker: Any) -> tuple[Any, Any]:
         return ticker.dividends, ticker.splits
     actions = history_cache(period="max", interval="1wk")
     return actions["dividends"], actions["splits"]
+
+
+def quote_summary(ticker: Any, modules: tuple[str, ...]) -> dict[str, Any]:
+    """Yahoo quoteSummary modules for ``ticker``, by name, in one request.
+
+    Through yfinance's private quote scraper, which carries its authenticated session: the
+    public properties make a request each and drop fields the answer needs (whether the next
+    date is confirmed, each estimate period's end date, the history's currency).
+    """
+    fetch = getattr(getattr(ticker, "_quote", None), "_fetch", None)
+    if fetch is None:
+        raise DataUnavailable("This version of yfinance can't fetch Yahoo's quoteSummary.")
+    response = fetch(modules=list(modules))
+    try:
+        result: dict[str, Any] = response["quoteSummary"]["result"][0]
+    except (KeyError, IndexError, TypeError) as exc:
+        # Not a KeyError: that is this adapter's "no such symbol" signal, and a malformed
+        # reply says nothing about the symbol.
+        raise DataUnavailable(f"Unexpected quoteSummary response: {response!r:.200}") from exc
+    return result
+
+
+def _raw(value: Any) -> Any:
+    """A quoteSummary value: some modules wrap numbers as {"raw": ..., "fmt": ...}."""
+    return value.get("raw") if isinstance(value, dict) else value
+
+
+def _opt_bool(value: Any) -> bool | None:
+    return value if isinstance(value, bool) else None
+
+
+def _percent(value: Any) -> float | None:
+    fraction = _opt(_raw(value))
+    return fraction * 100.0 if fraction is not None else None
+
+
+# Receivers below are named for the payload part they read: scripts/yahoo_shapes.py records
+# the shape of every literal key read from each, by name.
+def _next_earnings(calendar: dict[str, Any], exchange_tz: ZoneInfo) -> NextEarnings | None:
+    calendar_earnings = calendar.get("earnings") or {}
+    dates = sorted(calendar_earnings.get("earningsDate") or [])
+    if not dates:
+        return None
+    at = [datetime.fromtimestamp(ts, exchange_tz).isoformat() for ts in dates]
+    return NextEarnings(
+        date=at[0],
+        date_is_estimate=_opt_bool(calendar_earnings.get("isEarningsDateEstimate")),
+        window_end=at[-1] if len(at) > 1 else None,
+    )
+
+
+def _estimate_range(estimate: dict[str, Any], year_ago: Any) -> EstimateRange:
+    return EstimateRange(
+        average=_opt(_raw(estimate.get("avg"))),
+        low=_opt(_raw(estimate.get("low"))),
+        high=_opt(_raw(estimate.get("high"))),
+        analysts=_opt_int(_raw(estimate.get("numberOfAnalysts"))),
+        year_ago=_opt(_raw(year_ago)),
+        growth_percent=_percent(estimate.get("growth")),
+    )
+
+
+def _period_estimate(trend_item: dict[str, Any]) -> PeriodEstimate:
+    eps_estimate = trend_item.get("earningsEstimate") or {}
+    revenue_estimate = trend_item.get("revenueEstimate") or {}
+    return PeriodEstimate(
+        period=_EARNINGS_PERIODS[trend_item["period"]],
+        fiscal_period_end=trend_item["endDate"],
+        eps=_estimate_range(eps_estimate, eps_estimate.get("yearAgoEps")),
+        eps_currency=eps_estimate.get("earningsCurrency"),
+        revenue=_estimate_range(revenue_estimate, revenue_estimate.get("yearAgoRevenue")),
+        revenue_currency=revenue_estimate.get("revenueCurrency"),
+    )
+
+
+def _reported_quarter(earnings_quarter: dict[str, Any]) -> ReportedQuarter:
+    # Quarter ends are UTC midnight: in a western exchange's timezone they'd be the day before.
+    end = datetime.fromtimestamp(_raw(earnings_quarter["quarter"]), UTC).date()
+    return ReportedQuarter(
+        fiscal_quarter_end=end.isoformat(),
+        eps_estimate=_opt(_raw(earnings_quarter.get("epsEstimate"))),
+        eps_actual=_opt(_raw(earnings_quarter.get("epsActual"))),
+        surprise_percent=_percent(earnings_quarter.get("surprisePercent")),
+    )
 
 
 def _read_fast_info(ticker: Any) -> dict[str, Any]:

@@ -1,6 +1,6 @@
 """The units/sign conventions this server's numbers follow, written once.
 
-Yahoo's units are inconsistent (some ratios are fractions, others are already percents)
+Market-data units differ by field (some ratios are fractions, others are already percents)
 and the cashflow tools follow Excel's sign convention, so a model that guesses gets the
 magnitudes wrong by 100x or the sign backwards. The guidance reaches the model three ways:
 the server ``instructions`` (always in context), the ``finance://conventions`` resource
@@ -23,6 +23,7 @@ MARKET_DATA_TOOLS = (
     "get_company_profile",
     "get_key_metrics",
     "get_analyst_data",
+    "get_earnings",
     "analyze_performance",
     "compare_to_benchmark",
     "compare_tickers",
@@ -46,7 +47,7 @@ CALCULATOR_TOOLS = (
 #: Which get_key_metrics figures survive a cross-listing. Part of the glossary, and the rule the
 #: peer-comparison prompts point at when they say what a cross-listed row can be ranked on.
 CROSS_LISTING_RULE = """\
-- Cross-listings (financial_currency differs from currency, e.g. an ADR): Yahoo computes \
+- Cross-listings (financial_currency differs from currency, e.g. an ADR): the source computes \
 price_to_sales, price_to_book, enterprise_value, ev_to_ebitda and ev_to_revenue by mixing the \
 quote currency with the reporting currency, and its book_value and revenue_per_share need not be \
 per listed share - so all seven can be off by an exchange rate or an ADR ratio (TM's P/S has come \
@@ -62,6 +63,10 @@ ebitda_margins are FRACTIONS (0.27 = 27%, 1.41 = 141%) - multiply by 100 for dis
 - debt_to_equity is ALREADY A PERCENT (79.5 means 79.5% ~ 0.80x) - it is NOT 79.5x.
 - dividend_yield (profile) is ALREADY A PERCENT (0.35 = 0.35%, 5.92 = 5.92%) - not a fraction.
 - recommendation_mean is INVERTED: 1 = strong buy ... 5 = strong sell (lower = more bullish).
+- get_earnings: growth_percent and surprise_percent are PERCENTS (6.95 = 6.95%). EPS, revenue \
+and the reported history each carry their own currency (eps_currency, revenue_currency, \
+history_currency), which can differ for an ADR. next_report.date is the exchange's local \
+date-time; unless date_is_estimate is false it is a projection, not a date the company announced.
 - P/E, forward P/E, P/B, P/S, PEG, EV/EBITDA, EV/Revenue, current/quick ratio are plain ratios; \
 EV, total debt/cash, FCF, EBITDA are absolute amounts; EPS and book value are per-share.
 - Absolute amounts are not all in one currency: get_key_metrics reports total debt/cash, FCF, \
@@ -81,7 +86,7 @@ ticker you are pricing, never by position: any ticker that failed is in errors i
 positions shift. A ticker in errors was not fetched at all - say so rather than substituting \
 another source's price.
 - risk_free_rate (analyze_performance, compare_to_benchmark, compare_tickers) is an ANNUAL \
-DECIMAL: 0.045 = 4.5%. Left out, it is the 13-week US T-bill yield (Yahoo ^IRX) averaged over \
+DECIMAL: 0.045 = 4.5%. Left out, it is the 13-week US T-bill yield averaged over \
 the dates measured and converted to an effective annual rate, so sharpe_ratio, sortino_ratio, \
 downside_deviation_percent and alpha_percent are excess-over-cash figures. Every result echoes \
 the rate with risk_free_rate_source: "caller", "treasury_bill", or "unavailable" - the T-bill \
@@ -146,24 +151,24 @@ CONVENTIONS_DOC = f"""\
 ## Calculators: signs and rates
 {CALCULATOR_CONVENTIONS}
 
-## Market data: units per field (Yahoo is inconsistent - read before doing arithmetic)
+## Market data: units per field (they differ - read before doing arithmetic)
 {UNITS_GLOSSARY}
 """
 
 SERVER_INSTRUCTIONS = f"""\
-Finance tools over Yahoo Finance market data plus offline financial calculators.
+Finance tools over live market data plus offline financial calculators.
 
 Two tool families:
-- Market data (open world, live, one Yahoo call each): {", ".join(MARKET_DATA_TOOLS)}.
+- Market data (open world, live, one data-source lookup each): {", ".join(MARKET_DATA_TOOLS)}.
   Resolve a name to a ticker with search_symbols first; get_quote prices up to 25 tickers in
-  one call. Tickers are Yahoo symbols, case-insensitive, with the usual prefixes and
+  one call. Tickers are case-insensitive, with the usual exchange prefixes and
   suffixes: BRK-B, ^GSPC, RY.TO, BTC-USD, EURUSD=X.
 - Calculators (pure, deterministic, no network): {", ".join(CALCULATOR_TOOLS)}.
 
 Conventions that change the answer:
 {CALCULATOR_CONVENTIONS}
 
-Yahoo's market-data units are inconsistent: margins and ROE/ROA are fractions (0.27 = 27%) but
+Market-data units differ by field: margins and ROE/ROA are fractions (0.27 = 27%) but
 debt_to_equity and dividend_yield are ALREADY PERCENTS (79.5 = 79.5%, 5.92 = 5.92%), and
 recommendation_mean is inverted (1 = strong buy, 5 = strong sell). Absolute amounts are not all
 in one currency - check each result's currency/financial_currency. Read the {CONVENTIONS_URI}

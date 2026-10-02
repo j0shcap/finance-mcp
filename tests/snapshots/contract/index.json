@@ -27,6 +27,7 @@
     "get_financials",
     "get_company_profile",
     "get_analyst_data",
+    "get_earnings",
     "get_news",
     "search_symbols",
     "get_key_metrics",

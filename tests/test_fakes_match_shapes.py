@@ -14,6 +14,7 @@ import pytest
 from scripts.yahoo_shapes import (
     exception_shape,
     frame_shape,
+    keys_read,
     mapping_shape,
     series_shape,
     value_type,
@@ -22,6 +23,7 @@ from scripts.yahoo_shapes import (
 from tests.fakes import (
     QUOTE_FI,
     FakeHTTPError,
+    make_earnings_summary,
     make_financials_df,
     make_history_df,
     make_intraday_df,
@@ -99,3 +101,27 @@ def test_unknown_symbol_fake_raises_what_yahoo_raises(call: str) -> None:
     fake = exception_shape(FakeHTTPError(404))
     assert fake["status_code"] == real["status_code"]
     assert real["class"].endswith("HTTPError")
+
+
+def test_earnings_fake_has_yahoo_types() -> None:
+    keys = keys_read()
+    summary = make_earnings_summary()
+    trend = summary["earningsTrend"]["trend"]
+    eps = [item["earningsEstimate"] for item in trend]
+    revenue = [item["revenueEstimate"] for item in trend]
+    parts = {
+        "earnings_modules": ([summary], "modules"),
+        "earnings_quote_type": ([summary["quoteType"]], "quote_type"),
+        "earnings_calendar": ([summary["calendarEvents"]], "calendar"),
+        "earnings_next": ([summary["calendarEvents"]["earnings"]], "calendar_earnings"),
+        "earnings_trend_item": (trend, "trend_item"),
+        "earnings_estimate": (eps + revenue, "estimate"),
+        "earnings_eps_estimate": (eps, "eps_estimate"),
+        "earnings_revenue_estimate": (revenue, "revenue_estimate"),
+        "earnings_quarter": (summary["earningsHistory"]["history"], "earnings_quarter"),
+    }
+    mismatches = {
+        recorded: _within(mapping_shape(items, keys[receiver]), RECORDED[recorded])
+        for recorded, (items, receiver) in parts.items()
+    }
+    assert {name: found for name, found in mismatches.items() if found} == {}

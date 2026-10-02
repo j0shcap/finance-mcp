@@ -107,6 +107,8 @@ def fake_ticker_factory(
     news_error: Exception | None = None,
     actions_error: Exception | None = None,
     recommendations_error: Exception | None = None,
+    quote_summary: dict[str, Any] | None = None,
+    quote_summary_error: Exception | None = None,
 ) -> Callable[[str], Any]:
     """Build a ticker factory returning a stub Ticker for any symbol.
 
@@ -125,6 +127,8 @@ def fake_ticker_factory(
     captured_news_call: dict[str, int | str] = {}
     # The (period, interval) of every dividends-and-splits read, in order.
     captured_actions_calls: list[tuple[str, str]] = []
+    # The modules of every quoteSummary request, in order.
+    captured_quote_summary_modules: list[list[str]] = []
     # Every attribute the client may read a statement from, so the stub cannot drift.
     statement_attrs = frozenset(FINANCIALS_ATTR.values())
 
@@ -168,6 +172,17 @@ def fake_ticker_factory(
                 raise recommendations_error
             return recommendations if recommendations is not None else pd.DataFrame()
 
+        @property
+        def _quote(self) -> Any:
+            # yfinance's private quote scraper, which quote_summary reads.
+            def fetch(modules: list[str]) -> dict[str, Any]:
+                if quote_summary_error is not None:
+                    raise quote_summary_error
+                captured_quote_summary_modules.append(modules)
+                return {"quoteSummary": {"result": [quote_summary or {}]}}
+
+            return SimpleNamespace(_fetch=fetch)
+
         def get_news(self, count: int = 10, tab: str = "news") -> list[dict[str, Any]]:
             if news_error is not None:
                 raise news_error
@@ -187,6 +202,7 @@ def fake_ticker_factory(
 
     factory.captured_news_call = captured_news_call  # type: ignore[attr-defined]
     factory.captured_actions_calls = captured_actions_calls  # type: ignore[attr-defined]
+    factory.captured_quote_summary_modules = captured_quote_summary_modules  # type: ignore[attr-defined]
     return factory
 
 
@@ -211,6 +227,78 @@ def fake_multi_ticker_factory(
         return stubs.get(symbol, missing)(symbol)
 
     return factory
+
+
+def _wrapped(value: float) -> dict[str, Any]:
+    """A number as quoteSummary's estimate and history modules send it."""
+    return {"raw": value, "fmt": f"{value}"}
+
+
+def make_earnings_summary(
+    *,
+    dates: list[int] | None = None,
+    date_is_estimate: bool = False,
+    trend_periods: tuple[str, ...] = ("0q", "+1q", "0y", "+1y"),
+    history_quarters: tuple[int, ...] = (1751241600, 1743379200, 1759190400, 1767139200),
+    eps_currency: str = "USD",
+    revenue_currency: str = "USD",
+    history_currency: str = "USD",
+    timezone: str = "America/New_York",
+) -> dict[str, Any]:
+    """quoteSummary's earnings modules for a company, shaped as tests/shapes/yahoo.json records.
+
+    ``dates`` are Unix timestamps (default: 2026-10-29 16:00 New York); ``history_quarters``
+    are UTC-midnight quarter ends, deliberately out of order.
+    """
+    ends = {"0q": "2026-09-30", "+1q": "2026-12-31", "0y": "2026-09-30", "+1y": "2027-09-30"}
+    return {
+        "quoteType": {"quoteType": "EQUITY", "timeZoneFullName": timezone},
+        "calendarEvents": {
+            "earnings": {
+                "earningsDate": [1793304000] if dates is None else dates,
+                "isEarningsDateEstimate": date_is_estimate,
+            }
+        },
+        "earningsTrend": {
+            "trend": [
+                {
+                    "period": period,
+                    "endDate": ends.get(period, "2026-09-30"),
+                    "earningsEstimate": {
+                        "avg": _wrapped(1.98),
+                        "low": _wrapped(1.93),
+                        "high": _wrapped(2.07),
+                        "numberOfAnalysts": _wrapped(27),
+                        "yearAgoEps": _wrapped(1.85),
+                        "growth": _wrapped(0.0695),
+                        "earningsCurrency": eps_currency,
+                    },
+                    "revenueEstimate": {
+                        "avg": _wrapped(113.6e9),
+                        "low": _wrapped(112.2e9),
+                        "high": _wrapped(117.2e9),
+                        "numberOfAnalysts": _wrapped(27),
+                        "yearAgoRevenue": _wrapped(102.5e9),
+                        "growth": _wrapped(0.1089),
+                        "revenueCurrency": revenue_currency,
+                    },
+                }
+                for period in trend_periods
+            ]
+        },
+        "earningsHistory": {
+            "history": [
+                {
+                    "quarter": _wrapped(quarter),
+                    "epsEstimate": _wrapped(1.77),
+                    "epsActual": _wrapped(1.85),
+                    "surprisePercent": _wrapped(0.0452),
+                    "currency": history_currency,
+                }
+                for quarter in history_quarters
+            ]
+        },
+    }
 
 
 def make_recommendations_df(
@@ -340,7 +428,8 @@ def make_client(
     yahoo = YahooProvider(
         factory or fake_ticker_factory(fast_info=QUOTE_FI), search_factory or FakeSearch(), **gate
     )
-    return DataService(yahoo, yahoo, time_fn=clock if clock is not None else FakeClock(), **options)
+    clock = clock if clock is not None else FakeClock()
+    return DataService(yahoo, yahoo, yahoo, time_fn=clock, **options)
 
 
 @asynccontextmanager

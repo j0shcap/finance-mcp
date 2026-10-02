@@ -25,6 +25,7 @@ CALLS: dict[str, dict[str, Any]] = {
     "get_company_profile": {"ticker": "AAPL"},
     "get_key_metrics": {"ticker": "AAPL"},
     "get_analyst_data": {"ticker": "AAPL"},
+    "get_earnings": {"ticker": "AAPL"},
     "analyze_performance": {"ticker": "AAPL"},
     "compare_to_benchmark": {"ticker": "AAPL"},
     "compare_tickers": {"tickers": ["AAPL", "MSFT"]},

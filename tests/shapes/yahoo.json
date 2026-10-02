@@ -15,6 +15,111 @@
       "09:30"
     ]
   },
+  "earnings_calendar": {
+    "earnings": [
+      "object"
+    ]
+  },
+  "earnings_eps_estimate": {
+    "earningsCurrency": [
+      "null",
+      "str"
+    ],
+    "yearAgoEps": [
+      "object"
+    ]
+  },
+  "earnings_estimate": {
+    "avg": [
+      "object"
+    ],
+    "growth": [
+      "object"
+    ],
+    "high": [
+      "object"
+    ],
+    "low": [
+      "object"
+    ],
+    "numberOfAnalysts": [
+      "object"
+    ]
+  },
+  "earnings_modules": {
+    "calendarEvents": [
+      "missing",
+      "object"
+    ],
+    "earningsHistory": [
+      "missing",
+      "object"
+    ],
+    "earningsTrend": [
+      "missing",
+      "object"
+    ],
+    "quoteType": [
+      "object"
+    ]
+  },
+  "earnings_next": {
+    "earningsDate": [
+      "list"
+    ],
+    "isEarningsDateEstimate": [
+      "bool"
+    ]
+  },
+  "earnings_quarter": {
+    "currency": [
+      "str"
+    ],
+    "epsActual": [
+      "object"
+    ],
+    "epsEstimate": [
+      "object"
+    ],
+    "quarter": [
+      "object"
+    ],
+    "surprisePercent": [
+      "object"
+    ]
+  },
+  "earnings_quote_type": {
+    "quoteType": [
+      "str"
+    ],
+    "timeZoneFullName": [
+      "str"
+    ]
+  },
+  "earnings_revenue_estimate": {
+    "revenueCurrency": [
+      "null",
+      "str"
+    ],
+    "yearAgoRevenue": [
+      "object"
+    ]
+  },
+  "earnings_trend_item": {
+    "earningsEstimate": [
+      "object"
+    ],
+    "endDate": [
+      "null",
+      "str"
+    ],
+    "period": [
+      "str"
+    ],
+    "revenueEstimate": [
+      "object"
+    ]
+  },
   "fast_info": {
     "currency": [
       "str"

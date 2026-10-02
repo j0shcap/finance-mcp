@@ -3,7 +3,7 @@
 It decides what is fetched together (an asset with its benchmark and the T-bill history),
 what is cached and for how long, and assembles results from the pure modules
 (performance, risk_free, relevance). It knows providers only through providers/ports.py,
-so nothing here is specific to Yahoo or yfinance; server.py chooses the providers.
+so nothing here is provider-specific; server.py chooses the providers.
 """
 
 import difflib
@@ -19,6 +19,7 @@ from finance_mcp.data.models import (
     BenchmarkComparison,
     CompanyProfile,
     ComparisonError,
+    Earnings,
     FinancialStatement,
     Identity,
     KeyMetrics,
@@ -37,7 +38,7 @@ from finance_mcp.data.models import (
     TickerComparisonRow,
 )
 from finance_mcp.data.performance import benchmark_comparison, comparison_row, performance
-from finance_mcp.data.providers.ports import MarketDataProvider, NewsProvider
+from finance_mcp.data.providers.ports import EarningsProvider, MarketDataProvider, NewsProvider
 from finance_mcp.data.relevance import IdentityGap, flag_mentions
 from finance_mcp.data.risk_free import (
     Bills,
@@ -67,6 +68,7 @@ class DataService:
         self,
         market: MarketDataProvider,
         news: NewsProvider,
+        earnings: EarningsProvider,
         *,
         time_fn: Callable[[], float] = time.monotonic,
         quote_ttl: float = 30.0,
@@ -77,6 +79,7 @@ class DataService:
     ) -> None:
         self._market = market
         self._news = news
+        self._earnings = earnings
         self._quote_ttl = quote_ttl
         self._history_ttl = history_ttl
         self._fundamentals_ttl = fundamentals_ttl
@@ -363,6 +366,14 @@ class DataService:
             ("analyst", symbol),
             self._fundamentals_ttl,
             lambda: self._market.analyst_data(symbol),
+        )
+
+    def get_earnings(self, symbol: str) -> Earnings:
+        symbol = _norm(symbol)
+        return self._cached(
+            ("earnings", symbol),
+            self._fundamentals_ttl,
+            lambda: self._earnings.earnings(symbol),
         )
 
     def get_news(self, symbol: str, count: int = 10) -> NewsResult:
