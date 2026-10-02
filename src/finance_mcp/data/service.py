@@ -3,7 +3,7 @@
 It decides what is fetched together (an asset with its benchmark and the T-bill history),
 what is cached and for how long, and assembles results from the pure modules
 (performance, risk_free, relevance). It knows providers only through providers/ports.py,
-so nothing here is specific to Yahoo or yfinance; server.py chooses the providers.
+so nothing here is provider-specific; server.py chooses the providers.
 """
 
 import difflib

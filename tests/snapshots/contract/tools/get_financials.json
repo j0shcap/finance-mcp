@@ -48,7 +48,7 @@
         "type": "string"
       },
       "ticker": {
-        "description": "Ticker symbol, e.g. 'AAPL'. Case-insensitive. Yahoo suffixes and prefixes are allowed (BRK-B, ^GSPC, RY.TO, BTC-USD, EURUSD=X); one symbol per value.",
+        "description": "Ticker symbol, e.g. 'AAPL'. Case-insensitive. Exchange suffixes and prefixes are allowed (BRK-B, ^GSPC, RY.TO, BTC-USD, EURUSD=X); one symbol per value.",
         "maxLength": 24,
         "minLength": 1,
         "pattern": "^\\s*[A-Za-z0-9.\\-^=]{1,20}\\s*$",
@@ -82,7 +82,7 @@
           }
         ],
         "default": null,
-        "description": "Currency (ISO 4217) the values are reported in: Yahoo's financialCurrency, falling back to the quote currency. This can differ from the currency the shares trade in (SAP reports in EUR while its US listing quotes in USD), so never compare absolute figures across companies without checking it. Null if Yahoo does not report it."
+        "description": "Currency (ISO 4217) the values are reported in: the company's reporting currency, falling back to the quote currency. This can differ from the currency the shares trade in (SAP reports in EUR while its US listing quotes in USD), so never compare absolute figures across companies without checking it. Null if the source does not report it."
       },
       "line_item_suggestions": {
         "additionalProperties": {

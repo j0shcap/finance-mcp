@@ -1,6 +1,6 @@
 """The units/sign conventions this server's numbers follow, written once.
 
-Yahoo's units are inconsistent (some ratios are fractions, others are already percents)
+Market-data units differ by field (some ratios are fractions, others are already percents)
 and the cashflow tools follow Excel's sign convention, so a model that guesses gets the
 magnitudes wrong by 100x or the sign backwards. The guidance reaches the model three ways:
 the server ``instructions`` (always in context), the ``finance://conventions`` resource
@@ -46,7 +46,7 @@ CALCULATOR_TOOLS = (
 #: Which get_key_metrics figures survive a cross-listing. Part of the glossary, and the rule the
 #: peer-comparison prompts point at when they say what a cross-listed row can be ranked on.
 CROSS_LISTING_RULE = """\
-- Cross-listings (financial_currency differs from currency, e.g. an ADR): Yahoo computes \
+- Cross-listings (financial_currency differs from currency, e.g. an ADR): the source computes \
 price_to_sales, price_to_book, enterprise_value, ev_to_ebitda and ev_to_revenue by mixing the \
 quote currency with the reporting currency, and its book_value and revenue_per_share need not be \
 per listed share - so all seven can be off by an exchange rate or an ADR ratio (TM's P/S has come \
@@ -81,7 +81,7 @@ ticker you are pricing, never by position: any ticker that failed is in errors i
 positions shift. A ticker in errors was not fetched at all - say so rather than substituting \
 another source's price.
 - risk_free_rate (analyze_performance, compare_to_benchmark, compare_tickers) is an ANNUAL \
-DECIMAL: 0.045 = 4.5%. Left out, it is the 13-week US T-bill yield (Yahoo ^IRX) averaged over \
+DECIMAL: 0.045 = 4.5%. Left out, it is the 13-week US T-bill yield averaged over \
 the dates measured and converted to an effective annual rate, so sharpe_ratio, sortino_ratio, \
 downside_deviation_percent and alpha_percent are excess-over-cash figures. Every result echoes \
 the rate with risk_free_rate_source: "caller", "treasury_bill", or "unavailable" - the T-bill \
@@ -146,24 +146,24 @@ CONVENTIONS_DOC = f"""\
 ## Calculators: signs and rates
 {CALCULATOR_CONVENTIONS}
 
-## Market data: units per field (Yahoo is inconsistent - read before doing arithmetic)
+## Market data: units per field (they differ - read before doing arithmetic)
 {UNITS_GLOSSARY}
 """
 
 SERVER_INSTRUCTIONS = f"""\
-Finance tools over Yahoo Finance market data plus offline financial calculators.
+Finance tools over live market data plus offline financial calculators.
 
 Two tool families:
-- Market data (open world, live, one Yahoo call each): {", ".join(MARKET_DATA_TOOLS)}.
+- Market data (open world, live, one data-source lookup each): {", ".join(MARKET_DATA_TOOLS)}.
   Resolve a name to a ticker with search_symbols first; get_quote prices up to 25 tickers in
-  one call. Tickers are Yahoo symbols, case-insensitive, with the usual prefixes and
+  one call. Tickers are case-insensitive, with the usual exchange prefixes and
   suffixes: BRK-B, ^GSPC, RY.TO, BTC-USD, EURUSD=X.
 - Calculators (pure, deterministic, no network): {", ".join(CALCULATOR_TOOLS)}.
 
 Conventions that change the answer:
 {CALCULATOR_CONVENTIONS}
 
-Yahoo's market-data units are inconsistent: margins and ROE/ROA are fractions (0.27 = 27%) but
+Market-data units differ by field: margins and ROE/ROA are fractions (0.27 = 27%) but
 debt_to_equity and dividend_yield are ALREADY PERCENTS (79.5 = 79.5%, 5.92 = 5.92%), and
 recommendation_mean is inverted (1 = strong buy, 5 = strong sell). Absolute amounts are not all
 in one currency - check each result's currency/financial_currency. Read the {CONVENTIONS_URI}

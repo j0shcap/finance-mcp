@@ -6,7 +6,7 @@
     "readOnlyHint": true,
     "title": "Side-by-Side Ticker Comparison"
   },
-  "description": "Side-by-side performance and key valuation metrics for 2-10 tickers.\n\nEach row carries total/annualized return, volatility, max drawdown and the\nrisk-adjusted ratios over `period` - measured against the caller's risk_free_rate,\nor by default the 13-week T-bill yield over that row's own dates (each row echoes\nits rate) - plus Yahoo's valuation metrics (P/E, forward P/E, P/B, P/S, PEG,\nEV/EBITDA, margins, ROE, debt/equity) in their as-reported units - margins and ROE\nare fractions, debt_to_equity is already a percent. Rank peers on PEG or\ngrowth-vs-multiple rather than raw P/E.\n\nTickers are fetched in parallel and results are partial: a ticker whose price\nhistory could not be fetched is named in `errors` with the reason and has no row,\nand a row whose valuation metrics failed is still present with those fields null\nand `metrics_error` set. One bad ticker never invalidates the rest.\n\nRows whose quote currency differs from the table's base_currency are flagged with\ncurrency_differs, and mixed_currencies summarises it: those returns carry an FX\ncomponent the other rows do not, so compare such rows on ratios and say so. A row\nwhose financial_currency differs from its currency is a cross-listing: its P/S, P/B\nand EV multiples mix two currencies, so rank it on P/E, PEG and the margins.",
+  "description": "Side-by-side performance and key valuation metrics for 2-10 tickers.\n\nEach row carries total/annualized return, volatility, max drawdown and the\nrisk-adjusted ratios over `period` - measured against the caller's risk_free_rate,\nor by default the 13-week T-bill yield over that row's own dates (each row echoes\nits rate) - plus the source's valuation metrics (P/E, forward P/E, P/B, P/S, PEG,\nEV/EBITDA, margins, ROE, debt/equity) in their as-reported units - margins and ROE\nare fractions, debt_to_equity is already a percent. Rank peers on PEG or\ngrowth-vs-multiple rather than raw P/E.\n\nTickers are fetched in parallel and results are partial: a ticker whose price\nhistory could not be fetched is named in `errors` with the reason and has no row,\nand a row whose valuation metrics failed is still present with those fields null\nand `metrics_error` set. One bad ticker never invalidates the rest.\n\nRows whose quote currency differs from the table's base_currency are flagged with\ncurrency_differs, and mixed_currencies summarises it: those returns carry an FX\ncomponent the other rows do not, so compare such rows on ratios and say so. A row\nwhose financial_currency differs from its currency is a cross-listing: its P/S, P/B\nand EV multiples mix two currencies, so rank it on P/E, PEG and the margins.",
   "inputSchema": {
     "additionalProperties": false,
     "properties": {
@@ -45,7 +45,7 @@
       "tickers": {
         "description": "2-10 ticker symbols to compare, e.g. ['AAPL', 'MSFT', 'GOOGL']. For one ticker use analyze_performance.",
         "items": {
-          "description": "Ticker symbol, e.g. 'AAPL'. Case-insensitive. Yahoo suffixes and prefixes are allowed (BRK-B, ^GSPC, RY.TO, BTC-USD, EURUSD=X); one symbol per value.",
+          "description": "Ticker symbol, e.g. 'AAPL'. Case-insensitive. Exchange suffixes and prefixes are allowed (BRK-B, ^GSPC, RY.TO, BTC-USD, EURUSD=X); one symbol per value.",
           "maxLength": 24,
           "minLength": 1,
           "pattern": "^\\s*[A-Za-z0-9.\\-^=]{1,20}\\s*$",
@@ -143,7 +143,7 @@
       "rows": {
         "description": "One row per ticker whose price history was fetched, in request order.",
         "items": {
-          "description": "One ticker's row in a side-by-side comparison: performance plus key valuation.\n\nPerformance figures come from daily auto-adjusted closes over the requested window\n(returns therefore already include reinvested dividends); valuation figures are Yahoo's\nas-reported ratios, with the units the get_key_metrics glossary describes. A row is\npresent whenever its price history was fetched, so the valuation fields can be null with\n``metrics_error`` explaining why.",
+          "description": "One ticker's row in a side-by-side comparison: performance plus key valuation.\n\nPerformance figures come from daily auto-adjusted closes over the requested window\n(returns therefore already include reinvested dividends); valuation figures are the\nsource's as-reported ratios, with the units the get_key_metrics glossary describes. A row is\npresent whenever its price history was fetched, so the valuation fields can be null with\n``metrics_error`` explaining why.",
           "properties": {
             "annualized_return_percent": {
               "anyOf": [
@@ -228,7 +228,7 @@
                 }
               ],
               "default": null,
-              "description": "Enterprise value / EBITDA. Unreliable for a cross-listing: Yahoo mixes both currencies into the enterprise value."
+              "description": "Enterprise value / EBITDA. Unreliable for a cross-listing: the source mixes both currencies into the enterprise value."
             },
             "financial_currency": {
               "anyOf": [
@@ -240,7 +240,7 @@
                 }
               ],
               "default": null,
-              "description": "Currency the company reports financials in. Differs from `currency` for ADRs and other cross-listings, whose price_to_sales, price_to_book and EV multiples Yahoo computes across both currencies - rank such a row on P/E, PEG and the margins."
+              "description": "Currency the company reports financials in. Differs from `currency` for ADRs and other cross-listings, whose price_to_sales, price_to_book and EV multiples the source computes across both currencies - rank such a row on P/E, PEG and the margins."
             },
             "forward_pe": {
               "anyOf": [
@@ -304,7 +304,7 @@
                 }
               ],
               "default": null,
-              "description": "Price/book ratio. Unreliable for a cross-listing (financial_currency != currency): Yahoo divides the listed price by book value in another currency."
+              "description": "Price/book ratio. Unreliable for a cross-listing (financial_currency != currency): it divides the listed price by book value in another currency."
             },
             "price_to_sales": {
               "anyOf": [
@@ -316,7 +316,7 @@
                 }
               ],
               "default": null,
-              "description": "Price/sales (TTM) ratio. Unreliable for a cross-listing: Yahoo divides market cap in `currency` by revenue in `financial_currency`."
+              "description": "Price/sales (TTM) ratio. Unreliable for a cross-listing: it divides market cap in `currency` by revenue in `financial_currency`."
             },
             "profit_margins": {
               "anyOf": [
@@ -366,7 +366,7 @@
               "description": "Why the rate is unavailable and how to proceed (pass risk_free_rate explicitly); null otherwise."
             },
             "risk_free_rate_source": {
-              "description": "Where risk_free_rate came from. 'caller': the rate passed in. 'treasury_bill': none was passed, so it is the 13-week US T-bill yield (Yahoo ^IRX) averaged over the measured dates and converted from its discount quote to an effective annual rate. 'unavailable': none was passed and that average could not be formed - see risk_free_rate_note; the figures that need a rate are null.",
+              "description": "Where risk_free_rate came from. 'caller': the rate passed in. 'treasury_bill': none was passed, so it is the 13-week US T-bill yield averaged over the measured dates and converted from its discount quote to an effective annual rate. 'unavailable': none was passed and that average could not be formed - see risk_free_rate_note; the figures that need a rate are null.",
               "enum": [
                 "caller",
                 "treasury_bill",

@@ -20,7 +20,7 @@ def calculator(title: str) -> ToolAnnotations:
 
 
 def market_data(title: str) -> ToolAnnotations:
-    """Annotations for a Yahoo-backed lookup: read-only, but live and external.
+    """Annotations for a market-data lookup: read-only, but live and external.
 
     Deliberately not idempotent: a second call can return a different price, a new
     headline, or a newly filed statement.

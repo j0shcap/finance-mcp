@@ -6,12 +6,12 @@
     "readOnlyHint": true,
     "title": "Key Valuation & Profitability Metrics"
   },
-  "description": "Valuation, profitability, and leverage ratios (as reported by Yahoo).\n\nNote units differ by field: P/E, P/B, P/S, EV/EBITDA, PEG are plain ratios;\nmargins and ROE/ROA are fractions (0.27 = 27%); debt_to_equity is a percent\n(79.5 = 79.5%); EV, total debt/cash, FCF, EBITDA are absolute amounts. Those\namounts are not all in one currency: debt/cash/FCF/EBITDA and the per-share\nrevenue/book value are in `financial_currency`, the EPS fields in `currency`. They\ndiffer for ADRs and other cross-listings, where Yahoo computes P/S, P/B, EV and the\nEV multiples across both currencies: use P/E, PEG and the margins for those.",
+  "description": "Valuation, profitability, and leverage ratios, as the data source reports them.\n\nNote units differ by field: P/E, P/B, P/S, EV/EBITDA, PEG are plain ratios;\nmargins and ROE/ROA are fractions (0.27 = 27%); debt_to_equity is a percent\n(79.5 = 79.5%); EV, total debt/cash, FCF, EBITDA are absolute amounts. Those\namounts are not all in one currency: debt/cash/FCF/EBITDA and the per-share\nrevenue/book value are in `financial_currency`, the EPS fields in `currency`. They\ndiffer for ADRs and other cross-listings, where the source computes P/S, P/B, EV and the\nEV multiples across both currencies: use P/E, PEG and the margins for those.",
   "inputSchema": {
     "additionalProperties": false,
     "properties": {
       "ticker": {
-        "description": "Ticker symbol, e.g. 'AAPL'. Case-insensitive. Yahoo suffixes and prefixes are allowed (BRK-B, ^GSPC, RY.TO, BTC-USD, EURUSD=X); one symbol per value.",
+        "description": "Ticker symbol, e.g. 'AAPL'. Case-insensitive. Exchange suffixes and prefixes are allowed (BRK-B, ^GSPC, RY.TO, BTC-USD, EURUSD=X); one symbol per value.",
         "maxLength": 24,
         "minLength": 1,
         "pattern": "^\\s*[A-Za-z0-9.\\-^=]{1,20}\\s*$",
@@ -25,7 +25,7 @@
   },
   "name": "get_key_metrics",
   "outputSchema": {
-    "description": "Valuation / profitability / leverage ratios as reported by Yahoo. Units vary by field.\n\nAbsolute amounts are NOT all in one currency: the financialData figures (total debt/cash,\nfree cash flow, EBITDA) are in ``financial_currency``, the EPS fields in ``currency``. When\nthe two differ (ADRs and other cross-listings) Yahoo computes the price multiples and\nenterprise value across both currencies, so those are unreliable; the cross-listing rule in\nthe finance://conventions resource says what such a company can be compared on.",
+    "description": "Valuation / profitability / leverage ratios as the source reports them. Units vary by field.\n\nAbsolute amounts are NOT all in one currency: the financial figures (total debt/cash, free\ncash flow, EBITDA) are in ``financial_currency``, the EPS fields in ``currency``. When the\ntwo differ (ADRs and other cross-listings) the source computes the price multiples and\nenterprise value across both currencies, so those are unreliable; the cross-listing rule in\nthe finance://conventions resource says what such a company can be compared on.",
     "properties": {
       "book_value": {
         "anyOf": [
@@ -109,7 +109,7 @@
           }
         ],
         "default": null,
-        "description": "Enterprise value (absolute units), as Yahoo derives it from market cap and the balance sheet. In `currency` for a domestic listing; for a cross-listing it mixes both currencies and is badly wrong - recompute it from market cap, total_debt and total_cash at a quoted FX rate."
+        "description": "Enterprise value (absolute units), as the source derives it from market cap and the balance sheet. In `currency` for a domestic listing; for a cross-listing it mixes both currencies and is badly wrong - recompute it from market cap, total_debt and total_cash at a quoted FX rate."
       },
       "ev_to_ebitda": {
         "anyOf": [
@@ -145,7 +145,7 @@
           }
         ],
         "default": null,
-        "description": "Currency (ISO 4217) the company reports its financials in (Yahoo's financialCurrency); the unit for total_debt, total_cash, free_cashflow, ebitda, revenue_per_share and book_value. May differ from `currency`, e.g. SAP reports in EUR while its US listing quotes in USD."
+        "description": "Currency (ISO 4217) the company reports its financials in; the unit for total_debt, total_cash, free_cashflow, ebitda, revenue_per_share and book_value. May differ from `currency`, e.g. SAP reports in EUR while its US listing quotes in USD."
       },
       "forward_eps": {
         "anyOf": [
@@ -229,7 +229,7 @@
           }
         ],
         "default": null,
-        "description": "Price/book ratio. Unreliable for a cross-listing (financial_currency != currency): Yahoo divides the listed price by book value in another currency."
+        "description": "Price/book ratio. Unreliable for a cross-listing (financial_currency != currency): it divides the listed price by book value in another currency."
       },
       "price_to_sales": {
         "anyOf": [
@@ -241,7 +241,7 @@
           }
         ],
         "default": null,
-        "description": "Price/sales (TTM) ratio. Unreliable for a cross-listing: Yahoo divides market cap in `currency` by revenue in `financial_currency`."
+        "description": "Price/sales (TTM) ratio. Unreliable for a cross-listing: it divides market cap in `currency` by revenue in `financial_currency`."
       },
       "profit_margins": {
         "anyOf": [

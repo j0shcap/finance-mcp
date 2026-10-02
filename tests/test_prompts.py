@@ -529,7 +529,7 @@ async def test_compare_stocks_derives_growth_adjustment_instead_of_trusting_peg(
     client: Client[FastMCPTransport],
 ) -> None:
     text = await _render(client, "compare_stocks", REFERENCING_PROMPTS["compare_stocks"])
-    assert "peg_ratio from Yahoo is often null or stale" in text
+    assert "peg_ratio is often null or stale" in text
     assert "trailing_pe / forward_pe - 1" in text
     assert "years is the number of annual periods returned minus 1" in text
     assert "undefined when either endpoint is zero or negative" in text
