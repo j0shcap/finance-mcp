@@ -1,8 +1,8 @@
 """Does a news headline name the company it was filed under? Text matching, then flagging.
 
-Yahoo's per-ticker news stream mixes market-wide stories ("S&P 500 dips...") in with
-company news, and its payload carries no related-ticker metadata to tell them apart, so the
-only signal is the text. This matches the company's name and ticker as whole words.
+A per-ticker news feed can mix market-wide stories ("S&P 500 dips...") in with company
+news, with no related-ticker metadata to tell them apart (Yahoo's does), so the only signal
+is the text. This matches the company's name and ticker as whole words.
 
 It is deliberately a flag, not a filter: brand and executive names ("Google" for
 Alphabet, "Musk" for Tesla) are not matched, so a False is a hint to read the title, not a
@@ -18,7 +18,7 @@ identity (or why it is missing); everything else here is pure text.
 import re
 from typing import NamedTuple
 
-from finance_mcp.data.models import NewsArticle, RelevanceCheck
+from finance_mcp.data.models import Identity, NewsArticle, RelevanceCheck
 
 #: Legal forms, share-class markers and filler stripped from the END of a company name.
 _TRAILING_NOISE = frozenset(
@@ -46,8 +46,8 @@ _TRAILING_NOISE = frozenset(
         "se",
         "asa",
         "ab",
-        "the",  # Yahoo's "Coca-Cola Company (The)"
-        "new",  # Yahoo's "Berkshire Hathaway Inc. New"
+        "the",  # "Coca-Cola Company (The)", as Yahoo spells it
+        "new",  # "Berkshire Hathaway Inc. New"
         "&",
         "-",
     }
@@ -183,14 +183,6 @@ def mentions_company(text: str, names: tuple[str, ...], symbols: tuple[str, ...]
     return False
 
 
-class Identity(NamedTuple):
-    """What the relevance flags need to know about a symbol, from Yahoo's ``info``."""
-
-    quote_type: str | None
-    long_name: str | None
-    short_name: str | None
-
-
 class IdentityGap(NamedTuple):
     """Why a symbol's identity is missing, and whether retrying could change that."""
 
@@ -204,9 +196,7 @@ def flag_mentions(
     """Set each article's mentions_company; say whether that could be assessed, and why not."""
     if isinstance(identity, IdentityGap):
         return ("no_company_name" if identity.lasting else "unavailable"), identity.reason
-    # Only a company has a name a headline can omit; for an ETF, index, fund, coin or
-    # currency pair the market-wide stories are the relevant ones.
-    if identity.quote_type != "EQUITY":
+    if not identity.is_company:
         return "not_an_equity", None
     names = company_aliases(identity.long_name, identity.short_name)
     symbols = symbol_aliases(symbol)

@@ -1,6 +1,6 @@
 """Run independent blocking fetches at the same time.
 
-yfinance is synchronous, so independent lookups (a batch of quotes, an asset and its
+Providers are synchronous, so independent lookups (a batch of quotes, an asset and its
 benchmark) run on worker threads instead of one after another.
 """
 

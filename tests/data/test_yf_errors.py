@@ -10,7 +10,7 @@ from yfinance.exceptions import (
 )
 
 from finance_mcp.data.errors import DataUnavailable, SymbolNotFound
-from finance_mcp.data.yahoo import YahooSource, is_transient
+from finance_mcp.data.providers.yahoo import YahooProvider, is_transient
 from tests.fakes import (
     fake_ticker_factory,
     make_client,
@@ -44,7 +44,7 @@ TRANSPORT_ERRORS = [
 def test_quote_transport_failure_is_data_unavailable_not_symbol_not_found(
     exc: Exception, instant_backoff: list[float]
 ) -> None:
-    source = YahooSource(fake_ticker_factory(fast_info_error=exc))
+    source = YahooProvider(fake_ticker_factory(fast_info_error=exc))
     with pytest.raises(DataUnavailable) as raised:
         source.quote("AAPL")
     # Dropped connections and 5xx are retried before failing; the rest fail at once.
@@ -75,7 +75,7 @@ NO_DATA_ERRORS = [
 
 @pytest.mark.parametrize("exc", NO_DATA_ERRORS, ids=lambda e: type(e).__name__ + str(e)[:12])
 def test_quote_no_data_signals_are_symbol_not_found(exc: Exception) -> None:
-    source = YahooSource(fake_ticker_factory(fast_info_error=exc))
+    source = YahooProvider(fake_ticker_factory(fast_info_error=exc))
     with pytest.raises(SymbolNotFound) as raised:
         source.quote("NOPE")
     assert str(raised.value) == "No quote data for 'NOPE'. The symbol may be invalid or delisted."
@@ -90,7 +90,7 @@ def test_info_no_data_signals_are_symbol_not_found(exc: Exception) -> None:
 
 
 def test_rate_limit_error_stays_data_unavailable() -> None:
-    source = YahooSource(fake_ticker_factory(fast_info_error=YFRateLimitError()))
+    source = YahooProvider(fake_ticker_factory(fast_info_error=YFRateLimitError()))
     with pytest.raises(DataUnavailable) as raised:
         source.quote("AAPL")
     assert not isinstance(raised.value, SymbolNotFound)

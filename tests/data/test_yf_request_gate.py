@@ -1,4 +1,4 @@
-"""YahooSource's request gate: a cap on concurrent Yahoo requests, and retries with backoff."""
+"""YahooProvider's request gate: a cap on concurrent Yahoo requests, and retries with backoff."""
 
 import threading
 from collections.abc import Callable
@@ -10,11 +10,11 @@ from curl_cffi.const import CurlECode
 from curl_cffi.requests.exceptions import code2error
 from yfinance.exceptions import YFRateLimitError
 
-from finance_mcp.data import yahoo
 from finance_mcp.data.errors import DataUnavailable, SymbolNotFound
-from finance_mcp.data.yahoo import YahooSource, is_transient
-from finance_mcp.data.yahoo import _jitter as real_jitter  # bound before the test patch
-from finance_mcp.server import build_default_client
+from finance_mcp.data.providers import yahoo
+from finance_mcp.data.providers.yahoo import YahooProvider, is_transient
+from finance_mcp.data.providers.yahoo import _jitter as real_jitter  # bound before the test patch
+from finance_mcp.server import build_data_service
 from tests.fakes import (
     QUOTE_FI,
     FakeHTTPError,
@@ -106,7 +106,7 @@ def test_nested_fetches_do_not_deadlock_at_a_cap_of_one() -> None:
 
 
 def test_a_request_inside_a_request_is_refused() -> None:
-    source = YahooSource()
+    source = YahooProvider()
     with pytest.raises(RuntimeError, match="nested Yahoo request"):
         source._request(lambda: source._request(lambda: 1))
 
@@ -116,7 +116,7 @@ def test_a_request_inside_a_request_is_refused() -> None:
 
 def test_a_throttled_request_is_retried_with_backoff(instant_backoff: list[float]) -> None:
     factory, attempts = _flaky_quotes([YFRateLimitError(), YFRateLimitError()])
-    quote = YahooSource(factory).quote("AAPL")
+    quote = YahooProvider(factory).quote("AAPL")
     assert quote.price == QUOTE_FI["last_price"]
     assert len(attempts) == 3
     assert instant_backoff == [2.0, 6.0]
@@ -125,7 +125,7 @@ def test_a_throttled_request_is_retried_with_backoff(instant_backoff: list[float
 def test_retries_give_up_with_the_original_error(instant_backoff: list[float]) -> None:
     factory, attempts = _flaky_quotes([YFRateLimitError() for _ in range(5)])
     with pytest.raises(DataUnavailable, match="Too Many Requests"):
-        YahooSource(factory).quote("AAPL")
+        YahooProvider(factory).quote("AAPL")
     assert len(attempts) == 3
     assert instant_backoff == [2.0, 6.0]
 
@@ -133,7 +133,7 @@ def test_retries_give_up_with_the_original_error(instant_backoff: list[float]) -
 def test_an_unknown_symbol_is_not_retried(instant_backoff: list[float]) -> None:
     factory, attempts = _flaky_quotes([FakeHTTPError(404)])
     with pytest.raises(SymbolNotFound):
-        YahooSource(factory).quote("NOPE")
+        YahooProvider(factory).quote("NOPE")
     assert len(attempts) == 1
     assert instant_backoff == []
 
@@ -141,7 +141,7 @@ def test_an_unknown_symbol_is_not_retried(instant_backoff: list[float]) -> None:
 def test_retries_can_be_turned_off(instant_backoff: list[float]) -> None:
     factory, attempts = _flaky_quotes([YFRateLimitError()])
     with pytest.raises(DataUnavailable):
-        YahooSource(factory, request_retries=0).quote("AAPL")
+        YahooProvider(factory, request_retries=0).quote("AAPL")
     assert len(attempts) == 1
 
 
@@ -151,7 +151,7 @@ def test_no_retry_starts_past_the_time_budget(
     monkeypatch.setattr(yahoo, "RETRY_BUDGET_SECONDS", 1.0)  # shorter than the first 2s wait
     factory, attempts = _flaky_quotes([YFRateLimitError()])
     with pytest.raises(DataUnavailable):
-        YahooSource(factory).quote("AAPL")
+        YahooProvider(factory).quote("AAPL")
     assert len(attempts) == 1
 
 
@@ -167,8 +167,8 @@ def test_a_best_effort_read_is_not_retried(instant_backoff: list[float]) -> None
             reads.append(self._symbol)
             raise YFRateLimitError()
 
-    with pytest.raises(YFRateLimitError):
-        YahooSource(_Ticker).statement_currency("SAP")
+    with pytest.raises(DataUnavailable):
+        YahooProvider(_Ticker).statement_currency("SAP")
     assert reads == ["SAP"]
 
 
@@ -176,7 +176,7 @@ def test_the_gate_is_released_while_backing_off(monkeypatch: pytest.MonkeyPatch)
     # Cap of one: if the throttled request kept its slot through the backoff, the request
     # made during that backoff could never start.
     factory, _ = _flaky_quotes([YFRateLimitError()])
-    source = YahooSource(factory, max_concurrent_requests=1)
+    source = YahooProvider(factory, max_concurrent_requests=1)
     during_backoff: list[float] = []
 
     def sleep_while_another_request_runs(_delay: float) -> None:
@@ -242,7 +242,10 @@ def test_is_transient_for_what_curl_cffi_really_raises(exc: Exception, transient
 def test_settings_reach_the_request_gate(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FINANCE_MCP_MAX_CONCURRENT_REQUESTS", "3")
     monkeypatch.setenv("FINANCE_MCP_REQUEST_RETRIES", "0")
-    source = build_default_client()._source
+    service = build_data_service()
+    source = service._market
+    assert isinstance(source, YahooProvider)
+    assert service._news is source  # one instance, so one gate spans every Yahoo call
     assert source._gate._initial_value == 3  # type: ignore[attr-defined]
     assert source._retry_delays == ()
 
@@ -253,4 +256,4 @@ def test_an_unusable_request_cap_is_rejected(monkeypatch: pytest.MonkeyPatch, va
 
     monkeypatch.setenv("FINANCE_MCP_MAX_CONCURRENT_REQUESTS", value)
     with pytest.raises(ValidationError):
-        build_default_client()
+        build_data_service()

@@ -6,8 +6,9 @@ cannot enumerate every Yahoo failure mode. SymbolNotFound is reserved for signal
 really mean "no data for this symbol" (see _is_no_data_error): everything else, transport
 failures included, stays a plain DataUnavailable.
 
-YahooSource takes symbols already normalized by its caller and never caches: caching and
-the choice of what to fetch together belong to YFinanceClient.
+YahooProvider implements every port in providers/ports.py. It takes symbols already
+normalized by its caller and never caches: caching and the choice of what to fetch together
+belong to DataService.
 """
 
 import math
@@ -28,6 +29,7 @@ from finance_mcp.data.models import (
     CompanyProfile,
     DividendEvent,
     FinancialStatement,
+    Identity,
     KeyMetrics,
     NewsArticle,
     NewsSource,
@@ -40,7 +42,9 @@ from finance_mcp.data.models import (
     SymbolMatch,
     SymbolSearchResult,
 )
-from finance_mcp.data.relevance import Identity
+
+#: Yahoo's 13-week US Treasury bill yield: percent, on a bank-discount basis.
+TREASURY_BILL_SYMBOL = "^IRX"
 
 #: Signals that genuinely mean "Yahoo has no data for this symbol". KeyError is what
 #: fast_info leaks for an unknown symbol; YFTickerMissingError covers yfinance's own
@@ -108,7 +112,7 @@ def is_transient(exc: BaseException) -> bool:
     return status == 429 or (isinstance(status, int) and 500 <= status < 600)
 
 
-class YahooSource:
+class YahooProvider:
     """Fetches and parses one kind of Yahoo data per method, into this package's models.
 
     Every Yahoo request goes through ``_request``: at most ``max_concurrent_requests`` run at
@@ -248,6 +252,9 @@ class YahooSource:
             raise SymbolNotFound(no_history)
         return all_bars
 
+    def treasury_bill_yields(self, period: str) -> list[PriceBar]:
+        return self.bars(TREASURY_BILL_SYMBOL, period, "1d")
+
     def financial_statement(
         self, symbol: str, statement: Statement, period: StatementPeriod
     ) -> FinancialStatement:
@@ -381,7 +388,7 @@ class YahooSource:
         # Best-effort (it only labels news), so a throttled lookup isn't retried.
         _, info = self._ticker_with_info(symbol, "company identity", "identity", retry=False)
         return Identity(
-            quote_type=info.get("quoteType"),
+            is_company=info.get("quoteType") == "EQUITY",
             long_name=info.get("longName"),
             short_name=info.get("shortName"),
         )
@@ -420,7 +427,10 @@ class YahooSource:
 
         Best-effort (it only labels a statement), so a throttled read isn't retried.
         """
-        return self._request(lambda: _read_statement_currency(self._ticker(symbol)), retry=False)
+        with _unavailable_on_error(f"Failed to fetch the statement currency for '{symbol}'"):
+            return self._request(
+                lambda: _read_statement_currency(self._ticker(symbol)), retry=False
+            )
 
 
 def _with_info(ticker: Any) -> tuple[Any, dict[str, Any]]:

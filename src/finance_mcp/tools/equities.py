@@ -1,4 +1,4 @@
-"""MCP tools for equities market data, backed by YFinanceClient."""
+"""MCP tools for equities market data, backed by DataService."""
 
 from typing import Annotated
 
@@ -18,14 +18,14 @@ from finance_mcp.data.models import (
     StatementPeriod,
     SymbolSearchResult,
 )
-from finance_mcp.data.yfinance_client import YFinanceClient
+from finance_mcp.data.service import DataService
 from finance_mcp.tools._annotations import market_data
 from finance_mcp.tools._dispatch import run_data
 from finance_mcp.tools._inputs import MAX_LINE_ITEMS, MAX_QUOTE_TICKERS, Ticker
 
 
-def register(mcp: FastMCP, client: YFinanceClient) -> None:
-    """Register equities tools bound to a YFinanceClient."""
+def register(mcp: FastMCP, service: DataService) -> None:
+    """Register equities tools bound to a DataService."""
 
     @mcp.tool(annotations=market_data("Stock Quotes"))
     async def get_quote(
@@ -45,7 +45,7 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
         reason (invalid/delisted symbol vs. a source failure). One bad ticker does not
         invalidate the rest, so there is no need to retry the whole batch.
         """
-        return await run_data(lambda: client.get_quote(tickers))
+        return await run_data(lambda: service.get_quote(tickers))
 
     @mcp.tool(annotations=market_data("Price History (OHLCV)"))
     async def get_price_history(
@@ -62,7 +62,7 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
         ] = "1d",
     ) -> PriceHistory:
         """Historical OHLCV bars plus a summary; long windows are truncated (summary is full)."""
-        return await run_data(lambda: client.get_price_history(ticker, period, interval))
+        return await run_data(lambda: service.get_price_history(ticker, period, interval))
 
     @mcp.tool(annotations=market_data("Financial Statements"))
     async def get_financials(
@@ -92,7 +92,7 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
         reported. Filtered labels that do not exist are reported in `missing_line_items`, with
         `available_line_items` and `line_item_suggestions` to retry from.
         """
-        return await run_data(lambda: client.get_financials(ticker, statement, period, line_items))
+        return await run_data(lambda: service.get_financials(ticker, statement, period, line_items))
 
     @mcp.tool(annotations=market_data("Company Profile"))
     async def get_company_profile(
@@ -103,7 +103,7 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
         Includes sector, industry, market cap and P/E, with recent dividends and splits.
         Note: dividend_yield is a percent (e.g. 5.92 means 5.92%).
         """
-        return await run_data(lambda: client.get_company_profile(ticker))
+        return await run_data(lambda: service.get_company_profile(ticker))
 
     @mcp.tool(annotations=market_data("Analyst Ratings & Price Targets"))
     async def get_analyst_data(
@@ -116,7 +116,7 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
         current_price are in the result's currency. ETFs, indices, and crypto have no
         analyst coverage and return an error.
         """
-        return await run_data(lambda: client.get_analyst_data(ticker))
+        return await run_data(lambda: service.get_analyst_data(ticker))
 
     @mcp.tool(annotations=market_data("Company News"))
     async def get_news(
@@ -140,7 +140,7 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
         null (not a stock, Yahoo has no company name for it, or fetching the name failed, with
         relevance_note saying why).
         """
-        return await run_data(lambda: client.get_news(ticker, count))
+        return await run_data(lambda: service.get_news(ticker, count))
 
     @mcp.tool(annotations=market_data("Ticker Symbol Search"))
     async def search_symbols(
@@ -163,4 +163,4 @@ def register(mcp: FastMCP, client: YFinanceClient) -> None:
         match's quote_type to choose. Use this to find a symbol before calling the other tools.
         An unmatched query returns an empty match list (not an error).
         """
-        return await run_data(lambda: client.search_symbols(query, max_results))
+        return await run_data(lambda: service.search_symbols(query, max_results))

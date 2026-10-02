@@ -10,8 +10,8 @@ import pandas as pd
 from fastmcp import Client
 from fastmcp.client.transports import FastMCPTransport
 
-from finance_mcp.data.yahoo import FINANCIALS_ATTR
-from finance_mcp.data.yfinance_client import YFinanceClient
+from finance_mcp.data.providers.yahoo import FINANCIALS_ATTR, YahooProvider
+from finance_mcp.data.service import DataService
 from finance_mcp.server import create_server
 
 #: fast_info for a healthy quote.
@@ -326,18 +326,21 @@ def make_client(
     clock: FakeClock | None = None,
     search_factory: Callable[..., Any] | None = None,
     **options: Any,
-) -> YFinanceClient:
-    """A YFinanceClient wired to fakes, so no test reaches Yahoo.
+) -> DataService:
+    """A DataService over a YahooProvider wired to fakes, so no test reaches Yahoo.
 
     ``factory`` defaults to a stub with a healthy quote and ``search_factory`` to an empty
-    search (the news fallback calls it). ``options`` pass through, e.g. ``quote_ttl``.
+    search (the news fallback calls it). ``options`` pass through to the provider's request
+    gate (``max_concurrent_requests``, ``request_retries``) or else to the DataService
+    (e.g. ``quote_ttl``).
     """
-    return YFinanceClient(
-        ticker_factory=factory or fake_ticker_factory(fast_info=QUOTE_FI),
-        search_factory=search_factory or FakeSearch(),
-        time_fn=clock if clock is not None else FakeClock(),
-        **options,
+    gate = {
+        k: options.pop(k) for k in ("max_concurrent_requests", "request_retries") if k in options
+    }
+    yahoo = YahooProvider(
+        factory or fake_ticker_factory(fast_info=QUOTE_FI), search_factory or FakeSearch(), **gate
     )
+    return DataService(yahoo, yahoo, time_fn=clock if clock is not None else FakeClock(), **options)
 
 
 @asynccontextmanager
@@ -345,7 +348,7 @@ async def connect(
     factory: Callable[[str], Any] | None = None, **options: Any
 ) -> AsyncIterator[Client[FastMCPTransport]]:
     """An in-memory MCP client on a server whose data layer is ``make_client(factory, ...)``."""
-    async with Client(create_server(yf_client=make_client(factory, **options))) as client:
+    async with Client(create_server(service=make_client(factory, **options))) as client:
         yield client
 
 

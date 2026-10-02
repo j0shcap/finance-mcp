@@ -1,4 +1,4 @@
-"""YFinanceClient.get_news and its search fallback."""
+"""DataService.get_news and its search fallback."""
 
 import threading
 

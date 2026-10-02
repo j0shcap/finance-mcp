@@ -12,7 +12,7 @@ from collections.abc import AsyncIterator
 import pytest
 import pytest_asyncio
 
-from finance_mcp.server import build_default_client
+from finance_mcp.server import build_data_service
 from tests.e2e.conftest import Server
 from tests.live.conftest import (
     AAPL,
@@ -34,7 +34,7 @@ async def stdio(default_server: Server) -> AsyncIterator[Layer]:
     Layer calls tools through whatever MCP client it is given; the direct-layer client it
     also takes is never used once an MCP client is passed.
     """
-    yield Layer(build_default_client(), default_server.client)
+    yield Layer(build_data_service(), default_server.client)
 
 
 async def test_crypto_annualized_return_matches_total_return_over_one_year(

@@ -1,4 +1,4 @@
-"""YFinanceClient.get_price_history: bar parsing, truncation and bar timestamps."""
+"""DataService.get_price_history: bar parsing, truncation and bar timestamps."""
 
 import math
 from typing import get_args
@@ -9,7 +9,7 @@ from finance_mcp.data.errors import DataUnavailable, SymbolNotFound
 from finance_mcp.data.models import (
     HistoryInterval,
 )
-from finance_mcp.data.yahoo import INTRADAY_INTERVALS
+from finance_mcp.data.providers.yahoo import INTRADAY_INTERVALS
 from tests.fakes import (
     FakeClock,
     counting,

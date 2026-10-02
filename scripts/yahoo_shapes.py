@@ -6,7 +6,7 @@ unknown symbol raises. tests/shapes/yahoo.json records the real shapes
 (scripts/record_shapes.py); tests/test_fakes_match_shapes.py holds the test fakes to them, and
 the nightly job compares fresh shapes with the committed ones.
 
-The keys worth describing are read off src/finance_mcp/data/yahoo.py itself: every
+The keys worth describing are read off src/finance_mcp/data/providers/yahoo.py itself: every
 ``<receiver>.get("key")`` and ``getattr(fi, "attr")`` there, so the recording follows the parser.
 """
 
@@ -19,7 +19,9 @@ from typing import Any
 
 import pandas as pd
 
-YAHOO_PY = Path(__file__).resolve().parent.parent / "src" / "finance_mcp" / "data" / "yahoo.py"
+from finance_mcp.data.providers import yahoo
+
+YAHOO_PY = Path(yahoo.__file__)
 
 
 def keys_read(source: str | None = None) -> dict[str, list[str]]:

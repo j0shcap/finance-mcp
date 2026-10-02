@@ -1,4 +1,4 @@
-"""YFinanceClient.get_key_metrics."""
+"""DataService.get_key_metrics."""
 
 import pytest
 from yfinance.exceptions import (

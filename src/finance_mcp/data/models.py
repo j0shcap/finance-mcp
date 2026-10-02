@@ -2,7 +2,7 @@
 
 import datetime
 import math
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 
 from pydantic import BaseModel, Field, SerializerFunctionWrapHandler, field_serializer
 
@@ -656,6 +656,18 @@ class AnalystData(MarketData):
         description="Per-period recommendation counts, newest first (up to 4 months). "
         "Empty list if no analyst coverage data is available.",
     )
+
+
+class Identity(NamedTuple):
+    """What the relevance flags need to know about a symbol.
+
+    ``is_company``: a company, whose name a headline can omit. False for an ETF, index,
+    fund, coin or currency pair, where the market-wide stories are the relevant ones.
+    """
+
+    is_company: bool
+    long_name: str | None
+    short_name: str | None
 
 
 class NewsArticle(MarketData):

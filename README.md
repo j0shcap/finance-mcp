@@ -207,7 +207,7 @@ single rolling issue.
 
 Assertions cover shape and unit plausibility rather than exact values — margins as fractions,
 `debt_to_equity` and `dividend_yield` as percents, `period_ends` descending — and each tool is
-exercised both through `YFinanceClient` and through an in-process MCP client. Throttling is
+exercised both through `DataService` and through an in-process MCP client. Throttling is
 retried and then reported as a skip, so it never reads as a contract failure.
 
 ### End-to-end tests

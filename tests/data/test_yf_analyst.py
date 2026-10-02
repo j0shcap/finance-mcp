@@ -1,4 +1,4 @@
-"""YFinanceClient.get_analyst_data."""
+"""DataService.get_analyst_data."""
 
 import pandas as pd
 import pytest
@@ -10,7 +10,7 @@ from finance_mcp.data.errors import DataUnavailable, SymbolNotFound
 from finance_mcp.data.models import (
     AnalystData,
 )
-from finance_mcp.data.yahoo import _recommendation_trend
+from finance_mcp.data.providers.yahoo import _recommendation_trend
 from tests.fakes import (
     fake_ticker_factory,
     make_client,

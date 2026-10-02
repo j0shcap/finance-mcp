@@ -27,7 +27,7 @@ def _no_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class FakeClient:
-    """Stands in for YFinanceClient, failing a set number of times before succeeding."""
+    """Stands in for DataService, failing a set number of times before succeeding."""
 
     def __init__(self, failures: int, exc: Exception, result: Any = "ok") -> None:
         self.remaining = failures

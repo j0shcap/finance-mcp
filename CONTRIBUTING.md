@@ -22,7 +22,7 @@ uv run pre-commit install   # optional: ruff, mypy and bandit on every commit
 | `make check` | ruff, `mypy --strict`, bandit, and the offline test suite with the coverage gate | before every push; CI runs it on Python 3.13 and 3.14 |
 | `make test` | just the offline test suite | while iterating |
 | `make e2e` | builds the wheel and drives it over stdio | when touching packaging, the entry point or anything printed |
-| `make test-live` | contract tests against real Yahoo endpoints | when touching `data/yahoo.py` or `data/yfinance_client.py` |
+| `make test-live` | contract tests against real Yahoo endpoints | when touching `data/providers/yahoo.py` or `data/service.py` |
 | `make snapshot` | rewrites the model-facing contract snapshot | after an intended change to anything a client sees |
 
 `make check` never touches the network: tests mock yfinance through `tests/fakes.py`. Tests that
@@ -43,9 +43,28 @@ need the network or a built wheel are marked `live` or `e2e` and are deselected 
   model. Don't swallow exceptions or return placeholder values: missing data is `null` or an
   error, never a guess.
 
+## Providers and the logic layer
+
+Market data reaches the tools through three layers, so a new data or news source is a new
+adapter, not a change to the logic:
+
+- **Ports** (`data/providers/ports.py`): `typing.Protocol` interfaces, one per source that could
+  be replaced on its own (`MarketDataProvider`, `NewsProvider`). They speak only this package's
+  models and errors.
+- **Adapters** (`data/providers/`): one module per provider. `yahoo.py` (`YahooProvider`) holds
+  every yfinance call, Yahoo field name and Yahoo quirk, and implements every port.
+- **Logic** (`data/service.py`, `DataService`): what is fetched together, what is cached and
+  for how long, and the pure computations (`analytics.py`, `performance.py`, `risk_free.py`,
+  `relevance.py`). It never names a provider.
+
+`server.py` is the composition root: it builds the providers and hands each port its
+implementation. `tests/test_architecture.py` fails if anything else imports yfinance, its
+transport, pandas or the Yahoo adapter. `tests/data/test_service_ports.py` runs the logic on a
+plain in-memory provider.
+
 ## Yahoo payload shapes
 
-`make record-shapes` records the *shape* of every kind of payload `data/yahoo.py` parses -
+`make record-shapes` records the *shape* of every kind of payload `data/providers/yahoo.py` parses -
 index kinds and timezones, column dtypes, the type of each key it reads (found by scanning
 `yahoo.py`), what an unknown symbol raises - into `tests/shapes/yahoo.json`, with none of
 Yahoo's values. `tests/test_fakes_match_shapes.py` holds the fakes in `tests/fakes.py` to
@@ -75,11 +94,10 @@ move them too, and needs `make snapshot` like any other change to the lock.
 1. Put the logic in `src/finance_mcp/data/` and its result model in `data/models.py`.
    Market-data models subclass `MarketData`, which rounds their output.
    - A calculator goes in `calculators.py` (pure math, no network).
-   - A market-data tool is split three ways. The Yahoo fetch-and-parse goes in `yahoo.py`
-     (`YahooSource`, which never caches), and any computation over fetched data goes in a
-     pure module (`analytics.py`, `performance.py`, `risk_free.py`, `relevance.py`). The
-     orchestration - what is fetched together and cached, for how long - goes in a
-     `YFinanceClient` method in `yfinance_client.py`.
+   - A market-data tool is split across the layers above: a method on the matching port in
+     `providers/ports.py`, its Yahoo fetch-and-parse in `providers/yahoo.py` (never cached),
+     any computation over fetched data in a pure module, and the orchestration - what is
+     fetched together and cached, for how long - in a `DataService` method in `service.py`.
 2. Register it in the matching `tools/` module with `@mcp.tool(annotations=calculator(...))` or
    `market_data(...)` from `tools/_annotations.py`, and bound every input with `Field`.
 3. Add its name to `MARKET_DATA_TOOLS` or `CALCULATOR_TOOLS` in `conventions.py`; the server

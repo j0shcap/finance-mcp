@@ -6,16 +6,16 @@ import pytest
 from fastmcp import FastMCP
 from pydantic import ValidationError
 
-from finance_mcp.server import build_default_client, create_server, main
+from finance_mcp.server import build_data_service, create_server, main
 from finance_mcp.settings import get_settings
 
 
-def test_build_default_client_uses_settings_defaults() -> None:
-    client = build_default_client()
-    assert client._quote_ttl == 30.0
-    assert client._history_ttl == 300.0
-    assert client._fundamentals_ttl == 3600.0
-    assert client._max_bars == 260
+def test_build_data_service_uses_settings_defaults() -> None:
+    service = build_data_service()
+    assert service._quote_ttl == 30.0
+    assert service._history_ttl == 300.0
+    assert service._fundamentals_ttl == 3600.0
+    assert service._max_bars == 260
 
 
 @pytest.mark.parametrize(
@@ -27,11 +27,11 @@ def test_build_default_client_uses_settings_defaults() -> None:
         ("FINANCE_MCP_MAX_HISTORY_BARS", "40", "_max_bars", 40),
     ],
 )
-def test_build_default_client_honors_env_override(
+def test_build_data_service_honors_env_override(
     monkeypatch: pytest.MonkeyPatch, variable: str, value: str, attribute: str, expected: float
 ) -> None:
     monkeypatch.setenv(variable, value)
-    assert getattr(build_default_client(), attribute) == expected
+    assert getattr(build_data_service(), attribute) == expected
 
 
 def test_settings_ignore_a_dotenv_file_in_the_launch_directory(

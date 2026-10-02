@@ -1,4 +1,4 @@
-"""YFinanceClient.compare_to_benchmark and compare_tickers."""
+"""DataService.compare_to_benchmark and compare_tickers."""
 
 import math
 import threading

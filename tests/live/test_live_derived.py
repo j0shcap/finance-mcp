@@ -115,7 +115,8 @@ async def test_a_window_older_than_the_treasury_bill_history_has_no_default_rate
     assert stats.start_date < "1960-01-01", f"^GSPC max now starts {stats.start_date}"
     assert stats.risk_free_rate is None
     assert stats.risk_free_rate_source == "unavailable"
-    assert stats.risk_free_rate_note is not None and "^IRX" in stats.risk_free_rate_note
+    note = stats.risk_free_rate_note
+    assert note is not None and "13-week US T-bill" in note
     assert stats.sharpe_ratio is None
     require_present(stats, ("annualized_return_percent", "calmar_ratio"))
 

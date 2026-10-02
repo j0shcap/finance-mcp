@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 import yfinance as yf
 
-from finance_mcp.data.yahoo import corporate_actions
+from finance_mcp.data.providers.yahoo import corporate_actions
 from tests.live.conftest import (
     AAPL,
     SAP,
@@ -224,7 +224,7 @@ def test_profile_events_from_weekly_history_match_the_public_daily_events(
     private cache is asserted present: without it corporate_actions quietly takes the slow
     public path, and this test is where that shows up.
     """
-    monkeypatch.setattr(yf.config.debug, "hide_exceptions", False)  # as YahooSource sets it
+    monkeypatch.setattr(yf.config.debug, "hide_exceptions", False)  # as YahooProvider sets it
     ticker = yf.Ticker("KO")
 
     def read() -> tuple[pd.Series, pd.Series, pd.Series, pd.Series]:

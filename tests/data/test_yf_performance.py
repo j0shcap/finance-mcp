@@ -1,4 +1,4 @@
-"""YFinanceClient.analyze_performance, and the bars cache it shares with get_price_history."""
+"""DataService.analyze_performance, and the bars cache it shares with get_price_history."""
 
 import math
 from collections.abc import Callable
@@ -12,7 +12,7 @@ from finance_mcp.data.errors import DataUnavailable, InvalidInput, SymbolNotFoun
 from finance_mcp.data.models import (
     PerformanceStats,
 )
-from finance_mcp.data.yfinance_client import (
+from finance_mcp.data.service import (
     MAX_CACHEABLE_BARS,
 )
 from tests.fakes import (

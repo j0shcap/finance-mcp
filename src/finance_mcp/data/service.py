@@ -1,17 +1,15 @@
-"""The market-data client the tools call: caching and orchestration over YahooSource.
+"""The logic layer the tools call: caching and orchestration over the provider ports.
 
 It decides what is fetched together (an asset with its benchmark and the T-bill history),
 what is cached and for how long, and assembles results from the pure modules
-(performance, risk_free, relevance). Every Yahoo request goes through YahooSource.
+(performance, risk_free, relevance). It knows providers only through providers/ports.py,
+so nothing here is specific to Yahoo or yfinance; server.py chooses the providers.
 """
 
 import difflib
 import time
 from collections.abc import Callable
 from concurrent.futures import Future
-from typing import Any
-
-import yfinance as yf
 
 from finance_mcp.data.cache import CacheKey, TTLCache
 from finance_mcp.data.concurrency import in_background, in_parallel, map_concurrently
@@ -22,6 +20,7 @@ from finance_mcp.data.models import (
     CompanyProfile,
     ComparisonError,
     FinancialStatement,
+    Identity,
     KeyMetrics,
     NewsResult,
     PerformanceStats,
@@ -38,19 +37,14 @@ from finance_mcp.data.models import (
     TickerComparisonRow,
 )
 from finance_mcp.data.performance import benchmark_comparison, comparison_row, performance
-from finance_mcp.data.relevance import Identity, IdentityGap, flag_mentions
+from finance_mcp.data.providers.ports import MarketDataProvider, NewsProvider
+from finance_mcp.data.relevance import IdentityGap, flag_mentions
 from finance_mcp.data.risk_free import (
-    TREASURY_BILL_SYMBOL,
     Bills,
     RiskFree,
     rate_key,
     risk_free_over,
     table_risk_free,
-)
-from finance_mcp.data.yahoo import (
-    DEFAULT_MAX_CONCURRENT_REQUESTS,
-    DEFAULT_REQUEST_RETRIES,
-    YahooSource,
 )
 
 DEFAULT_MAX_BARS = 260
@@ -59,35 +53,30 @@ DEFAULT_CACHE_MAX_ENTRIES = 256
 # history is ~11.5k bars (~9 MB). Longer bar lists are returned in full but not kept;
 # ~2000 daily bars is about eight years, so every ordinary window stays cached.
 MAX_CACHEABLE_BARS = 2000
-# Threads per batch. The Yahoo requests they make are bounded separately, across all
-# concurrent tool calls, by YahooSource's request gate (max_concurrent_requests).
+# Threads per batch. A provider may also bound its own requests across all concurrent tool
+# calls (see server.py).
 QUOTE_MAX_WORKERS = 8
-# Each comparison row makes two Yahoo calls (history + info), so fewer rows run at once.
+# Each comparison row makes two provider calls (history + metrics), so fewer run at once.
 COMPARE_MAX_WORKERS = 5
 
 
-class YFinanceClient:
-    """Thin yfinance facade with a per-key TTL cache (bounded, least-recently-used)."""
+class DataService:
+    """Market data and news over provider ports, with a per-key TTL cache (bounded, LRU)."""
 
     def __init__(
         self,
-        ticker_factory: Callable[[str], Any] = yf.Ticker,
-        search_factory: Callable[[str], Any] = yf.Search,
+        market: MarketDataProvider,
+        news: NewsProvider,
+        *,
         time_fn: Callable[[], float] = time.monotonic,
         quote_ttl: float = 30.0,
         history_ttl: float = 300.0,
         fundamentals_ttl: float = 3600.0,
         max_bars: int = DEFAULT_MAX_BARS,
         cache_max_entries: int = DEFAULT_CACHE_MAX_ENTRIES,
-        max_concurrent_requests: int = DEFAULT_MAX_CONCURRENT_REQUESTS,
-        request_retries: int = DEFAULT_REQUEST_RETRIES,
     ) -> None:
-        self._source = YahooSource(
-            ticker_factory,
-            search_factory,
-            max_concurrent_requests=max_concurrent_requests,
-            request_retries=request_retries,
-        )
+        self._market = market
+        self._news = news
         self._quote_ttl = quote_ttl
         self._history_ttl = history_ttl
         self._fundamentals_ttl = fundamentals_ttl
@@ -119,7 +108,7 @@ class YFinanceClient:
         """One symbol's cached quote, or the reason it could not be fetched."""
         try:
             return self._cached(
-                ("quote", symbol), self._quote_ttl, lambda: self._source.quote(symbol)
+                ("quote", symbol), self._quote_ttl, lambda: self._market.quote(symbol)
             )
         except DataUnavailable as exc:
             return QuoteError(symbol=symbol, error=str(exc))
@@ -132,6 +121,16 @@ class YFinanceClient:
             lambda: self._fetch_history(symbol, period, interval),
         )
 
+    def _treasury_bills(self, period: str) -> list[PriceBar]:
+        """The T-bill yields behind a default risk-free rate; long histories, as in _all_bars,
+        are not retained."""
+        return self._cached(
+            ("treasury_bills", period),
+            self._history_ttl,
+            lambda: self._market.treasury_bill_yields(period),
+            cacheable=_cacheable_bars,
+        )
+
     def _all_bars(self, symbol: str, period: str, interval: str) -> list[PriceBar]:
         """Parsed bars for one (symbol, period, interval), shared by every view of them.
 
@@ -142,8 +141,8 @@ class YFinanceClient:
         return self._cached(
             ("bars", symbol, period, interval),
             self._history_ttl,
-            lambda: self._source.bars(symbol, period, interval),
-            cacheable=lambda bars: len(bars) <= MAX_CACHEABLE_BARS,
+            lambda: self._market.bars(symbol, period, interval),
+            cacheable=_cacheable_bars,
         )
 
     def _fetch_history(self, symbol: str, period: str, interval: str) -> PriceHistory:
@@ -210,7 +209,7 @@ class YFinanceClient:
         if risk_free_rate is not None:
             return None
         try:
-            return self._all_bars(TREASURY_BILL_SYMBOL, period, "1d")
+            return self._treasury_bills(period)
         except DataUnavailable as exc:
             return str(exc)
 
@@ -327,35 +326,35 @@ class YFinanceClient:
         self, symbol: str, statement: Statement, period: StatementPeriod
     ) -> FinancialStatement:
         """The statement, labelled with its reporting currency once it has parsed."""
-        parsed = self._source.financial_statement(symbol, statement, period)
+        parsed = self._market.financial_statement(symbol, statement, period)
         return parsed.model_copy(update={"currency": self._statement_currency(symbol)})
 
     def _statement_currency(self, symbol: str) -> str | None:
         """The currency a statement is reported in, cached per symbol.
 
-        It comes from ``.info``, a separate Yahoo endpoint shared by all six statements, so
-        it has its own cache key. Best-effort: a failed read leaves the statement
-        unlabelled rather than failing it, and is not cached.
+        It may come from a separate provider request shared by all six statements, so it
+        has its own cache key. Best-effort: a failed read leaves the statement unlabelled
+        rather than failing it, and is not cached.
         """
         try:
             return self._cached(
                 ("statement_currency", symbol),
                 self._fundamentals_ttl,
-                lambda: self._source.statement_currency(symbol),
+                lambda: self._market.statement_currency(symbol),
             )
-        except Exception:  # labelling is best-effort, never fatal
+        except DataUnavailable:  # labelling is best-effort, never fatal
             return None
 
     def get_company_profile(self, symbol: str) -> CompanyProfile:
         symbol = _norm(symbol)
         return self._cached(
-            ("profile", symbol), self._fundamentals_ttl, lambda: self._source.profile(symbol)
+            ("profile", symbol), self._fundamentals_ttl, lambda: self._market.profile(symbol)
         )
 
     def get_key_metrics(self, symbol: str) -> KeyMetrics:
         symbol = _norm(symbol)
         return self._cached(
-            ("metrics", symbol), self._fundamentals_ttl, lambda: self._source.key_metrics(symbol)
+            ("metrics", symbol), self._fundamentals_ttl, lambda: self._market.key_metrics(symbol)
         )
 
     def get_analyst_data(self, symbol: str) -> AnalystData:
@@ -363,7 +362,7 @@ class YFinanceClient:
         return self._cached(
             ("analyst", symbol),
             self._fundamentals_ttl,
-            lambda: self._source.analyst_data(symbol),
+            lambda: self._market.analyst_data(symbol),
         )
 
     def get_news(self, symbol: str, count: int = 10) -> NewsResult:
@@ -372,15 +371,15 @@ class YFinanceClient:
             ("news", symbol, str(count)),
             self._history_ttl,
             lambda: self._fetch_news(symbol, count),
-            # Unflagged news from an identity OUTAGE is retried, not pinned; a symbol Yahoo
-            # simply has no name for is a lasting answer and is cached like any other.
+            # Unflagged news from an identity OUTAGE is retried, not pinned; a symbol the
+            # provider simply has no name for is a lasting answer and is cached like any other.
             cacheable=lambda result: result.relevance_check != "unavailable",
         )
 
     def _fetch_news(self, symbol: str, count: int) -> NewsResult:
         # The identity behind the relevance flags is an independent request.
         (articles, source), identity = in_parallel(
-            lambda: self._source.news(symbol, count),
+            lambda: self._news.news(symbol, count),
             lambda: self._identity_or_gap(symbol),
         )
         check, note = flag_mentions(articles, symbol, identity)
@@ -393,7 +392,7 @@ class YFinanceClient:
         )
 
     def _identity_or_gap(self, symbol: str) -> Identity | IdentityGap:
-        """The symbol's instrument type and names, or why Yahoo could not supply them.
+        """The symbol's instrument type and names, or why the provider could not supply them.
 
         Only the relevance flags depend on this, so a failure degrades them to null rather
         than failing the news call. SymbolNotFound (no info, or no name in it) is a lasting
@@ -401,7 +400,7 @@ class YFinanceClient:
         """
         try:
             return self._cached(
-                ("identity", symbol), self._fundamentals_ttl, lambda: self._source.identity(symbol)
+                ("identity", symbol), self._fundamentals_ttl, lambda: self._market.identity(symbol)
             )
         except SymbolNotFound as exc:
             return IdentityGap(str(exc), lasting=True)
@@ -412,8 +411,12 @@ class YFinanceClient:
         return self._cached(
             ("search", query, str(max_results)),
             self._fundamentals_ttl,
-            lambda: self._source.search(query, max_results),
+            lambda: self._market.search(query, max_results),
         )
+
+
+def _cacheable_bars(bars: list[PriceBar]) -> bool:
+    return len(bars) <= MAX_CACHEABLE_BARS
 
 
 def _normalize_batch(symbols: list[str]) -> tuple[list[str], list[tuple[str, str]]]:
