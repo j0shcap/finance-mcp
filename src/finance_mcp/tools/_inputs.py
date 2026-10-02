@@ -2,7 +2,7 @@
 
 Two jobs. First, a malformed argument should be rejected by the schema, before a fetch or
 a numeric loop starts: the model then gets a validation error naming the field instead of
-a data-layer error, and a typo costs no Yahoo call. Second, every bound here caps work
+a data-layer error, and a typo costs no network call. Second, every bound here caps work
 per call - an unbounded cashflow list or bond maturity otherwise turns one tool call into
 a CPU-bound loop that blocks the server.
 
@@ -16,7 +16,7 @@ from typing import Annotated
 
 from pydantic import Field
 
-#: Yahoo symbols are alphanumeric with '.', '-', '^' and '=' (BRK-B, ^GSPC, RY.TO,
+#: Ticker symbols are alphanumeric with '.', '-', '^' and '=' (BRK-B, ^GSPC, RY.TO,
 #: BTC-USD, EURUSD=X, 005930.KS). Surrounding whitespace is allowed because the data
 #: layer normalizes (strip + upper) before fetching; whitespace *inside* is not, since
 #: that means two symbols were passed in one argument.
@@ -29,7 +29,7 @@ Ticker = Annotated[
         max_length=24,
         pattern=TICKER_PATTERN,
         description=(
-            "Ticker symbol, e.g. 'AAPL'. Case-insensitive. Yahoo suffixes and prefixes are "
+            "Ticker symbol, e.g. 'AAPL'. Case-insensitive. Exchange suffixes and prefixes are "
             "allowed (BRK-B, ^GSPC, RY.TO, BTC-USD, EURUSD=X); one symbol per value."
         ),
     ),
@@ -51,13 +51,13 @@ MAX_LOAN_TERM_MONTHS = 1200
 #: Discrete compounding no finer than daily; use compounding='continuous' for the limit.
 MAX_PERIODS_PER_YEAR = 365
 
-#: Enough to name every line item on any statement Yahoo returns, several times over.
+#: Enough to name every line item on any financial statement, several times over.
 MAX_LINE_ITEMS = 100
 
 #: Most tickers one get_quote call may take; they are fetched in parallel.
 MAX_QUOTE_TICKERS = 25
 
-#: Most tickers one compare_tickers call may take. Each row costs two Yahoo calls, so the
+#: Most tickers one compare_tickers call may take. Each row costs two data lookups, so the
 #: bound is what keeps a single tool call from opening dozens of connections.
 MAX_COMPARE_TICKERS = 10
 

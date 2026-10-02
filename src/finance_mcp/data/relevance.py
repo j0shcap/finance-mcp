@@ -1,8 +1,8 @@
 """Does a news headline name the company it was filed under? Text matching, then flagging.
 
 A per-ticker news feed can mix market-wide stories ("S&P 500 dips...") in with company
-news, with no related-ticker metadata to tell them apart (Yahoo's does), so the only signal
-is the text. This matches the company's name and ticker as whole words.
+news, with no related-ticker metadata to tell them apart, so the only signal is the text.
+This matches the company's name and ticker as whole words.
 
 It is deliberately a flag, not a filter: brand and executive names ("Google" for
 Alphabet, "Musk" for Tesla) are not matched, so a False is a hint to read the title, not a
@@ -46,7 +46,7 @@ _TRAILING_NOISE = frozenset(
         "se",
         "asa",
         "ab",
-        "the",  # "Coca-Cola Company (The)", as Yahoo spells it
+        "the",  # "Coca-Cola Company (The)"
         "new",  # "Berkshire Hathaway Inc. New"
         "&",
         "-",

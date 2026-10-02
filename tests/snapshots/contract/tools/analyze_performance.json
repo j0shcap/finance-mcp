@@ -43,7 +43,7 @@
         "description": "Annual risk-free rate as a DECIMAL, not a percent: 0.045 means 4.5%. Leave it out to use the 13-week US T-bill yield averaged over the measured dates, so the Sharpe, Sortino and alpha are excess return over cash. Pass 0 for RAW return per unit of risk."
       },
       "ticker": {
-        "description": "Ticker symbol, e.g. 'AAPL'. Case-insensitive. Yahoo suffixes and prefixes are allowed (BRK-B, ^GSPC, RY.TO, BTC-USD, EURUSD=X); one symbol per value.",
+        "description": "Ticker symbol, e.g. 'AAPL'. Case-insensitive. Exchange suffixes and prefixes are allowed (BRK-B, ^GSPC, RY.TO, BTC-USD, EURUSD=X); one symbol per value.",
         "maxLength": 24,
         "minLength": 1,
         "pattern": "^\\s*[A-Za-z0-9.\\-^=]{1,20}\\s*$",
@@ -159,7 +159,7 @@
         "description": "Why the rate is unavailable and how to proceed (pass risk_free_rate explicitly); null otherwise."
       },
       "risk_free_rate_source": {
-        "description": "Where risk_free_rate came from. 'caller': the rate passed in. 'treasury_bill': none was passed, so it is the 13-week US T-bill yield (Yahoo ^IRX) averaged over the measured dates and converted from its discount quote to an effective annual rate. 'unavailable': none was passed and that average could not be formed - see risk_free_rate_note; the figures that need a rate are null.",
+        "description": "Where risk_free_rate came from. 'caller': the rate passed in. 'treasury_bill': none was passed, so it is the 13-week US T-bill yield averaged over the measured dates and converted from its discount quote to an effective annual rate. 'unavailable': none was passed and that average could not be formed - see risk_free_rate_note; the figures that need a rate are null.",
         "enum": [
           "caller",
           "treasury_bill",

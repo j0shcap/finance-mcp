@@ -5,9 +5,14 @@ yfinance, its transport and pandas belong to providers/yahoo.py; server.py, the 
 root, is the one other module allowed to name the Yahoo adapter, and tools and prompts reach
 data only through DataService. Relative imports are banned (ruff TID252), so every import
 this scans is absolute.
+
+The same goes for text: descriptions, docstrings and comments outside the adapter state the
+ports' contract (units, currencies, what a field means), never one provider's behaviour, so
+the model-facing contract and the logic read the same whichever provider serves them.
 """
 
 import ast
+import re
 from pathlib import Path
 
 import pytest
@@ -52,6 +57,24 @@ def test_only_the_adapter_imports_provider_specifics(path: Path) -> None:
         module for module in _imports(path) for package in forbidden if _is_within(module, package)
     )
     assert leaks == [], f"{relative} imports provider specifics: {leaks}"
+
+
+#: A provider named in text. The adapter and the composition root are the only places for it.
+PROVIDER_NAMES = re.compile(r"yahoo|yfinance|quotesummary|\^irx", re.IGNORECASE)
+NAMES_ALLOWED = {"data/providers/yahoo.py", "server.py"}
+
+
+@pytest.mark.parametrize(
+    "path", sorted(PACKAGE.rglob("*.py")), ids=lambda p: p.relative_to(PACKAGE).as_posix()
+)
+def test_only_the_adapter_names_its_provider(path: Path) -> None:
+    if path.relative_to(PACKAGE).as_posix() in NAMES_ALLOWED:
+        return
+    lines = path.read_text(encoding="utf-8").splitlines()
+    named = [
+        f"{n}: {line.strip()}" for n, line in enumerate(lines, 1) if PROVIDER_NAMES.search(line)
+    ]
+    assert named == [], "\n".join(named)
 
 
 def test_the_scan_sees_an_aliased_module_import(tmp_path: Path) -> None:

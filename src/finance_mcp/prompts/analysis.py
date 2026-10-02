@@ -168,7 +168,7 @@ against growth durability and business quality most; a horizon of a year or less
 weight to drawdown and risk-adjusted return. State the weights you chose, then keep them.
 
 ## Phase 4 - Growth-adjusted valuation: derive it, do not trust it blindly
-- peg_ratio from Yahoo is often null or stale and its growth basis is undisclosed - use it as one \
+- peg_ratio is often null or stale and its growth basis is undisclosed - use it as one \
 input, never the only one.
 - Implied forward EPS growth = trailing_pe / forward_pe - 1, meaningful ONLY when both are \
 positive.
@@ -193,9 +193,9 @@ ranking is regime-dependent and weight it less. Past returns are context, not a 
 If a table reports mixed_currencies, or a row is flagged currency_differs, those rows' returns \
 carry an FX move the others do not and their absolute amounts are in another currency: rank them \
 on ratios only, and say so. A row whose financial_currency differs from its \
-currency is a cross-listing: Yahoo computes its price_to_sales, price_to_book and EV multiples \
-across two currencies, so rank it on P/E, PEG and the margins only, as the cross-listing rule in \
-{conventions_uri} sets out.
+currency is a cross-listing: the source computes its price_to_sales, price_to_book and EV \
+multiples across two currencies, so rank it on P/E, PEG and the margins only, as the \
+cross-listing rule in {conventions_uri} sets out.
 
 ## Phase 7 - Verdict
 - Score each ticker against the rubric you declared. Tickers missing too many inputs go in an \

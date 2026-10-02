@@ -25,14 +25,14 @@ def register(mcp: FastMCP, service: DataService) -> None:
     async def get_key_metrics(
         ticker: Ticker,
     ) -> KeyMetrics:
-        """Valuation, profitability, and leverage ratios (as reported by Yahoo).
+        """Valuation, profitability, and leverage ratios, as the data source reports them.
 
         Note units differ by field: P/E, P/B, P/S, EV/EBITDA, PEG are plain ratios;
         margins and ROE/ROA are fractions (0.27 = 27%); debt_to_equity is a percent
         (79.5 = 79.5%); EV, total debt/cash, FCF, EBITDA are absolute amounts. Those
         amounts are not all in one currency: debt/cash/FCF/EBITDA and the per-share
         revenue/book value are in `financial_currency`, the EPS fields in `currency`. They
-        differ for ADRs and other cross-listings, where Yahoo computes P/S, P/B, EV and the
+        differ for ADRs and other cross-listings, where the source computes P/S, P/B, EV and the
         EV multiples across both currencies: use P/E, PEG and the margins for those.
         """
         return await run_data(lambda: service.get_key_metrics(ticker))
@@ -129,7 +129,7 @@ def register(mcp: FastMCP, service: DataService) -> None:
         Each row carries total/annualized return, volatility, max drawdown and the
         risk-adjusted ratios over `period` - measured against the caller's risk_free_rate,
         or by default the 13-week T-bill yield over that row's own dates (each row echoes
-        its rate) - plus Yahoo's valuation metrics (P/E, forward P/E, P/B, P/S, PEG,
+        its rate) - plus the source's valuation metrics (P/E, forward P/E, P/B, P/S, PEG,
         EV/EBITDA, margins, ROE, debt/equity) in their as-reported units - margins and ROE
         are fractions, debt_to_equity is already a percent. Rank peers on PEG or
         growth-vs-multiple rather than raw P/E.

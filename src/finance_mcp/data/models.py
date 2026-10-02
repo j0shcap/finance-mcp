@@ -20,7 +20,7 @@ BondDayCount = Literal["actual/actual", "30/360"]
 FirstPeriodDiscount = Literal["compound", "simple"]
 
 
-#: Significant digits kept in market-data output. Yahoo's prices are float32 values
+#: Significant digits kept in market-data output. Source prices can be float32 values
 #: widened to float64 (float32 holds ~7.2 digits), so the rest is conversion noise:
 #: float32(316.98) arrives as 316.9800109863281.
 MARKET_DATA_SIGNIFICANT_DIGITS = 7
@@ -49,7 +49,7 @@ def _round_floats(value: Any) -> Any:
 
 
 class MarketData(BaseModel):
-    """Base for results built from Yahoo data: floats are rounded on output only.
+    """Base for results built from market data: floats are rounded on output only.
 
     Rounding happens in serialization, so attributes keep full precision for the
     analytics that read them, and the published schema is unchanged. Calculator results
@@ -67,7 +67,7 @@ class MarketData(BaseModel):
 #: Shared by every result that echoes a risk-free rate, so the three stay word-for-word alike.
 _RISK_FREE_SOURCE_DESCRIPTION = (
     "Where risk_free_rate came from. 'caller': the rate passed in. 'treasury_bill': none was "
-    "passed, so it is the 13-week US T-bill yield (Yahoo ^IRX) averaged over the measured dates "
+    "passed, so it is the 13-week US T-bill yield averaged over the measured dates "
     "and converted from its discount quote to an effective annual rate. 'unavailable': none was "
     "passed and that average could not be formed - see risk_free_rate_note; the figures that "
     "need a rate are null."
@@ -416,10 +416,11 @@ class FinancialStatement(MarketData):
     period: StatementPeriod = Field(description="Reporting period granularity.")
     currency: str | None = Field(
         default=None,
-        description="Currency (ISO 4217) the values are reported in: Yahoo's financialCurrency, "
-        "falling back to the quote currency. This can differ from the currency the shares trade "
-        "in (SAP reports in EUR while its US listing quotes in USD), so never compare absolute "
-        "figures across companies without checking it. Null if Yahoo does not report it.",
+        description="Currency (ISO 4217) the values are reported in: the company's reporting "
+        "currency, falling back to the quote currency. This can differ from the currency the "
+        "shares trade in (SAP reports in EUR while its US listing quotes in USD), so never "
+        "compare absolute figures across companies without checking it. Null if the source "
+        "does not report it.",
     )
     period_ends: list[str] = Field(
         description="Period-end dates (ISO 8601), most recent first; values align to this order."
@@ -501,11 +502,11 @@ class CompanyProfile(MarketData):
 
 
 class KeyMetrics(MarketData):
-    """Valuation / profitability / leverage ratios as reported by Yahoo. Units vary by field.
+    """Valuation / profitability / leverage ratios as the source reports them. Units vary by field.
 
-    Absolute amounts are NOT all in one currency: the financialData figures (total debt/cash,
-    free cash flow, EBITDA) are in ``financial_currency``, the EPS fields in ``currency``. When
-    the two differ (ADRs and other cross-listings) Yahoo computes the price multiples and
+    Absolute amounts are NOT all in one currency: the financial figures (total debt/cash, free
+    cash flow, EBITDA) are in ``financial_currency``, the EPS fields in ``currency``. When the
+    two differ (ADRs and other cross-listings) the source computes the price multiples and
     enterprise value across both currencies, so those are unreliable; the cross-listing rule in
     the finance://conventions resource says what such a company can be compared on.
     """
@@ -518,27 +519,26 @@ class KeyMetrics(MarketData):
     )
     financial_currency: str | None = Field(
         default=None,
-        description="Currency (ISO 4217) the company reports its financials in (Yahoo's "
-        "financialCurrency); the unit for total_debt, total_cash, free_cashflow, ebitda, "
-        "revenue_per_share and book_value. May differ from `currency`, e.g. SAP reports in EUR "
-        "while its US listing quotes in USD.",
+        description="Currency (ISO 4217) the company reports its financials in; the unit for "
+        "total_debt, total_cash, free_cashflow, ebitda, revenue_per_share and book_value. May "
+        "differ from `currency`, e.g. SAP reports in EUR while its US listing quotes in USD.",
     )
     trailing_pe: float | None = Field(default=None, description="Trailing P/E ratio.")
     forward_pe: float | None = Field(default=None, description="Forward P/E ratio.")
     price_to_book: float | None = Field(
         default=None,
         description="Price/book ratio. Unreliable for a cross-listing (financial_currency != "
-        "currency): Yahoo divides the listed price by book value in another currency.",
+        "currency): it divides the listed price by book value in another currency.",
     )
     price_to_sales: float | None = Field(
         default=None,
-        description="Price/sales (TTM) ratio. Unreliable for a cross-listing: Yahoo divides "
+        description="Price/sales (TTM) ratio. Unreliable for a cross-listing: it divides "
         "market cap in `currency` by revenue in `financial_currency`.",
     )
     peg_ratio: float | None = Field(default=None, description="P/E-to-growth ratio.")
     enterprise_value: float | None = Field(
         default=None,
-        description="Enterprise value (absolute units), as Yahoo derives it from market cap "
+        description="Enterprise value (absolute units), as the source derives it from market cap "
         "and the balance sheet. In `currency` for a domestic listing; for a cross-listing it "
         "mixes both currencies and is badly wrong - recompute it from market cap, total_debt "
         "and total_cash at a quoted FX rate.",
@@ -615,7 +615,7 @@ class RecommendationPeriod(MarketData):
 
 
 class AnalystData(MarketData):
-    """Sell-side analyst consensus and price targets as reported by Yahoo."""
+    """Sell-side analyst consensus and price targets, as the source reports them."""
 
     symbol: str = Field(description="Ticker symbol.")
     currency: str | None = Field(
@@ -671,11 +671,11 @@ class Identity(NamedTuple):
 
 
 class NewsArticle(MarketData):
-    """A single recent news item about a symbol, as surfaced by Yahoo Finance."""
+    """A single recent news item about a symbol."""
 
     title: str = Field(description="Headline text.")
     publisher: str | None = Field(
-        default=None, description="Publisher display name, e.g. 'Yahoo Finance'; may be null."
+        default=None, description="Publisher display name, e.g. 'Reuters'; may be null."
     )
     link: str | None = Field(
         default=None, description="Canonical article URL (else a click-through URL); may be null."
@@ -691,7 +691,7 @@ class NewsArticle(MarketData):
     mentions_company: bool | None = Field(
         default=None,
         description="True if the title or summary names the company or its ticker; False if "
-        "neither does, which usually means a market-wide story Yahoo filed under the ticker. "
+        "neither does, which usually means a market-wide story filed under the ticker. "
         "It is a whole-word text match that leans toward False: brand and executive names "
         "('Google' for Alphabet, 'Musk' for Tesla) and bare one- or two-letter tickers ('HD' "
         "without '$' or parentheses) do not count, so read a False article's title before "
@@ -710,7 +710,7 @@ class NewsResult(MarketData):
     source: NewsSource = Field(
         default="ticker",
         description=(
-            "Which Yahoo endpoint served these articles. 'ticker' is the per-symbol news "
+            "Which kind of feed served these articles. 'ticker' is the per-symbol news "
             "stream, which carries a summary for each article. 'search' is the fallback used "
             "when that stream returns nothing: it still carries title, publisher, link and "
             "publish time, but NO summary, so every summary is null for a reason unrelated to "
@@ -722,7 +722,7 @@ class NewsResult(MarketData):
         description=(
             "Whether each article's mentions_company was assessed. 'applied': it was. "
             "'not_an_equity': the symbol is an ETF, index, fund, coin or currency pair, where "
-            "market-wide news is relevant, so every flag is null. 'no_company_name': Yahoo has "
+            "market-wide news is relevant, so every flag is null. 'no_company_name': there is "
             "no name for this symbol (often an unknown symbol), so every flag is null. "
             "'unavailable': fetching the name failed (see relevance_note) - every flag is null "
             "and a retry may succeed. The articles themselves are unaffected in every case."
@@ -743,7 +743,7 @@ class SymbolMatch(MarketData):
     )
     quote_type: str | None = Field(
         default=None,
-        description="Instrument type returned by Yahoo: EQUITY, ETF, CRYPTOCURRENCY, "
+        description="Instrument type: EQUITY, ETF, CRYPTOCURRENCY, "
         "FUTURE, INDEX, MUTUALFUND, or similar.",
     )
     exchange: str | None = Field(
@@ -754,7 +754,7 @@ class SymbolMatch(MarketData):
     industry: str | None = Field(default=None, description="Industry classification, if available.")
     score: float | None = Field(
         default=None,
-        description="Yahoo relevance score for this result (higher = better match to the query).",
+        description="Relevance score for this result (higher = better match to the query).",
     )
 
 
@@ -978,8 +978,8 @@ class TickerComparisonRow(MarketData):
     """One ticker's row in a side-by-side comparison: performance plus key valuation.
 
     Performance figures come from daily auto-adjusted closes over the requested window
-    (returns therefore already include reinvested dividends); valuation figures are Yahoo's
-    as-reported ratios, with the units the get_key_metrics glossary describes. A row is
+    (returns therefore already include reinvested dividends); valuation figures are the
+    source's as-reported ratios, with the units the get_key_metrics glossary describes. A row is
     present whenever its price history was fetched, so the valuation fields can be null with
     ``metrics_error`` explaining why.
     """
@@ -993,7 +993,7 @@ class TickerComparisonRow(MarketData):
         default=None,
         description="Currency the company reports financials in. Differs from `currency` for "
         "ADRs and other cross-listings, whose price_to_sales, price_to_book and EV multiples "
-        "Yahoo computes across both currencies - rank such a row on P/E, PEG and the margins.",
+        "the source computes across both currencies - rank such a row on P/E, PEG and the margins.",
     )
     currency_differs: bool = Field(
         default=False,
@@ -1051,11 +1051,11 @@ class TickerComparisonRow(MarketData):
     price_to_book: float | None = Field(
         default=None,
         description="Price/book ratio. Unreliable for a cross-listing (financial_currency != "
-        "currency): Yahoo divides the listed price by book value in another currency.",
+        "currency): it divides the listed price by book value in another currency.",
     )
     price_to_sales: float | None = Field(
         default=None,
-        description="Price/sales (TTM) ratio. Unreliable for a cross-listing: Yahoo divides "
+        description="Price/sales (TTM) ratio. Unreliable for a cross-listing: it divides "
         "market cap in `currency` by revenue in `financial_currency`.",
     )
     peg_ratio: float | None = Field(
@@ -1065,7 +1065,7 @@ class TickerComparisonRow(MarketData):
     )
     ev_to_ebitda: float | None = Field(
         default=None,
-        description="Enterprise value / EBITDA. Unreliable for a cross-listing: Yahoo mixes "
+        description="Enterprise value / EBITDA. Unreliable for a cross-listing: the source mixes "
         "both currencies into the enterprise value.",
     )
     profit_margins: float | None = Field(

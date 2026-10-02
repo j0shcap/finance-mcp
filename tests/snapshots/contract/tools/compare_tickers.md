@@ -3,7 +3,7 @@ Side-by-side performance and key valuation metrics for 2-10 tickers.
 Each row carries total/annualized return, volatility, max drawdown and the
 risk-adjusted ratios over `period` - measured against the caller's risk_free_rate,
 or by default the 13-week T-bill yield over that row's own dates (each row echoes
-its rate) - plus Yahoo's valuation metrics (P/E, forward P/E, P/B, P/S, PEG,
+its rate) - plus the source's valuation metrics (P/E, forward P/E, P/B, P/S, PEG,
 EV/EBITDA, margins, ROE, debt/equity) in their as-reported units - margins and ROE
 are fractions, debt_to_equity is already a percent. Rank peers on PEG or
 growth-vs-multiple rather than raw P/E.

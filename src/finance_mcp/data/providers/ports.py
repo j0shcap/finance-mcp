@@ -1,8 +1,8 @@
 """The interfaces a data provider implements: all the logic layer knows about providers.
 
-DataService (data/service.py) orchestrates and caches over these; an adapter such as
-providers/yahoo.py turns one provider's API into them. There is one port per source that
-could be replaced independently.
+DataService (data/service.py) orchestrates and caches over these; an adapter module in
+providers/ turns one provider's API into them. There is one port per source that could be
+replaced independently.
 
 Every method returns this package's provider-neutral models and raises only
 SymbolNotFound (the provider has no such instrument) or DataUnavailable (anything else).
@@ -50,8 +50,8 @@ class MarketDataProvider(Protocol):
     def statement_currency(self, symbol: str) -> str | None:
         """The currency ``symbol`` reports its statements in, if known.
 
-        Separate from financial_statement only because Yahoo serves it from another
-        endpoint; a provider that returns it with the statement can answer it from there.
+        Separate from financial_statement because a provider may serve it from another
+        request; one that returns it with the statement can answer it from there.
         """
         ...
 

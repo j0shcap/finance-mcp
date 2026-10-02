@@ -59,7 +59,8 @@ adapter, not a change to the logic:
 
 `server.py` is the composition root: it builds the providers and hands each port its
 implementation. `tests/test_architecture.py` fails if anything else imports yfinance, its
-transport, pandas or the Yahoo adapter. `tests/data/test_service_ports.py` runs the logic on a
+transport, pandas or the Yahoo adapter, or names Yahoo or yfinance at all: descriptions,
+docstrings and comments outside the adapter describe the ports' contract, not a provider. `tests/data/test_service_ports.py` runs the logic on a
 plain in-memory provider.
 
 ## Yahoo payload shapes

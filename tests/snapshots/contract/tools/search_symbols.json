@@ -85,7 +85,7 @@
                 }
               ],
               "default": null,
-              "description": "Instrument type returned by Yahoo: EQUITY, ETF, CRYPTOCURRENCY, FUTURE, INDEX, MUTUALFUND, or similar."
+              "description": "Instrument type: EQUITY, ETF, CRYPTOCURRENCY, FUTURE, INDEX, MUTUALFUND, or similar."
             },
             "score": {
               "anyOf": [
@@ -97,7 +97,7 @@
                 }
               ],
               "default": null,
-              "description": "Yahoo relevance score for this result (higher = better match to the query)."
+              "description": "Relevance score for this result (higher = better match to the query)."
             },
             "sector": {
               "anyOf": [
