@@ -7,6 +7,8 @@ contain breaking changes, and each one is listed under **Breaking changes**.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-01
+
 ### Added
 - `get_earnings`: when a company reports next (in the exchange's local time, and whether the
   date is confirmed or a projection), the EPS and revenue consensus for the quarter that
@@ -191,7 +193,8 @@ contain breaking changes, and each one is listed under **Breaking changes**.
 Baseline for this changelog: market-data, analytics and calculator tools, and the
 `analyze_stock` prompt.
 
-[Unreleased]: https://github.com/j0shcap/finance-mcp/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/j0shcap/finance-mcp/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/j0shcap/finance-mcp/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/j0shcap/finance-mcp/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/j0shcap/finance-mcp/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/j0shcap/finance-mcp/compare/v0.4.0...v0.4.2
