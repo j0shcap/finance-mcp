@@ -7,6 +7,8 @@ contain breaking changes, and each one is listed under **Breaking changes**.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-04
+
 ### Fixed
 - `get_earnings` no longer reports wildly inflated fiscal-year revenue growth for many
   companies whose fiscal year ends in March (Toyota +192%, Sony +1,506%): the source
@@ -202,7 +204,8 @@ contain breaking changes, and each one is listed under **Breaking changes**.
 Baseline for this changelog: market-data, analytics and calculator tools, and the
 `analyze_stock` prompt.
 
-[Unreleased]: https://github.com/j0shcap/finance-mcp/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/j0shcap/finance-mcp/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/j0shcap/finance-mcp/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/j0shcap/finance-mcp/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/j0shcap/finance-mcp/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/j0shcap/finance-mcp/compare/v0.4.2...v0.5.0
