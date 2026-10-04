@@ -7,6 +7,15 @@ contain breaking changes, and each one is listed under **Breaking changes**.
 
 ## [Unreleased]
 
+### Fixed
+- `get_earnings` no longer reports wildly inflated fiscal-year revenue growth for many
+  companies whose fiscal year ends in March (Toyota +192%, Sony +1,506%): the source
+  understates their year-ago revenue. Where a fiscal year's year-ago revenue and growth
+  contradict the source's own figures for two quarters of that year, both are now null; the
+  estimate itself is kept. Fast growers' correct figures are unaffected. With only one quarter
+  of the year left to compare (about February to May for a March year) it can't be judged,
+  and the source's figure is passed through.
+
 ## [0.6.0] - 2026-10-01
 
 ### Added

@@ -17,7 +17,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -465,7 +465,10 @@ class YahooProvider:
             return Earnings(
                 symbol=symbol,
                 next_report=_next_earnings(modules.get("calendarEvents") or {}, exchange_tz),
-                estimates=sorted(estimates, key=lambda estimate: order.index(estimate.period)),
+                estimates=sorted(
+                    _drop_contradicted_revenue_year_ago(estimates),
+                    key=lambda estimate: order.index(estimate.period),
+                ),
                 history=[_reported_quarter(earnings_quarter) for earnings_quarter in history],
                 history_currency=next(
                     (
@@ -608,6 +611,67 @@ def _period_estimate(trend_item: dict[str, Any]) -> PeriodEstimate:
         revenue=_estimate_range(revenue_estimate, revenue_estimate.get("yearAgoRevenue")),
         revenue_currency=revenue_estimate.get("revenueCurrency"),
     )
+
+
+#: Yahoo understates the year-ago revenue of many March fiscal years (Toyota's by 64%, Sony's
+#: by 94%), which inflates the year's growth AND leaves its year-ago short of what its quarters
+#: imply. Either alone happens legitimately - a hyper-grower's year-ago is short, and earlier
+#: quarters can outgrow the two still estimated - so a value is dropped only on both. Growth is
+#: compared as multiples (1 + growth): observed bad values reach 1.17x and a 0.74 shortfall.
+_YEAR_GROWTH_ABOVE_QUARTERS = 1.1
+_YEAR_AGO_SHORTFALL = 0.8
+
+
+def _drop_contradicted_revenue_year_ago(estimates: list[PeriodEstimate]) -> list[PeriodEstimate]:
+    """Null a fiscal year's revenue year_ago and growth where its quarters contradict them.
+
+    Needs two distinct quarters inside the year: with one, correct values of fast growers
+    trip both tests. Only revenue: EPS year-agos match what companies report.
+    """
+    # Quarter end -> (growth as a multiple, year-ago revenue); a repeated end counts once.
+    quarters: dict[date, tuple[float, float]] = {}
+    for estimate in estimates:
+        revenue = estimate.revenue
+        if (
+            estimate.period in ("reporting_quarter", "following_quarter")
+            and revenue.growth_percent is not None
+            and revenue.growth_percent > -100
+            and revenue.year_ago is not None
+            and revenue.year_ago > 0
+        ):
+            quarters[date.fromisoformat(estimate.fiscal_period_end)] = (
+                1 + revenue.growth_percent / 100,
+                revenue.year_ago,
+            )
+    checked = []
+    for estimate in estimates:
+        year = estimate.revenue
+        if (
+            estimate.period.endswith("fiscal_year")
+            and year.growth_percent is not None
+            and year.year_ago is not None
+        ):
+            end = date.fromisoformat(estimate.fiscal_period_end)
+            inside = [q for q_end, q in quarters.items() if _one_year_before(end) < q_end <= end]
+            if (
+                len(inside) >= 2
+                and 1 + year.growth_percent / 100
+                > _YEAR_GROWTH_ABOVE_QUARTERS * max(growth for growth, _ in inside)
+                and year.year_ago
+                < _YEAR_AGO_SHORTFALL * 4 / len(inside) * sum(ago for _, ago in inside)
+            ):
+                cleared = year.model_copy(update={"year_ago": None, "growth_percent": None})
+                estimate = estimate.model_copy(update={"revenue": cleared})
+        checked.append(estimate)
+    return checked
+
+
+def _one_year_before(day: date) -> date:
+    # Fiscal periods end on month-ends; February 29 has no counterpart a year earlier.
+    try:
+        return day.replace(year=day.year - 1)
+    except ValueError:
+        return day.replace(year=day.year - 1, day=28)
 
 
 def _reported_quarter(earnings_quarter: dict[str, Any]) -> ReportedQuarter:

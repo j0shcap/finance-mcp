@@ -10,6 +10,8 @@ import pytest
 
 from tests.live.conftest import AAPL, SAP, SPY, Layer
 
+TOYOTA = "7203.T"  # a fiscal year ending in March, whose year-ago revenue the source understates
+
 
 async def test_earnings_shape(layer: Layer) -> None:
     earnings = await layer.call("get_earnings", ticker=AAPL)
@@ -66,3 +68,31 @@ async def test_earnings_for_an_etf_is_a_clear_error(layer: Layer) -> None:
     """An ETF is a real symbol without earnings: the tool must say so, not report it unknown."""
     async with layer.expect_error("only companies report earnings"):
         await layer.call("get_earnings", ticker=SPY)
+
+
+async def test_a_fiscal_year_growth_agrees_with_its_quarters(layer: Layer) -> None:
+    """Toyota's reporting-year revenue growth: null (dropped as inconsistent) or plausible.
+
+    Judged only while two quarters of that fiscal year are still estimated; nearer its end
+    there is one, too few to tell a wrong year-ago from fast growth, and it passes through.
+    """
+    earnings = await layer.call("get_earnings", ticker=TOYOTA)
+    by_period = {e.period: e for e in earnings.estimates}
+    year = by_period["reporting_fiscal_year"]
+    year_end = datetime.date.fromisoformat(year.fiscal_period_end)
+    quarters_inside = [
+        e
+        for period, e in by_period.items()
+        if period.endswith("quarter")
+        and (year_end.year - 1, year_end.month, year_end.day)
+        < _ymd(datetime.date.fromisoformat(e.fiscal_period_end))
+        <= _ymd(year_end)
+    ]
+    if len(quarters_inside) < 2:
+        pytest.skip(f"only {len(quarters_inside)} quarter of the fiscal year left to compare")
+    growth = year.revenue.growth_percent
+    assert growth is None or growth < 100, f"implausible fiscal-year revenue growth: {growth}%"
+
+
+def _ymd(day: datetime.date) -> tuple[int, int, int]:
+    return day.year, day.month, day.day

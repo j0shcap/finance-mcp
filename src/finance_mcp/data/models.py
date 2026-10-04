@@ -671,12 +671,15 @@ class EstimateRange(MarketData):
     high: float | None = Field(default=None, description="Highest estimate.")
     analysts: int | None = Field(default=None, description="Number of analysts estimating.")
     year_ago: float | None = Field(
-        default=None, description="The same figure for the fiscal period a year earlier."
+        default=None,
+        description="The same figure for the fiscal period a year earlier; null when unknown. "
+        "A fiscal year's revenue year_ago is also null when it contradicts the source's own "
+        "figures for two quarters of that year.",
     )
     growth_percent: float | None = Field(
         default=None,
-        description="average against year_ago as a PERCENT (6.95 = 6.95%), as reported; an "
-        "implausible value usually means a wrong year_ago.",
+        description="average against year_ago as a PERCENT (6.95 = 6.95%); null when unknown "
+        "or when year_ago was dropped as contradictory.",
     )
 
 
