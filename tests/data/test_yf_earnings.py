@@ -1,6 +1,6 @@
 """get_earnings: YahooProvider's parsing of quoteSummary, and DataService's caching of it."""
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from types import SimpleNamespace
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -10,7 +10,7 @@ from fastmcp.exceptions import ToolError
 from yfinance.exceptions import YFException
 
 from finance_mcp.data.errors import DataUnavailable, SymbolNotFound
-from finance_mcp.data.providers.yahoo import EARNINGS_MODULES
+from finance_mcp.data.providers.yahoo import EARNINGS_MODULES, _one_year_before
 from tests.fakes import (
     FakeHTTPError,
     connect,
@@ -225,3 +225,104 @@ async def test_get_earnings_tool_surfaces_the_reason() -> None:
     async with connect(fake_ticker_factory(quote_summary=summary)) as client:
         with pytest.raises(ToolError, match="only companies report earnings"):
             await client.call_tool("get_earnings", {"ticker": "SPY"})
+
+
+def _revenue(summary: dict[str, Any], period: str, average: float, year_ago: float) -> None:
+    """Set one trend period's revenue average, year-ago and the growth between them."""
+    item = next(i for i in summary["earningsTrend"]["trend"] if i["period"] == period)
+    item["revenueEstimate"].update(
+        avg={"raw": average},
+        yearAgoRevenue={"raw": year_ago},
+        growth={"raw": average / year_ago - 1},
+    )
+
+
+def _toyota_shaped(year_ago: float = 18.26e12, quarter_growth: float = 0.07) -> dict[str, Any]:
+    # Fiscal year ending March: both quarters (Sep, Dec) fall inside it.
+    summary = make_earnings_summary()
+    ends = {"0q": "2026-09-30", "+1q": "2026-12-31", "0y": "2027-03-31", "+1y": "2028-03-31"}
+    for item in summary["earningsTrend"]["trend"]:
+        item["endDate"] = ends[item["period"]]
+    _revenue(summary, "0q", 12.38e12 * (1 + quarter_growth), 12.38e12)
+    _revenue(summary, "+1q", 13.46e12 * (1 + quarter_growth), 13.46e12)
+    _revenue(summary, "0y", 53.25e12, year_ago)
+    _revenue(summary, "+1y", 55.28e12, 53.25e12)
+    return summary
+
+
+def _fiscal_year(e: Any, period: str = "reporting_fiscal_year") -> Any:
+    return next(estimate for estimate in e.estimates if estimate.period == period)
+
+
+def test_a_year_ago_contradicting_its_quarters_is_dropped_not_reported() -> None:
+    year = _fiscal_year(_earnings(_toyota_shaped(), "7203.T"))
+    assert year.revenue.year_ago is None and year.revenue.growth_percent is None
+    assert year.revenue.average == 53.25e12  # the estimate itself stands
+    assert year.revenue.analysts == 27 and year.eps.year_ago == 1.85  # EPS untouched
+
+
+def test_a_consistent_year_ago_is_kept() -> None:
+    year = _fiscal_year(_earnings(_toyota_shaped(year_ago=50.68e12), "7203.T"))
+    assert year.revenue.year_ago == 50.68e12
+    assert year.revenue.growth_percent == pytest.approx(5.07, abs=0.01)
+
+
+def test_a_hyper_growers_short_year_ago_is_kept_when_its_quarters_grew_as_fast() -> None:
+    # NBIS: the year-ago is small next to its quarters, but so is every quarter's.
+    year = _fiscal_year(_earnings(_toyota_shaped(year_ago=9.0e12, quarter_growth=5.0), "NBIS"))
+    assert year.revenue.year_ago == 9.0e12
+
+
+def test_growth_well_above_the_quarters_alone_is_not_enough() -> None:
+    # A year-ago in line with its quarters: earlier quarters simply grew faster.
+    summary = _toyota_shaped(year_ago=45e12, quarter_growth=0.01)
+    year = _fiscal_year(_earnings(summary, "7203.T"))
+    assert year.revenue.year_ago == 45e12
+
+
+def test_one_quarter_inside_the_year_is_not_enough_to_judge() -> None:
+    summary = _toyota_shaped()
+    next(i for i in summary["earningsTrend"]["trend"] if i["period"] == "+1q")["endDate"] = (
+        "2027-06-30"  # the following quarter belongs to the next fiscal year
+    )
+    assert _fiscal_year(_earnings(summary, "7203.T")).revenue.year_ago == 18.26e12
+
+
+def test_a_repeated_quarter_end_counts_once() -> None:
+    summary = _toyota_shaped()
+    next(i for i in summary["earningsTrend"]["trend"] if i["period"] == "+1q")["endDate"] = (
+        "2026-09-30"
+    )
+    assert _fiscal_year(_earnings(summary, "7203.T")).revenue.year_ago == 18.26e12
+
+
+def test_the_following_fiscal_year_is_not_judged_on_quarters_outside_it() -> None:
+    summary = _toyota_shaped()
+    _revenue(summary, "+1y", 55.28e12, 18e12)  # would fail both tests if the quarters counted
+    year = _fiscal_year(_earnings(summary, "7203.T"), "following_fiscal_year")
+    assert year.revenue.year_ago == 18e12
+
+
+def _move_quarter(summary: dict[str, Any], period: str, end: str) -> dict[str, Any]:
+    next(i for i in summary["earningsTrend"]["trend"] if i["period"] == period)["endDate"] = end
+    return summary
+
+
+def test_a_quarter_ending_on_the_fiscal_year_end_is_inside_it() -> None:
+    summary = _move_quarter(_toyota_shaped(), "+1q", "2027-03-31")
+    assert _fiscal_year(_earnings(summary, "7203.T")).revenue.year_ago is None
+
+
+def test_a_quarter_ending_exactly_a_year_before_the_fiscal_year_end_is_outside_it() -> None:
+    summary = _move_quarter(_toyota_shaped(), "0q", "2026-03-31")
+    assert _fiscal_year(_earnings(summary, "7203.T")).revenue.year_ago == 18.26e12
+
+
+def test_a_quarter_with_degenerate_figures_is_not_used_as_evidence() -> None:
+    summary = _toyota_shaped()
+    _revenue(summary, "+1q", 0.0, 13.46e12)  # growth of -100%: a multiple of zero
+    assert _fiscal_year(_earnings(summary, "7203.T")).revenue.year_ago == 18.26e12
+
+
+def test_a_fiscal_year_ending_on_february_29_has_a_year_earlier() -> None:
+    assert _one_year_before(date(2028, 2, 29)) == date(2027, 2, 28)
