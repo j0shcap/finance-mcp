@@ -312,24 +312,36 @@ def make_recommendations_df(
 
 
 class FakeSearch:
-    """Stands in for ``yf.Search``; ``calls`` records each call's query and keyword args."""
+    """Stands in for ``yf.Search``; ``calls`` records each call's query and keyword args.
+
+    Each call answers with a well-formed reply built from ``quotes`` and ``news``, unless
+    ``responses`` queues raw replies: those answer the calls in order, until they run out.
+    """
 
     def __init__(
         self,
         quotes: list[dict[str, Any]] | None = None,
         error: Exception | None = None,
         news: list[dict[str, Any]] | None = None,
+        responses: list[dict[str, Any]] | None = None,
     ) -> None:
         self.quotes = quotes or []
         self.news = news or []
         self.error = error
+        self.responses = list(responses or [])
         self.calls: list[dict[str, Any]] = []
 
     def __call__(self, query: str, **kwargs: Any) -> Any:
         self.calls.append({"query": query, **kwargs})
         if self.error is not None:
             raise self.error
-        return SimpleNamespace(quotes=self.quotes, news=self.news)
+        reply = self.responses.pop(0) if self.responses else self._reply()
+        # As yf.Search: the parsed lists default to empty when the reply lacks them.
+        quotes = [q for q in reply.get("quotes", []) if "symbol" in q]
+        return SimpleNamespace(quotes=quotes, news=reply.get("news", []), response=reply)
+
+    def _reply(self) -> dict[str, Any]:
+        return {"count": len(self.quotes), "quotes": self.quotes, "news": self.news}
 
 
 def make_search_news_item(

@@ -7,6 +7,11 @@ contain breaking changes, and each one is listed under **Breaking changes**.
 
 ## [Unreleased]
 
+### Fixed
+- `search_symbols` no longer answers "no matches" when the data source fails: an error reply
+  is retried, and if it persists the call fails with "Search failed for '<query>'". An empty
+  result is no longer kept, so a later search asks the source again rather than repeating it.
+
 ## [0.6.1] - 2026-10-04
 
 ### Fixed

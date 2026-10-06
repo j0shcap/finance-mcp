@@ -1,9 +1,11 @@
 """DataService.search_symbols."""
 
+import json
 from typing import Any
 
 import pytest
 from yfinance.exceptions import (
+    YFDataException,
     YFException,
 )
 
@@ -54,12 +56,47 @@ def test_search_symbols_happy_path_maps_fields() -> None:
     assert second.sector is None and second.score is None
 
 
-def test_search_symbols_empty_quotes_returns_empty_no_raise() -> None:
-    client = make_client(
-        search_factory=FakeSearch(quotes=[]),
-    )
+def test_search_symbols_empty_quotes_returns_empty_no_raise(evictions: list[None]) -> None:
+    search = FakeSearch(quotes=[])
+    client = make_client(search_factory=search)
     result = client.search_symbols("zzzznope")
     assert result.query == "zzzznope" and result.matches == []
+    # A real no-match isn't retried, but the source must not keep serving it.
+    assert len(search.calls) == 1 and len(evictions) == 1
+
+
+#: Replies that carry no quotes list: an empty body, Yahoo's error body, and an error object
+#: where the list belongs.
+ERROR_REPLIES = [
+    {},
+    {"finance": {"result": None, "error": {"code": "Internal Server Error"}}},
+    {"quotes": {"error": "Internal Server Error"}},
+]
+
+
+@pytest.mark.parametrize("reply", ERROR_REPLIES)
+def test_search_symbols_retries_a_reply_without_quotes(
+    reply: dict[str, Any], evictions: list[None]
+) -> None:
+    search = FakeSearch(quotes=SEARCH_QUOTES, responses=[reply])
+    client = make_client(search_factory=search)
+    result = client.search_symbols("apple")
+    assert [m.symbol for m in result.matches] == ["AAPL", "APLE"]
+    # Let go of the bad reply first, or the retry would be answered with it again.
+    assert len(search.calls) == 2 and len(evictions) == 1
+
+
+@pytest.mark.parametrize("reply", ERROR_REPLIES)
+def test_search_symbols_reply_without_quotes_every_time_is_data_unavailable(
+    reply: dict[str, Any], evictions: list[None]
+) -> None:
+    search = FakeSearch(responses=[reply] * 3)
+    client = make_client(search_factory=search, request_retries=2)
+    with pytest.raises(DataUnavailable) as exc:
+        client.search_symbols("apple")
+    assert type(exc.value) is DataUnavailable
+    assert str(exc.value).startswith("Search failed for 'apple': ")
+    assert len(search.calls) == 3 and len(evictions) == 3
 
 
 @pytest.mark.parametrize("error", [YFException("rate limited"), RuntimeError("boom")])
@@ -69,6 +106,23 @@ def test_search_symbols_failure_is_data_unavailable(error: Exception) -> None:
         client.search_symbols("apple")
     assert type(exc.value) is DataUnavailable
     assert f"Search failed for 'apple': {error}" == str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        YFDataException("*** YAHOO! FINANCE IS CURRENTLY DOWN! ***"),
+        json.JSONDecodeError("Expecting value", "<html>502 Bad Gateway</html>", 0),
+    ],
+)
+def test_search_symbols_error_page_is_data_unavailable_and_evicted(
+    error: Exception, evictions: list[None]
+) -> None:
+    # yfinance keeps the page it raises on, so every later search would hit it again.
+    client = make_client(search_factory=FakeSearch(error=error))
+    with pytest.raises(DataUnavailable, match="Search failed for 'apple'"):
+        client.search_symbols("apple")
+    assert len(evictions) == 1
 
 
 def test_search_symbols_passes_max_results() -> None:
@@ -98,6 +152,15 @@ def test_search_symbols_caches_within_ttl() -> None:
     assert len(search.calls) == 1
     clock.advance(3601.0)
     client.search_symbols("apple")
+    assert len(search.calls) == 2
+
+
+def test_search_symbols_does_not_cache_an_empty_result(evictions: list[None]) -> None:
+    search = FakeSearch(quotes=[])
+    client = make_client(search_factory=search, fundamentals_ttl=3600.0)
+    client.search_symbols("apple")
+    client.search_symbols("apple")
+    # An empty result may be a source failure that looks like no matches; ask again.
     assert len(search.calls) == 2
 
 

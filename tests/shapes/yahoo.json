@@ -773,6 +773,11 @@
       "str"
     ]
   },
+  "search_response": {
+    "quotes": [
+      "list"
+    ]
+  },
   "splits": {
     "dtype": "float64",
     "index": {

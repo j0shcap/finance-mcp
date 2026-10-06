@@ -22,7 +22,8 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import yfinance as yf
-from yfinance.exceptions import YFRateLimitError, YFTickerMissingError
+from yfinance.data import YfData
+from yfinance.exceptions import YFDataException, YFRateLimitError, YFTickerMissingError
 
 from finance_mcp.data.errors import DataUnavailable, SymbolNotFound
 from finance_mcp.data.models import (
@@ -115,9 +116,24 @@ def _jitter(delay: float) -> float:
 _gate_holder = threading.local()
 
 
+class _MalformedSearchReply(Exception):
+    """A search reply with no quotes list: an error body yfinance read as a search result."""
+
+
+def _clear_response_cache() -> None:
+    """Drop the replies yfinance keeps, without expiry, for every identical later request."""
+    clear = getattr(getattr(YfData, "cache_get", None), "cache_clear", None)
+    if clear is not None:
+        clear()
+
+
+# Replaced in tests, which assert a pinned reply is let go.
+_evict_responses: Callable[[], None] = _clear_response_cache
+
+
 def is_transient(exc: BaseException) -> bool:
-    """Throttling or a fast network failure: a later attempt can succeed."""
-    if isinstance(exc, YFRateLimitError):
+    """Throttling, a fast network failure or an error reply: a later attempt can succeed."""
+    if isinstance(exc, YFRateLimitError | _MalformedSearchReply):
         return True
     names = {cls.__name__ for cls in type(exc).__mro__}
     if names & _PERMANENT_ERROR_NAMES:
@@ -423,7 +439,10 @@ class YahooProvider:
                 retry=False,
             )
         except Exception:
-            return []
+            found = []
+        if not found:
+            # Maybe an error reply, which yfinance would keep answering this request with.
+            _evict_responses()
         articles = (_search_news_article(item) for item in found or [])
         return [a for a in articles if a is not None][:count]
 
@@ -482,16 +501,36 @@ class YahooProvider:
 
     def search(self, query: str, max_results: int) -> SymbolSearchResult:
         with _unavailable_on_error(f"Search failed for '{query}'"):
-            quotes = self._request(
-                lambda: (
-                    self._search(query, max_results=max_results, news_count=0, lists_count=0).quotes
-                )
-            )
+            quotes = self._request(lambda: self._search_quotes(query, max_results))
         if not quotes:
             return SymbolSearchResult(query=query, matches=[])
         with _unavailable_on_error(f"Failed to parse search results for '{query}'"):
             matches = [_symbol_match(q) for q in quotes if q.get("symbol")]
             return SymbolSearchResult(query=query, matches=matches)
+
+    def _search_quotes(self, query: str, max_results: int) -> list[dict[str, Any]]:
+        """The quotes in one search reply; a reply without a quotes list raises, to be retried.
+
+        yfinance raises only for a throttled request, and reads any other error body as a
+        search with no quotes. Telling the two apart keeps an outage from reading as "no such
+        company". Whenever no quotes come back, the reply yfinance keeps for an identical
+        request is let go, or a retry and every later search would be answered with it.
+        """
+        try:
+            reply = self._search(
+                query, max_results=max_results, news_count=0, lists_count=0
+            ).response
+        except (YFDataException, ValueError):
+            # A "will be right back" page or a body that isn't JSON: yfinance has kept it.
+            _evict_responses()
+            raise
+        quotes = reply.get("quotes")
+        if isinstance(quotes, list) and quotes:
+            return quotes
+        _evict_responses()
+        if not isinstance(quotes, list):
+            raise _MalformedSearchReply("the reply carried no search results")
+        return quotes
 
     def statement_currency(self, symbol: str) -> str | None:
         """The currency a symbol's statements are reported in, from ``.info``.
