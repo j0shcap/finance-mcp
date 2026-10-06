@@ -423,6 +423,8 @@ class DataService:
             ("search", query, str(max_results)),
             self._fundamentals_ttl,
             lambda: self._market.search(query, max_results),
+            # No matches may be a source failure that looks like an answer: ask again.
+            cacheable=lambda result: bool(result.matches),
         )
 
 

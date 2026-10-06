@@ -134,6 +134,15 @@ def test_search_symbols_caches_within_ttl() -> None:
     assert len(search.calls) == 2
 
 
+def test_search_symbols_does_not_cache_an_empty_result(evictions: list[None]) -> None:
+    search = FakeSearch(quotes=[])
+    client = make_client(search_factory=search, fundamentals_ttl=3600.0)
+    client.search_symbols("apple")
+    client.search_symbols("apple")
+    # An empty result may be a source failure that looks like no matches; ask again.
+    assert len(search.calls) == 2
+
+
 def test_search_symbols_parse_error_is_data_unavailable() -> None:
     quotes: list[dict[str, Any]] = [{"symbol": "AAPL", "score": object()}]
     client = make_client(
