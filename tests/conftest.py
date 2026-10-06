@@ -43,6 +43,14 @@ def instant_backoff(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPa
 
 
 @pytest.fixture
+def evictions(monkeypatch: pytest.MonkeyPatch) -> list[None]:
+    """Records, instead of doing, each release of the replies the data source keeps."""
+    calls: list[None] = []
+    monkeypatch.setattr(yahoo, "_evict_responses", lambda: calls.append(None))
+    return calls
+
+
+@pytest.fixture
 async def client() -> AsyncIterator[Client[FastMCPTransport]]:
     """An in-memory MCP client connected to a fresh finance-mcp server."""
     async with Client(create_server()) as connected:

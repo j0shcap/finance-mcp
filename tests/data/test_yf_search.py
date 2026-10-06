@@ -54,12 +54,45 @@ def test_search_symbols_happy_path_maps_fields() -> None:
     assert second.sector is None and second.score is None
 
 
-def test_search_symbols_empty_quotes_returns_empty_no_raise() -> None:
-    client = make_client(
-        search_factory=FakeSearch(quotes=[]),
-    )
+def test_search_symbols_empty_quotes_returns_empty_no_raise(evictions: list[None]) -> None:
+    search = FakeSearch(quotes=[])
+    client = make_client(search_factory=search)
     result = client.search_symbols("zzzznope")
     assert result.query == "zzzznope" and result.matches == []
+    # A real no-match isn't retried, but the source must not keep serving it.
+    assert len(search.calls) == 1 and len(evictions) == 1
+
+
+#: Replies yfinance reads as a search with no quotes: an empty body, and Yahoo's error body.
+ERROR_REPLIES = [
+    {},
+    {"finance": {"result": None, "error": {"code": "Internal Server Error"}}},
+]
+
+
+@pytest.mark.parametrize("reply", ERROR_REPLIES)
+def test_search_symbols_retries_a_reply_without_quotes(
+    reply: dict[str, Any], evictions: list[None]
+) -> None:
+    search = FakeSearch(quotes=SEARCH_QUOTES, responses=[reply])
+    client = make_client(search_factory=search)
+    result = client.search_symbols("apple")
+    assert [m.symbol for m in result.matches] == ["AAPL", "APLE"]
+    # Let go of the bad reply first, or the retry would be answered with it again.
+    assert len(search.calls) == 2 and len(evictions) == 1
+
+
+@pytest.mark.parametrize("reply", ERROR_REPLIES)
+def test_search_symbols_reply_without_quotes_every_time_is_data_unavailable(
+    reply: dict[str, Any], evictions: list[None]
+) -> None:
+    search = FakeSearch(responses=[reply] * 3)
+    client = make_client(search_factory=search, request_retries=2)
+    with pytest.raises(DataUnavailable) as exc:
+        client.search_symbols("apple")
+    assert type(exc.value) is DataUnavailable
+    assert str(exc.value).startswith("Search failed for 'apple': ")
+    assert len(search.calls) == 3 and len(evictions) == 3
 
 
 @pytest.mark.parametrize("error", [YFException("rate limited"), RuntimeError("boom")])

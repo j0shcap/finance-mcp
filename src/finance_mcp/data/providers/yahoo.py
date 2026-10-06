@@ -498,16 +498,28 @@ class YahooProvider:
 
     def search(self, query: str, max_results: int) -> SymbolSearchResult:
         with _unavailable_on_error(f"Search failed for '{query}'"):
-            quotes = self._request(
-                lambda: (
-                    self._search(query, max_results=max_results, news_count=0, lists_count=0).quotes
-                )
-            )
+            quotes = self._request(lambda: self._search_quotes(query, max_results))
         if not quotes:
             return SymbolSearchResult(query=query, matches=[])
         with _unavailable_on_error(f"Failed to parse search results for '{query}'"):
             matches = [_symbol_match(q) for q in quotes if q.get("symbol")]
             return SymbolSearchResult(query=query, matches=matches)
+
+    def _search_quotes(self, query: str, max_results: int) -> list[dict[str, Any]]:
+        """The quotes in one search reply; a reply without a quotes list raises, to be retried.
+
+        yfinance raises only for a throttled request, and reads any other error body as a
+        search with no quotes. Telling the two apart keeps an outage from reading as "no such
+        company". Whenever no quotes come back, the reply yfinance keeps for an identical
+        request is let go, or a retry and every later search would be answered with it.
+        """
+        reply = self._search(query, max_results=max_results, news_count=0, lists_count=0).response
+        quotes = reply.get("quotes")
+        if not quotes:
+            _evict_responses()
+        if not isinstance(quotes, list):
+            raise _MalformedSearchReply("the reply carried no search results")
+        return quotes
 
     def statement_currency(self, symbol: str) -> str | None:
         """The currency a symbol's statements are reported in, from ``.info``.
