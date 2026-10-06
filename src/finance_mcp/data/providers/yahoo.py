@@ -439,7 +439,7 @@ class YahooProvider:
                 retry=False,
             )
         except Exception:
-            return []
+            found = []
         if not found:
             # Maybe an error reply, which yfinance would keep answering this request with.
             _evict_responses()
