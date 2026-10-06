@@ -23,7 +23,7 @@ from zoneinfo import ZoneInfo
 
 import yfinance as yf
 from yfinance.data import YfData
-from yfinance.exceptions import YFRateLimitError, YFTickerMissingError
+from yfinance.exceptions import YFDataException, YFRateLimitError, YFTickerMissingError
 
 from finance_mcp.data.errors import DataUnavailable, SymbolNotFound
 from finance_mcp.data.models import (
@@ -516,10 +516,18 @@ class YahooProvider:
         company". Whenever no quotes come back, the reply yfinance keeps for an identical
         request is let go, or a retry and every later search would be answered with it.
         """
-        reply = self._search(query, max_results=max_results, news_count=0, lists_count=0).response
-        quotes = reply.get("quotes")
-        if not quotes:
+        try:
+            reply = self._search(
+                query, max_results=max_results, news_count=0, lists_count=0
+            ).response
+        except (YFDataException, ValueError):
+            # A "will be right back" page or a body that isn't JSON: yfinance has kept it.
             _evict_responses()
+            raise
+        quotes = reply.get("quotes")
+        if isinstance(quotes, list) and quotes:
+            return quotes
+        _evict_responses()
         if not isinstance(quotes, list):
             raise _MalformedSearchReply("the reply carried no search results")
         return quotes

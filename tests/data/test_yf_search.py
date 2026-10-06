@@ -1,9 +1,11 @@
 """DataService.search_symbols."""
 
+import json
 from typing import Any
 
 import pytest
 from yfinance.exceptions import (
+    YFDataException,
     YFException,
 )
 
@@ -63,10 +65,12 @@ def test_search_symbols_empty_quotes_returns_empty_no_raise(evictions: list[None
     assert len(search.calls) == 1 and len(evictions) == 1
 
 
-#: Replies yfinance reads as a search with no quotes: an empty body, and Yahoo's error body.
+#: Replies that carry no quotes list: an empty body, Yahoo's error body, and an error object
+#: where the list belongs.
 ERROR_REPLIES = [
     {},
     {"finance": {"result": None, "error": {"code": "Internal Server Error"}}},
+    {"quotes": {"error": "Internal Server Error"}},
 ]
 
 
@@ -102,6 +106,23 @@ def test_search_symbols_failure_is_data_unavailable(error: Exception) -> None:
         client.search_symbols("apple")
     assert type(exc.value) is DataUnavailable
     assert f"Search failed for 'apple': {error}" == str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        YFDataException("*** YAHOO! FINANCE IS CURRENTLY DOWN! ***"),
+        json.JSONDecodeError("Expecting value", "<html>502 Bad Gateway</html>", 0),
+    ],
+)
+def test_search_symbols_error_page_is_data_unavailable_and_evicted(
+    error: Exception, evictions: list[None]
+) -> None:
+    # yfinance keeps the page it raises on, so every later search would hit it again.
+    client = make_client(search_factory=FakeSearch(error=error))
+    with pytest.raises(DataUnavailable, match="Search failed for 'apple'"):
+        client.search_symbols("apple")
+    assert len(evictions) == 1
 
 
 def test_search_symbols_passes_max_results() -> None:
