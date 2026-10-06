@@ -126,6 +126,17 @@ def test_get_news_a_failing_search_fallback_leaves_the_empty_result_intact() -> 
     assert client.get_news("ZZZZ").articles == []
 
 
+def test_get_news_search_fallback_without_news_evicts_the_cached_reply(
+    evictions: list[None],
+) -> None:
+    # An error reply reads as no news too; the source must not keep answering with it.
+    search = FakeSearch(responses=[{"finance": {"error": {"code": "Internal Server Error"}}}])
+    client = make_client(factory=fake_ticker_factory(news=[]), search_factory=search)
+
+    assert client.get_news("ZZZZ").articles == []
+    assert len(evictions) == 1
+
+
 def test_get_news_search_fallback_caps_at_count_and_drops_untitled_items() -> None:
     search = FakeSearch(
         news=[

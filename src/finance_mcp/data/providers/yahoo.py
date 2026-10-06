@@ -440,6 +440,9 @@ class YahooProvider:
             )
         except Exception:
             return []
+        if not found:
+            # Maybe an error reply, which yfinance would keep answering this request with.
+            _evict_responses()
         articles = (_search_news_article(item) for item in found or [])
         return [a for a in articles if a is not None][:count]
 
