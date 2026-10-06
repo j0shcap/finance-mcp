@@ -22,6 +22,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import yfinance as yf
+from yfinance.data import YfData
 from yfinance.exceptions import YFRateLimitError, YFTickerMissingError
 
 from finance_mcp.data.errors import DataUnavailable, SymbolNotFound
@@ -115,9 +116,24 @@ def _jitter(delay: float) -> float:
 _gate_holder = threading.local()
 
 
+class _MalformedSearchReply(Exception):
+    """A search reply with no quotes list: an error body yfinance read as a search result."""
+
+
+def _clear_response_cache() -> None:
+    """Drop the replies yfinance keeps, without expiry, for every identical later request."""
+    clear = getattr(getattr(YfData, "cache_get", None), "cache_clear", None)
+    if clear is not None:
+        clear()
+
+
+# Replaced in tests, which assert a pinned reply is let go.
+_evict_responses: Callable[[], None] = _clear_response_cache
+
+
 def is_transient(exc: BaseException) -> bool:
-    """Throttling or a fast network failure: a later attempt can succeed."""
-    if isinstance(exc, YFRateLimitError):
+    """Throttling, a fast network failure or an error reply: a later attempt can succeed."""
+    if isinstance(exc, YFRateLimitError | _MalformedSearchReply):
         return True
     names = {cls.__name__ for cls in type(exc).__mro__}
     if names & _PERMANENT_ERROR_NAMES:

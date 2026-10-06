@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 from curl_cffi.const import CurlECode
 from curl_cffi.requests.exceptions import code2error
+from yfinance.data import YfData
 from yfinance.exceptions import YFRateLimitError
 
 from finance_mcp.data.errors import DataUnavailable, SymbolNotFound
@@ -229,11 +230,27 @@ def _status(code: int) -> Exception:
         (_status(404), False),
         (FakeHTTPError(404), False),
         (KeyError("exchangeTimezoneName"), False),
+        # an error body yfinance read as a search result: the next reply can be a real one
+        (yahoo._MalformedSearchReply("no quotes"), True),
     ],
     ids=lambda value: str(value) if isinstance(value, bool) else repr(value)[:40],
 )
 def test_is_transient_for_what_curl_cffi_really_raises(exc: Exception, transient: bool) -> None:
     assert is_transient(exc) is transient
+
+
+def test_the_default_eviction_hook_clears_yfinance_response_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # yfinance keeps every reply without expiry; if an upgrade moves that cache, fail here
+    # rather than silently pin bad replies again.
+    monkeypatch.setattr(YfData, "get", lambda self, url, params=None, timeout=30: url)
+    YfData().cache_get(url="https://example.invalid/pinned")
+    assert YfData.cache_get.cache_info().currsize > 0
+
+    yahoo._evict_responses()
+
+    assert YfData.cache_get.cache_info().currsize == 0
 
 
 # --- configuration ------------------------------------------------------------------------
