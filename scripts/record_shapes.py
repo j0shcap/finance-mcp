@@ -83,6 +83,7 @@ def record() -> dict[str, Any]:
         "info_etf": mapping_shape([_fetch(lambda: yf.Ticker("SPY").info)], keys["info"]),
         "news_item": mapping_shape(news, keys["item"]),
         "news_content": _news_content_shape([item["content"] for item in news], keys["content"]),
+        "search_response": mapping_shape([search.response], keys["reply"]),
         "search_quote": mapping_shape(search.quotes, keys["q"]),
         "search_news_item": mapping_shape(search.news, keys["item"]),
         # An ETF's response carries quoteType alone, which is how the adapter recognizes one.

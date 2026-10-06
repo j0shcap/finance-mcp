@@ -23,6 +23,7 @@ from scripts.yahoo_shapes import (
 from tests.fakes import (
     QUOTE_FI,
     FakeHTTPError,
+    FakeSearch,
     make_earnings_summary,
     make_financials_df,
     make_history_df,
@@ -93,6 +94,13 @@ def test_news_fakes_have_yahoo_types() -> None:
     search_item = make_search_news_item("Title", "Reuters", "https://x/a", 1790647283)
     keys = [k for k in search_item if k in RECORDED["search_news_item"]]
     assert _within(mapping_shape([search_item], keys), RECORDED["search_news_item"]) == []
+
+
+def test_search_reply_fake_has_yahoo_types() -> None:
+    # The adapter tells an error reply from a search by this envelope; Yahoo must send it.
+    reply = FakeSearch(quotes=[{"symbol": "AAPL"}])("apple").response
+    keys = list(RECORDED["search_response"])
+    assert _within(mapping_shape([reply], keys), RECORDED["search_response"]) == []
 
 
 @pytest.mark.parametrize("call", ["fast_info.last_price", "history"])
