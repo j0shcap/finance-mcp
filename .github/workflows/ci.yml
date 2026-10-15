@@ -28,7 +28,7 @@ jobs:
         # Exact version, not a major tag: setup-uv stopped publishing floating
         # major tags after v7 (and that v7 tag no longer tracks the 7.x line).
         # Dependabot's github-actions ecosystem keeps this pin current.
-        uses: astral-sh/setup-uv@v10.2.0
+        uses: astral-sh/setup-uv@v10.3.0
         with:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
@@ -61,7 +61,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: Install uv
         # Same exact pin as the check job; also puts uvx, which one launcher needs, on PATH.
-        uses: astral-sh/setup-uv@v10.2.0
+        uses: astral-sh/setup-uv@v10.3.0
         with:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
